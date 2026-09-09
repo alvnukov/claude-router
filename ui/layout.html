@@ -92,7 +92,7 @@
    hx-on:click="document.getElementById('sel').value=this.dataset.id">
   <div class="l1">
     <span class="tag {{.R.Route}}">{{.R.Route}}</span>
-    <span class="model">{{.R.Model}}{{with .R.Served}}{{if ne . $.R.Model}} <span class="muted">→ {{.}}</span>{{end}}{{end}}</span>{{if gt (len .R.Attempts) 1}} <span class="warn" title="переключение модели">⇄</span>{{end}}
+    <span class="model">{{.R.Model}}{{with .R.Served}} <span class="muted">→ {{.}}</span>{{end}}</span>{{if gt (len .R.Attempts) 1}} <span class="warn" title="переключение модели">⇄</span>{{end}}
     <span class="time">{{tsec .R.Start}}</span>
   </div>
   <div class="l2">
