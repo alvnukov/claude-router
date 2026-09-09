@@ -286,6 +286,9 @@ func (u *uiServer) list(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		}
+		if shown >= limit {
+			continue // keep counting Total, stop collecting
+		}
 		g := groups[rec.Session]
 		if g == nil {
 			g = &sessionGroup{ID: rec.Session, Last: rec.Start}
@@ -303,9 +306,6 @@ func (u *uiServer) list(w http.ResponseWriter, r *http.Request) {
 			g.Errors++
 		}
 		shown++
-		if shown >= limit {
-			break
-		}
 	}
 	v.Shown = shown
 	v.Sessions = len(v.Groups)

@@ -70,6 +70,9 @@ table.params{border-collapse:collapse;width:100%}
 table.params th{text-align:left;color:var(--muted);font-weight:500;padding:2px 12px 2px 0;white-space:nowrap;vertical-align:top;width:1%}
 table.params td{padding:2px 0;word-break:break-word}
 table.params code{white-space:pre-wrap}
+.providers td code,.models td code{white-space:nowrap;word-break:normal}
+.models td:last-child{white-space:nowrap}
+.models .attr{white-space:nowrap}
 .routes th{width:auto}
 .form input{padding:4px 6px;border:1px solid var(--line);border-radius:4px;font:inherit}
 .help{color:var(--muted);font-size:12px;margin:4px 0}

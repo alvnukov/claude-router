@@ -37,6 +37,19 @@
         if (!d.classList || !d.classList.contains('sess')) return;
         if (d.open) closedSessions.delete(d.dataset.sid); else closedSessions.add(d.dataset.sid);
       }, true);
+      // Deep links: /?route=local&model=x&q=…&open=<id>&view=response, /?page=settings.
+      document.addEventListener('DOMContentLoaded', function () {
+        var u = new URLSearchParams(location.search);
+        ['q', 'route', 'model', 'session'].forEach(function (k) {
+          if (u.has(k)) document.getElementById(k).value = u.get(k);
+        });
+        if (u.get('page') === 'settings') htmx.ajax('GET', '/settings', '#detail');
+        if (u.has('open')) {
+          document.getElementById('sel').value = u.get('open');
+          var url = '/requests/' + encodeURIComponent(u.get('open')) + '?view=' + (u.get('view') || 'structure') + '&q=' + encodeURIComponent(u.get('q') || '');
+          htmx.ajax('GET', url, '#detail');
+        }
+      });
       document.body.addEventListener('htmx:afterSwap', function (e) {
         if (e.target.id !== 'list') return;
         e.target.querySelectorAll('details.sess').forEach(function (d) {
