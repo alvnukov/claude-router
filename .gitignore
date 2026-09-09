@@ -1,0 +1,14 @@
+router.log
+router.pid
+localrouter
+env
+history.jsonl
+history.jsonl.tmp
+models.json
+models.json.tmp
+providers.json
+providers.json.tmp
+*.bak
+*.bak-*
+.claude/
+_parked/

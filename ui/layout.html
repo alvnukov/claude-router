@@ -1,0 +1,116 @@
+{{define "layout"}}<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>local-router</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/htmx.min.js"></script>
+</head>
+<body>
+<header id="status" hx-get="/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></header>
+<main class="cols">
+  <aside>
+    <form id="filters" hx-get="/requests" hx-target="#list" hx-trigger="input changed delay:300ms from:#q, change from:#route, input changed delay:300ms from:#model, change" hx-swap="innerHTML">
+      <input id="q" name="q" type="search" placeholder="поиск по контексту и ответам…" value="{{.Q}}" autocomplete="off">
+      <div class="row">
+        <select id="route" name="route">
+          <option value="">все маршруты</option>
+          <option value="local">local</option>
+          <option value="cloud">cloud</option>
+        </select>
+        <input id="model" name="model" placeholder="модель" size="12">
+        <label class="live"><input type="checkbox" id="live" name="live" checked> live</label>
+        <input type="hidden" id="sel" name="sel">
+        <input type="hidden" id="session" name="session">
+      </div>
+    </form>
+    <script>
+      // A session's open/closed state lives here so the 2s list refresh keeps it.
+      var closedSessions = new Set();
+      function setSession(id) {
+        document.getElementById('session').value = id;
+        htmx.trigger('#filters', 'change');
+      }
+      document.addEventListener('toggle', function (e) {
+        var d = e.target;
+        if (!d.classList || !d.classList.contains('sess')) return;
+        if (d.open) closedSessions.delete(d.dataset.sid); else closedSessions.add(d.dataset.sid);
+      }, true);
+      document.body.addEventListener('htmx:afterSwap', function (e) {
+        if (e.target.id !== 'list') return;
+        e.target.querySelectorAll('details.sess').forEach(function (d) {
+          if (closedSessions.has(d.dataset.sid)) d.open = false;
+        });
+      });
+    </script>
+    <div id="list" hx-get="/requests" hx-include="#filters" hx-trigger="load, every 2s [document.getElementById('live').checked]" hx-swap="innerHTML"></div>
+  </aside>
+  <section id="detail">
+    <div class="empty">Выберите запрос слева. Поиск ищет по сырому телу запроса и тексту ответа, а в открытом запросе подсвечивает совпадения по блокам.</div>
+  </section>
+</main>
+</body>
+</html>{{end}}
+
+{{define "status"}}
+<div class="strip">
+  <div class="brand">local-router <span class="muted">{{.Uptime}}</span></div>
+  <div class="stat"><b>{{.Total}}</b> запросов <span class="muted">/ {{.StoreLen}} из {{.StoreMax}} в буфере</span></div>
+  <div class="stat"><span class="tag cloud">cloud</span> {{.Cloud}} {{if .AvgCloud}}<span class="muted">~{{.AvgCloud}}</span>{{end}}</div>
+  <div class="stat"><span class="tag local">local</span> {{.Local}} {{if .AvgLocal}}<span class="muted">~{{.AvgLocal}}</span>{{end}}</div>
+  {{if .Pending}}<div class="stat pending">● {{.Pending}} в работе</div>{{end}}
+  {{if .Errors}}<div class="stat err">✖ {{.Errors}} ошибок</div>{{end}}
+  {{if .Trimmed}}<div class="stat warn">✂ {{.Trimmed}} обрезано</div>{{end}}
+  <div class="stat">локальный эндпоинт: {{if .Probe.OK}}<span class="ok">● {{.Probe.Msg}}</span>{{else}}<span class="err">● {{.Probe.Msg}}</span>{{end}}</div>
+  <div class="stat"><span class="muted">local model</span> <code>{{.Active}}</code>{{if ne .Active .Preferred}} <span class="warn">(основная {{.Preferred}} в откате)</span>{{end}} → <code>{{.ActiveURL}}</code>{{if gt .NModels 1}} <span class="muted">· моделей {{.NModels}}{{if .Cooling}}, в откате {{.Cooling}}{{end}}{{if not .C.Failover}}, автопереключение выкл{{end}}</span>{{end}}</div>
+  <div class="stat">{{if .C.CloudOnly}}<span class="muted">в облако только</span> {{range .C.CloudOnly}}<code>{{.}}</code> {{end}}<span class="muted">, остальное локально</span>{{else}}<span class="muted">режим:</span> локально только alias, остальное в облако{{end}}</div>
+  <div class="stat"><span class="muted">бюджет</span> {{if .C.MaxInputChars}}{{kb .C.MaxInputChars}}{{else}}выкл{{end}}</div>
+  <a class="btn" hx-get="/settings" hx-target="#detail" hx-swap="innerHTML" href="#">⚙ настройки</a>
+</div>
+{{end}}
+
+{{define "list"}}
+<div class="listhead">
+  <span class="muted">показано {{.Shown}} из {{.Total}}{{if .Q}}, совпадений по «{{.Q}}»{{end}} · сессий {{.Sessions}}</span>
+  {{if .Session}}<button class="link" type="button" onclick="setSession('')">все сессии</button>{{end}}
+  <button class="link" hx-post="/requests/clear" hx-target="#list" hx-confirm="Очистить буфер запросов?">очистить</button>
+</div>
+{{range .Groups}}
+<details class="sess" data-sid="{{.ID}}" open>
+  <summary>
+    <span class="sid" title="{{if .ID}}{{.ID}}{{else}}запросы без metadata.user_id (curl и т.п.){{end}}">{{.Short}}</span>
+    <span class="muted">{{len .Items}} зап.</span>
+    {{if .Local}}<span class="tag local">{{.Local}}</span>{{end}}{{if .Cloud}}<span class="tag cloud">{{.Cloud}}</span>{{end}}
+    {{if .Errors}}<span class="err">✖ {{.Errors}}</span>{{end}}
+    <span class="time">{{tsec .First}}{{if ne (tsec .First) (tsec .Last)}} – {{tsec .Last}}{{end}}</span>
+    {{if and .ID (not $.Session)}}<button class="link" type="button" title="только эта сессия" onclick="event.preventDefault();setSession(this.closest('details').dataset.sid)">⤵</button>{{end}}
+  </summary>
+{{range .Items}}
+<a class="item {{.R.Route}} {{if .Sel}}sel{{end}} {{if .R.Failed}}failed{{end}}" href="#" data-id="{{.R.ID}}"
+   hx-get="/requests/{{.R.ID}}" hx-include="#filters" hx-target="#detail" hx-swap="innerHTML"
+   hx-on:click="document.getElementById('sel').value=this.dataset.id">
+  <div class="l1">
+    <span class="tag {{.R.Route}}">{{.R.Route}}</span>
+    <span class="model">{{.R.Model}}{{with .R.Served}}{{if ne . $.R.Model}} <span class="muted">→ {{.}}</span>{{end}}{{end}}</span>{{if gt (len .R.Attempts) 1}} <span class="warn" title="переключение модели">⇄</span>{{end}}
+    <span class="time">{{tsec .R.Start}}</span>
+  </div>
+  <div class="l2">
+    <span>{{kb .Chars}} · {{.Msgs}} msg</span>
+    {{if .R.Done}}
+      <span>{{dur .R.Duration}}</span>
+      {{if .R.Failed}}<span class="err">HTTP {{.R.Status}}</span>{{else if .R.Resp}}<span class="muted">{{.R.Resp.StopReason}}{{with .R.Resp.Usage.output_tokens}} · {{.}} out{{end}}</span>{{end}}
+    {{else}}<span class="pending">● в работе {{dur .R.Duration}}</span>{{end}}
+    {{if .R.Stream}}<span class="muted">sse</span>{{end}}
+    {{if ne .R.TrimBefore .R.TrimAfter}}<span class="warn">✂</span>{{end}}
+    {{if .Matches}}<span class="hit">{{.Matches}} ✓</span>{{end}}
+  </div>
+  {{if .Preview}}<div class="l3">→ {{.Preview}}</div>{{end}}
+  {{if .Answer}}<div class="l3 ans">← {{.Answer}}</div>{{end}}
+</a>
+{{end}}
+</details>
+{{else}}
+<div class="empty small">пусто</div>
+{{end}}
+{{end}}

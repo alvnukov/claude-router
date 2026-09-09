@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# Manage the local-router: start|stop|restart|status|logs|build|install|uninstall
+#
+# Once installed as a launchd agent, launchd owns the process. Every command
+# below then delegates to launchctl, because a plain kill would only be undone
+# by KeepAlive a second later.
+#
+# Sources live where this script does; the binary and its state (env,
+# providers.json, models.json, history.jsonl, log) live in ROUTER_HOME,
+# ~/.claude/local-router by default. This script may be reached through a
+# symlink from there.
+set -euo pipefail
+SRC="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+DIR="${ROUTER_HOME:-$HOME/.claude/local-router}"
+PIDFILE="$DIR/router.pid"
+LOG="$DIR/router.log"
+LABEL="com.claude-local-router"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+TARGET="gui/${UID}/${LABEL}"
+
+[ -f "$DIR/env" ] && { set -a; . "$DIR/env"; set +a; }
+ADDR="${ROUTER_LISTEN:-127.0.0.1:8787}"
+
+alive()   { curl -sf "http://${ADDR}/healthz" >/dev/null 2>&1; }
+build()   { mkdir -p "$DIR" && (cd "$SRC" && go build -o "$DIR/localrouter" .); }
+loaded()  { launchctl print "$TARGET" >/dev/null 2>&1; }
+managed() { [ -f "$PLIST" ]; }
+
+waitup() {
+  for _ in $(seq 25); do alive && return 0; sleep 0.2; done
+  echo "failed to come up; last log lines:" >&2
+  tail -5 "$LOG" >&2
+  return 1
+}
+
+write_plist() {
+  mkdir -p "$(dirname "$PLIST")"
+  cat > "$PLIST" <<PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>${DIR}/localrouter</string></array>
+  <key>WorkingDirectory</key><string>${DIR}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardOutPath</key><string>${LOG}</string>
+  <key>StandardErrorPath</key><string>${LOG}</string>
+</dict>
+</plist>
+PLIST_EOF
+}
+
+install_agent() {
+  build
+  # A hand-started instance would hold the port against the agent.
+  stop_manual
+  write_plist
+  loaded && launchctl bootout "$TARGET" 2>/dev/null || true
+  launchctl bootstrap "gui/${UID}" "$PLIST"
+  waitup && echo "installed as ${LABEL}, listening on ${ADDR}"
+}
+
+uninstall_agent() {
+  loaded && launchctl bootout "$TARGET" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "uninstalled ${LABEL}"
+}
+
+stop_manual() {
+  if [ -f "$PIDFILE" ]; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null || true
+    rm -f "$PIDFILE"
+  fi
+  # Also catch an instance started by claude-local, which writes no pidfile.
+  pkill -f "$DIR/localrouter" 2>/dev/null || true
+}
+
+start() {
+  if managed; then
+    loaded || launchctl bootstrap "gui/${UID}" "$PLIST"
+    launchctl kickstart "$TARGET" >/dev/null 2>&1 || true
+    waitup && echo "started by launchd on ${ADDR}"
+    return
+  fi
+  if alive; then echo "already running on ${ADDR}"; return 0; fi
+  [ -x "$DIR/localrouter" ] || build
+  "$DIR/localrouter" >>"$LOG" 2>&1 &
+  echo $! > "$PIDFILE"
+  waitup && echo "started on ${ADDR} (pid $(cat "$PIDFILE"))"
+}
+
+stop() {
+  if managed && loaded; then
+    launchctl bootout "$TARGET" 2>/dev/null || true
+    echo "stopped; launchd will start it again at next login or on 'router start'"
+    return
+  fi
+  stop_manual
+  echo "stopped"
+}
+
+case "${1:-status}" in
+  start)     start ;;
+  stop)      stop ;;
+  restart)
+    build
+    if managed && loaded; then
+      launchctl kickstart -k "$TARGET" >/dev/null
+      waitup && echo "restarted by launchd on ${ADDR}"
+    else
+      stop; sleep 0.5; start
+    fi ;;
+  build)     build; echo "built" ;;
+  install)   install_agent ;;
+  uninstall) uninstall_agent ;;
+  status)
+    if managed; then
+      loaded && echo "launchd agent ${LABEL}: loaded" || echo "launchd agent ${LABEL}: installed but not loaded"
+    else
+      echo "launchd agent: not installed (run 'router install')"
+    fi
+    alive && echo "running on ${ADDR}" || echo "not running" ;;
+  logs)      tail -f "$LOG" ;;
+  *) echo "usage: router {start|stop|restart|status|logs|build|install|uninstall}" >&2; exit 2 ;;
+esac

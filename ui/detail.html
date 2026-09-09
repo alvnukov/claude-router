@@ -1,0 +1,154 @@
+{{define "detail"}}
+<div class="detail" {{if not .R.Done}}hx-get="/requests/{{.R.ID}}?view={{.View}}" hx-include="#filters" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<div class="dhead">
+  <div class="title">
+    <span class="tag {{.R.Route}}">{{.R.Route}}</span>
+    <code class="big">{{.R.Model}}</code>
+    <span class="muted">{{tfull .R.Start}}</span>
+    <span class="muted">{{.R.Path}}{{if .R.Stream}} · stream{{end}}</span>
+  </div>
+  <div class="summary">
+    {{if .R.Done}}
+      <span>{{dur .R.Duration}}</span>
+      <span class="{{if .R.Failed}}err{{else}}ok{{end}}">HTTP {{.R.Status}}</span>
+      {{if .R.Resp}}
+        {{with .R.Resp.StopReason}}<span>stop: <code>{{.}}</code></span>{{end}}
+        {{with .R.Resp.Usage}}<span class="muted">in {{index . "input_tokens"}}{{with index . "cache_read_input_tokens"}} · cache read {{.}}{{end}}{{with index . "cache_creation_input_tokens"}} · cache write {{.}}{{end}} · out {{index . "output_tokens"}}</span>{{end}}
+        {{with .R.Resp.Error}}<span class="err">{{.}}</span>{{end}}
+        {{with .R.Resp.Note}}<span class="warn">{{.}}</span>{{end}}
+      {{end}}
+      {{if ne .R.TrimBefore .R.TrimAfter}}<span class="warn">✂ обрезано {{kb .R.TrimBefore}} → {{kb .R.TrimAfter}}</span>{{end}}
+    {{else}}<span class="pending">● в работе {{dur .R.Duration}}</span>{{end}}
+  </div>
+  <nav class="tabs">
+    {{$id := .R.ID}}{{$v := .View}}
+    <a class="{{if eq $v "structure"}}on{{end}}" href="#" hx-get="/requests/{{$id}}?view=structure" hx-include="#filters" hx-target="#detail">Структура</a>
+    {{if eq .R.Route "local"}}<a class="{{if eq $v "sent"}}on{{end}}" href="#" hx-get="/requests/{{$id}}?view=sent" hx-include="#filters" hx-target="#detail">Отправлено локально</a>{{end}}
+    <a class="{{if eq $v "response"}}on{{end}}" href="#" hx-get="/requests/{{$id}}?view=response" hx-include="#filters" hx-target="#detail">Ответ</a>
+    <a class="{{if eq $v "raw"}}on{{end}}" href="#" hx-get="/requests/{{$id}}?view=raw" hx-include="#filters" hx-target="#detail">Raw</a>
+    <span class="spacer"></span>
+    <a href="/requests/{{$id}}/request.json" target="_blank">request.json</a>
+    {{if .R.OpenAIBody}}<a href="/requests/{{$id}}/sent.json" target="_blank">sent.json</a>{{end}}
+    <a href="/requests/{{$id}}/response.txt" target="_blank">response</a>
+  </nav>
+</div>
+
+{{if eq .View "structure"}}{{template "ctx" (dict2 .Ctx .R.Headers .Q)}}{{end}}
+{{if eq .View "sent"}}
+  {{if .Sent}}
+    {{if gt (len .R.Attempts) 1}}<div class="note warn">Переключение модели: {{range $i, $a := .R.Attempts}}{{if $i}} → {{end}}<code>{{$a.Model}}</code>{{if $a.Err}} <span class="err">✗ {{$a.Err}}</span>{{else}} <span class="ok">✓ {{dur $a.Dur}}</span>{{end}}{{end}}</div>{{else}}{{with .R.Served}}{{if ne . $.R.Model}}<div class="note">Ответила модель <code>{{.}}</code>{{with index $.R.Attempts 0}} <span class="muted">первый байт через {{dur .Dur}}</span>{{end}}</div>{{end}}{{end}}{{end}}
+    {{if .R.TrimNotes}}<div class="note warn">Обрезка до бюджета: {{kb .R.TrimBefore}} → {{kb .R.TrimAfter}}. {{join .R.TrimNotes "; "}}</div>{{end}}
+    {{template "ctx" (dict2 .Sent nil .Q)}}
+  {{else}}<div class="empty">Ещё не отправлено или запрос шёл в облако (там тело уходит байт в байт, см. «Структура»).</div>{{end}}
+{{end}}
+{{if eq .View "response"}}
+  {{if .Resp}}
+    <div class="ctx">
+      <table class="params">
+        <tr><th>model</th><td><code>{{.Resp.Model}}</code></td></tr>
+        <tr><th>stop_reason</th><td><code>{{.Resp.StopReason}}</code></td></tr>
+        {{range .Usage}}<tr><th>{{.K}}</th><td>{{.V}}</td></tr>{{end}}
+        <tr><th>событий SSE</th><td>{{.Resp.Events}}</td></tr>
+        {{with .Resp.Note}}<tr><th>захват</th><td class="warn">{{.}}</td></tr>{{end}}
+        {{with .Resp.Error}}<tr><th>error</th><td class="err">{{.}}</td></tr>{{end}}
+      </table>
+      {{range $i, $b := .RespHTML}}
+        <details class="blk k-{{if eq $b.Type "tool_use"}}tool_use{{else if eq $b.Type "thinking"}}thinking{{else}}assistant{{end}}" open>
+          <summary><span class="kind">{{$b.Type}}</span>{{with $b.Name}} <code>{{.}}</code>{{end}}{{with $b.ID}} <span class="muted">{{.}}</span>{{end}} <span class="muted">{{kb $b.Chars}}</span></summary>
+          <pre>{{$b.HTML}}</pre>
+        </details>
+      {{else}}<div class="empty small">блоков нет</div>{{end}}
+    </div>
+  {{else}}<div class="empty">Ответа ещё нет.</div>{{end}}
+{{end}}
+{{if eq .View "raw"}}
+  <div class="ctx">
+    <details open><summary>request (Anthropic) · {{kb (len .RawReq)}}</summary><pre>{{.RawReq}}</pre></details>
+    {{if .RawSent}}<details><summary>sent (OpenAI) · {{kb (len .RawSent)}}</summary><pre>{{.RawSent}}</pre></details>{{end}}
+    <details><summary>response · {{kb (len .RawResp)}}{{if .R.RespTruncated}} (обрезан){{end}}</summary><pre>{{.RawResp}}</pre></details>
+  </div>
+{{end}}
+</div>
+{{end}}
+
+{{define "ctx"}}
+{{$c := .Ctx}}{{$q := .Q}}
+<div class="ctx">
+  {{with $c.ParseErr}}<div class="note err">не разобрано: {{.}}</div>{{end}}
+  <div class="map">
+    <div class="maphead">
+      <b>{{kb $c.TotalChars}}</b> символов ·
+      system {{kb $c.SystemN}} · tools {{len $c.Tools}} ({{kb $c.ToolsN}}) · messages {{len $c.Messages}}
+      {{if $c.CacheMarks}} · cache_control: {{$c.CacheMarks}}{{end}}
+      {{if $q}} · совпадений: <span class="hit">{{$c.Matches}}</span>{{end}}
+    </div>
+    <div class="bar">
+      {{range $c.Kinds}}<span class="k-{{.Kind}}" style="width:{{pct .Pct}}%" title="{{.Kind}}: {{.Count}} блоков, {{kb .Chars}} ({{pct .Pct}}%)"></span>{{end}}
+    </div>
+    <div class="legend">
+      {{range $c.Kinds}}<span><i class="k-{{.Kind}}"></i>{{.Kind}} <span class="muted">{{kb .Chars}} · {{pct .Pct}}%</span></span>{{end}}
+    </div>
+    {{if $c.Messages}}
+    <div class="timeline">
+      {{range $c.Messages}}<a href="#{{.Anchor}}" class="r-{{.Role}} {{if .Matches}}hit{{end}}" style="flex-grow:{{.Chars}}" title="#{{.Index}} {{.Role}}: {{.Summary}}, {{kb .Chars}}{{if .Cache}} · cache{{end}}"></a>{{end}}
+    </div>
+    {{end}}
+  </div>
+
+  {{if .Headers}}
+  <details class="sect"><summary>заголовки</summary>
+    <table class="params">{{range $k, $v := .Headers}}<tr><th>{{$k}}</th><td>{{$v}}</td></tr>{{end}}</table>
+  </details>
+  {{end}}
+
+  <details class="sect" open><summary>параметры <span class="muted">{{len $c.Params}}</span></summary>
+    <table class="params">{{range $c.Params}}<tr><th>{{.K}}</th><td><code>{{.V}}</code></td></tr>{{end}}</table>
+  </details>
+
+  {{if $c.System}}
+  <details class="sect" open><summary>system <span class="muted">{{len $c.System}} блоков · {{kb $c.SystemN}}</span></summary>
+    {{range $c.System}}{{template "block" .}}{{end}}
+  </details>
+  {{end}}
+
+  {{if $c.Tools}}
+  <details class="sect"><summary>tools <span class="muted">{{len $c.Tools}} · {{kb $c.ToolsN}}</span></summary>
+    {{range $c.Tools}}
+    <details class="blk k-tools {{if .Matches}}hit{{end}}" id="{{.Anchor}}">
+      <summary><code>{{.Name}}</code> <span class="muted">{{kb .Chars}}</span>{{if .Matches}} <span class="hit">{{.Matches}} ✓</span>{{end}}</summary>
+      <pre>{{.Desc}}</pre>
+      <details><summary class="muted">input_schema</summary><pre>{{.Schema}}</pre></details>
+    </details>
+    {{end}}
+  </details>
+  {{end}}
+
+  {{if $c.Messages}}
+  <div class="sect open"><div class="secthead">messages <span class="muted">{{len $c.Messages}}</span></div>
+    {{range $c.Messages}}
+    <details class="msg r-{{.Role}} {{if .Matches}}hit{{end}}" id="{{.Anchor}}" {{if or .Matches (lt (len $c.Messages) 12)}}open{{end}}>
+      <summary><span class="idx">#{{.Index}}</span> <span class="role">{{.Role}}</span> <span class="muted">{{.Summary}} · {{kb .Chars}} · {{pct .Pct}}%</span>{{if .Cache}} <span class="cache">cache</span>{{end}}{{if .Matches}} <span class="hit">{{.Matches}} ✓</span>{{end}}</summary>
+      {{range .Blocks}}{{template "block" .}}{{end}}
+    </details>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{define "block"}}
+<details class="blk k-{{.Kind}} {{if .Matches}}hit{{end}}" id="{{.Anchor}}" {{if or .Matches (lt .Chars 4000)}}open{{end}}>
+  <summary>
+    <span class="kind">{{.Label}}</span>
+    {{with .Name}}<code>{{.}}</code>{{end}}
+    {{with .ID}}<span class="muted">{{.}}</span>{{end}}
+    {{with .ToolUseID}}<span class="muted">→ {{.}}</span>{{end}}
+    {{if .IsError}}<span class="err">is_error</span>{{end}}
+    <span class="muted">{{kb .Chars}}</span>
+    {{with .Cache}}<span class="cache">{{.}}</span>{{end}}
+    {{if .Matches}}<span class="hit">{{.Matches}} ✓</span>{{end}}
+  </summary>
+  {{if .Note}}<div class="media">{{.Note}}</div>{{end}}
+  {{if .Children}}{{range .Children}}{{template "block" .}}{{end}}{{else if not .Note}}<pre>{{.HTML}}</pre>{{end}}
+</details>
+{{end}}

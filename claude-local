@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Launch Claude Code with the `haiku` model alias routed to a local endpoint.
+# Every other alias still reaches api.anthropic.com untouched.
+set -euo pipefail
+SRC="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+DIR="${ROUTER_HOME:-$HOME/.claude/local-router}"
+
+set -a; . "$DIR/env"; set +a
+
+if [ ! -x "$DIR/localrouter" ]; then
+  "$SRC/router" build >/dev/null
+fi
+
+# Start through the control script rather than spawning here: when the launchd
+# agent is installed it owns the process, and a second instance started from a
+# terminal would hold the port against launchd's own restart.
+if ! curl -sf "http://${ROUTER_LISTEN}/healthz" >/dev/null 2>&1; then
+  "$SRC/router" start >/dev/null || true
+fi
+
+export ANTHROPIC_BASE_URL="http://${ROUTER_LISTEN}"
+# A fixed alias, not ROUTER_LOCAL_MODEL: any `local-*` id is local to the router,
+# and the router substitutes the real model name itself. That keeps the model a
+# router-side setting, switchable in the UI while this session is running.
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="local-model"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="${LOCAL_SLOT_NAME}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION="${LOCAL_SLOT_DESCRIPTION}"
+if [ -n "${LOCAL_CONTEXT_TOKENS:-}" ]; then
+  export CLAUDE_CODE_MAX_CONTEXT_TOKENS="${LOCAL_CONTEXT_TOKENS}"
+fi
+
+exec claude "$@"

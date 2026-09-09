@@ -1,0 +1,219 @@
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+)
+
+// Per-model stability. A model is scored by an exponential moving average of
+// its success rate (alpha 0.25, so a failure costs about a quarter of the score
+// and five clean calls in a row restore most of it) and by its time to first
+// byte. After a failure the model is put in a cooldown that doubles with each
+// consecutive failure, so a dead model is retried a little, not on every call.
+// The state lives in models.json next to the binary and survives restarts.
+
+const (
+	healthAlpha    = 0.25
+	cooldownBase   = 20 * time.Second
+	cooldownMax    = 5 * time.Minute
+	healthyMinimum = 0.5 // below this the preferred model loses its head start
+)
+
+type modelStat struct {
+	OK          int       `json:"ok"`
+	Fail        int       `json:"fail"`
+	Consecutive int       `json:"consecutive"` // failures in a row
+	Score       float64   `json:"score"`       // EWMA of success, 0..1
+	TTFBMs      float64   `json:"ttfb_ms"`     // EWMA of time to first byte
+	LastErr     string    `json:"last_err,omitempty"`
+	LastAt      time.Time `json:"last_at"`
+	LastOKAt    time.Time `json:"last_ok_at"`
+	CoolUntil   time.Time `json:"cool_until"`
+	Failovers   int       `json:"failovers"`    // times a request moved on from this model
+	ServedAfter int       `json:"served_after"` // times this model rescued a request another one failed
+}
+
+func (m modelStat) Cooling() bool           { return time.Now().Before(m.CoolUntil) }
+func (m modelStat) CoolLeft() time.Duration { return time.Until(m.CoolUntil).Truncate(time.Second) }
+
+type health struct {
+	mu   sync.Mutex
+	m    map[string]*modelStat
+	path string
+}
+
+func healthPath() string {
+	if v, ok := os.LookupEnv("ROUTER_MODELS_STATE"); ok {
+		return v
+	}
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "models.json")
+	}
+	return "models.json"
+}
+
+func newHealth(path string) *health {
+	h := &health{m: map[string]*modelStat{}, path: path}
+	if path == "" {
+		return h
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("models state: %v", err)
+		}
+		return h
+	}
+	if err := json.Unmarshal(data, &h.m); err != nil {
+		log.Printf("models state: %s: %v", path, err)
+		h.m = map[string]*modelStat{}
+	}
+	return h
+}
+
+func (h *health) stat(model string) *modelStat {
+	s, ok := h.m[model]
+	if !ok {
+		s = &modelStat{Score: 1} // unseen models are assumed fine, so they get tried
+		h.m[model] = s
+	}
+	return s
+}
+
+// record notes one outcome; ttfb is only meaningful on success.
+func (h *health) record(model string, ok bool, ttfb time.Duration, errMsg string) {
+	h.mu.Lock()
+	s := h.stat(model)
+	now := time.Now()
+	s.LastAt = now
+	if ok {
+		s.OK++
+		s.Consecutive = 0
+		s.CoolUntil = time.Time{}
+		s.LastOKAt = now
+		s.LastErr = ""
+		s.Score = s.Score*(1-healthAlpha) + healthAlpha
+		ms := float64(ttfb.Milliseconds())
+		if s.TTFBMs == 0 {
+			s.TTFBMs = ms
+		} else {
+			s.TTFBMs = s.TTFBMs*(1-healthAlpha) + ms*healthAlpha
+		}
+	} else {
+		s.Fail++
+		s.Consecutive++
+		s.LastErr = errMsg
+		s.Score = s.Score * (1 - healthAlpha)
+		cool := cooldownBase << uint(min(s.Consecutive-1, 10))
+		if cool > cooldownMax {
+			cool = cooldownMax
+		}
+		s.CoolUntil = now.Add(cool)
+	}
+	h.mu.Unlock()
+	h.save()
+}
+
+func (h *health) noteFailover(from, to string) {
+	h.mu.Lock()
+	h.stat(from).Failovers++
+	h.stat(to).ServedAfter++
+	h.mu.Unlock()
+	h.save()
+}
+
+func (h *health) reset(model string) {
+	h.mu.Lock()
+	if model == "" {
+		h.m = map[string]*modelStat{}
+	} else {
+		delete(h.m, model)
+	}
+	h.mu.Unlock()
+	h.save()
+}
+
+func (h *health) save() {
+	if h.path == "" {
+		return
+	}
+	h.mu.Lock()
+	data, err := json.MarshalIndent(h.m, "", "  ")
+	h.mu.Unlock()
+	if err != nil {
+		return
+	}
+	tmp := h.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		log.Printf("models state: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, h.path); err != nil {
+		log.Printf("models state: %v", err)
+	}
+}
+
+// candidate is a configured model with its stats, in the order pick would try it.
+type candidate struct {
+	Key       string // provider/model, the id in stats and history
+	Provider  provider
+	Model     string
+	Stat      modelStat
+	Preferred bool
+}
+
+// pick orders the configured local models for one request. Without failover
+// only the preferred model is returned. With it, models in cooldown go last,
+// the preferred model keeps its place at the head while it is healthy, and the
+// rest are sorted by score, then by latency.
+func (h *health) pick(c config) []candidate {
+	l := c.local
+	var out []candidate
+	for _, m := range l.ordered() {
+		p, _ := l.provider(m.Provider)
+		key := m.Key()
+		out = append(out, candidate{Key: key, Provider: p, Model: m.Model, Stat: h.snapshot(key), Preferred: key == l.Preferred})
+	}
+	if !c.failover && len(out) > 0 {
+		return out[:1]
+	}
+	rank := func(x candidate) int {
+		switch {
+		case x.Stat.Cooling():
+			return 2
+		case x.Preferred && x.Stat.Score >= healthyMinimum:
+			return 0
+		default:
+			return 1
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		ra, rb := rank(a), rank(b)
+		if ra != rb {
+			return ra < rb
+		}
+		if ra == 2 {
+			return a.Stat.CoolUntil.Before(b.Stat.CoolUntil)
+		}
+		if a.Stat.Score != b.Stat.Score {
+			return a.Stat.Score > b.Stat.Score
+		}
+		return a.Stat.TTFBMs < b.Stat.TTFBMs
+	})
+	return out
+}
+
+func (h *health) snapshot(key string) modelStat {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if s, ok := h.m[key]; ok {
+		return *s
+	}
+	return modelStat{Score: 1}
+}
