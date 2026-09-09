@@ -33,6 +33,8 @@ type config struct {
 	extraLocal []string
 	failover   bool
 	firstByte  time.Duration // give up on a model that has not answered by then
+	balance    int           // spread requests over this many best-rated models; <2 sends everything to the first
+	probeEvery time.Duration // ping idle models this often; 0 disables
 
 	uiListen  string
 	uiHistory int
@@ -42,6 +44,8 @@ type config struct {
 func (c config) Local() localSetup   { return c.local }
 func (c config) Failover() bool      { return c.failover }
 func (c config) FirstByteSec() int   { return int(c.firstByte / time.Second) }
+func (c config) Balance() int        { return c.balance }
+func (c config) ProbeSec() int       { return int(c.probeEvery / time.Second) }
 func (c config) CloudOnly() []string { return c.cloudOnly }
 func (c config) MaxInputChars() int  { return c.maxInputChars }
 func (c config) Upstream() string    { return c.upstream.String() }
@@ -73,6 +77,8 @@ func loadConfig() config {
 	c.maxInputChars = atoiOr(env("ROUTER_LOCAL_MAX_INPUT_CHARS", "0"), 0)
 	c.failover = env("ROUTER_LOCAL_FAILOVER", "1") != "0"
 	c.firstByte = time.Duration(atoiOr(env("ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", "45"), 45)) * time.Second
+	c.balance = atoiOr(env("ROUTER_LOCAL_BALANCE", "3"), 3)
+	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
 	for _, s := range strings.Split(os.Getenv("ROUTER_CLOUD_ONLY"), ",") {
@@ -126,6 +132,7 @@ func main() {
 	cs.watch(2 * time.Second)
 	st := newStore(cfg.uiHistory, historyPath())
 	hl := newHealth(healthPath())
+	startChecker(cs, hl)
 
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {

@@ -81,11 +81,13 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		if tr != nil {
 			tr.OpenAIBody = payload
 		}
+		hl.acquire(cand.Key)
 		res := tryModel(r, cfg, cand, payload, oreq.Stream)
 		if tr != nil {
 			tr.Attempts = append(tr.Attempts, attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
 		}
 		if res.err != nil {
+			hl.release(cand.Key)
 			last = res
 			if res.clientGone {
 				return
@@ -109,6 +111,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		}
 		res.resp.Body.Close()
 		res.cancel()
+		hl.release(cand.Key)
 		if werr != nil {
 			hl.record(cand.Key, false, 0, werr.Error())
 			if tr != nil {

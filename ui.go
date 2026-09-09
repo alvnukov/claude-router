@@ -508,6 +508,8 @@ func (u *uiServer) settingsSave(w http.ResponseWriter, r *http.Request) {
 		CloudOnly:     r.Form["cloud_only"],
 		Failover:      r.FormValue("failover"),
 		FirstByte:     r.FormValue("first_byte"),
+		Balance:       r.FormValue("balance"),
+		ProbeEvery:    r.FormValue("probe_every"),
 	}
 	if extra := strings.TrimSpace(r.FormValue("cloud_only_new")); extra != "" {
 		in.CloudOnly = append(in.CloudOnly, splitList(extra)...)

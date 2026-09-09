@@ -114,6 +114,15 @@ preferred model while its rating is at least 50% and it is not cooling down,
 then to the best-rated healthy model, and to cooling models last. The rating
 lives in `models.json` next to the binary; the UI shows it and can reset it.
 
+`ROUTER_LOCAL_BALANCE=3` (the default) spreads requests over the best-rated
+healthy models: among the top N in rating order the one with the fewest
+requests in flight goes first, the rest keep their rating order, so a failure
+falls through to the best model. Set it to 1 to always start with the top one.
+Every `ROUTER_LOCAL_PROBE_INTERVAL` seconds (default 30, 0 disables it) the
+router sends a one-token request, in parallel, to every model that has seen
+no traffic for half that interval, so ratings and cooldowns of idle models
+stay current instead of freezing. Probes are counted separately in the UI.
+
 The upstream path never parses a body and never rewrites a header, with one
 exception while the UI is on: `Accept-Encoding` is dropped from `/v1/messages` so
 the transport negotiates gzip itself and the capture sees a decoded body. The local

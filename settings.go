@@ -95,8 +95,8 @@ func (s *configStore) watch(every time.Duration) {
 					log.Printf("env reload: %v", err)
 				} else if changed {
 					c := s.get()
-					log.Printf("env reloaded: failover=%v first-byte=%s budget=%d cloud-only=%s",
-						c.failover, c.firstByte, c.maxInputChars, strings.Join(c.cloudOnly, ","))
+					log.Printf("env reloaded: failover=%v first-byte=%s balance=%d probe=%s budget=%d cloud-only=%s",
+						c.failover, c.firstByte, c.balance, c.probeEvery, c.maxInputChars, strings.Join(c.cloudOnly, ","))
 				}
 			}
 			if s.provPath == "" {
@@ -140,13 +140,16 @@ func (s *configStore) reloadEnv() (bool, error) {
 	in.CloudOnly = strings.Split(pick(vals, "ROUTER_CLOUD_ONLY", strings.Join(in.CloudOnly, ",")), ",")
 	in.Failover = pick(vals, "ROUTER_LOCAL_FAILOVER", in.Failover)
 	in.FirstByte = pick(vals, "ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", in.FirstByte)
+	in.Balance = pick(vals, "ROUTER_LOCAL_BALANCE", in.Balance)
+	in.ProbeEvery = pick(vals, "ROUTER_LOCAL_PROBE_INTERVAL", in.ProbeEvery)
 	if err := s.apply(in, false); err != nil {
 		return false, err
 	}
 	after := s.get()
 	return before.maxInputChars != after.maxInputChars ||
 		strings.Join(before.cloudOnly, ",") != strings.Join(after.cloudOnly, ",") ||
-		before.failover != after.failover || before.firstByte != after.firstByte, nil
+		before.failover != after.failover || before.firstByte != after.firstByte ||
+		before.balance != after.balance || before.probeEvery != after.probeEvery, nil
 }
 
 // settingsInput is the env-backed part of the settings, as strings from a form.
@@ -155,6 +158,8 @@ type settingsInput struct {
 	CloudOnly     []string
 	Failover      string // "1" / "0"
 	FirstByte     string // seconds
+	Balance       string // models to spread over
+	ProbeEvery    string // seconds, 0 off
 }
 
 func inputFromConfig(c config) settingsInput {
@@ -167,6 +172,8 @@ func inputFromConfig(c config) settingsInput {
 		CloudOnly:     append([]string(nil), c.cloudOnly...),
 		Failover:      fo,
 		FirstByte:     strconv.Itoa(int(c.firstByte / time.Second)),
+		Balance:       strconv.Itoa(c.balance),
+		ProbeEvery:    strconv.Itoa(int(c.probeEvery / time.Second)),
 	}
 }
 
@@ -180,6 +187,14 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 	firstByte, err := strconv.Atoi(strings.TrimSpace(in.FirstByte))
 	if err != nil || firstByte < 0 {
 		return fmt.Errorf("first byte timeout: нужно целое число секунд >= 0")
+	}
+	balance, err := strconv.Atoi(strings.TrimSpace(in.Balance))
+	if err != nil || balance < 0 {
+		return fmt.Errorf("balance: нужно целое число моделей >= 0")
+	}
+	probeEvery, err := strconv.Atoi(strings.TrimSpace(in.ProbeEvery))
+	if err != nil || probeEvery < 0 {
+		return fmt.Errorf("probe interval: нужно целое число секунд >= 0")
 	}
 	fo := strings.TrimSpace(in.Failover)
 	failover := fo != "0" && fo != ""
@@ -204,6 +219,8 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 	next.cloudOnly = cloud
 	next.failover = failover
 	next.firstByte = time.Duration(firstByte) * time.Second
+	next.balance = balance
+	next.probeEvery = time.Duration(probeEvery) * time.Second
 	if write {
 		foS := "0"
 		if failover {
@@ -214,6 +231,8 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 			"ROUTER_CLOUD_ONLY":               strings.Join(cloud, ","),
 			"ROUTER_LOCAL_FAILOVER":           foS,
 			"ROUTER_LOCAL_FIRST_BYTE_TIMEOUT": strconv.Itoa(firstByte),
+			"ROUTER_LOCAL_BALANCE":            strconv.Itoa(balance),
+			"ROUTER_LOCAL_PROBE_INTERVAL":     strconv.Itoa(probeEvery),
 		}
 		if err := writeEnv(s.envPath, updates); err != nil {
 			return fmt.Errorf("запись %s: %w", s.envPath, err)

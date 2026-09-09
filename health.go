@@ -36,15 +36,19 @@ type modelStat struct {
 	CoolUntil   time.Time `json:"cool_until"`
 	Failovers   int       `json:"failovers"`    // times a request moved on from this model
 	ServedAfter int       `json:"served_after"` // times this model rescued a request another one failed
+	ProbeOK     int       `json:"probe_ok"`     // background checks; they shape the rating, not ok/fail
+	ProbeFail   int       `json:"probe_fail"`
+	ProbeAt     time.Time `json:"probe_at"`
 }
 
 func (m modelStat) Cooling() bool           { return time.Now().Before(m.CoolUntil) }
 func (m modelStat) CoolLeft() time.Duration { return time.Until(m.CoolUntil).Truncate(time.Second) }
 
 type health struct {
-	mu   sync.Mutex
-	m    map[string]*modelStat
-	path string
+	mu       sync.Mutex
+	m        map[string]*modelStat
+	inflight map[string]int // requests being served right now, by model key
+	path     string
 }
 
 func healthPath() string {
@@ -58,7 +62,7 @@ func healthPath() string {
 }
 
 func newHealth(path string) *health {
-	h := &health{m: map[string]*modelStat{}, path: path}
+	h := &health{m: map[string]*modelStat{}, inflight: map[string]int{}, path: path}
 	if path == "" {
 		return h
 	}
@@ -87,12 +91,45 @@ func (h *health) stat(model string) *modelStat {
 
 // record notes one outcome; ttfb is only meaningful on success.
 func (h *health) record(model string, ok bool, ttfb time.Duration, errMsg string) {
+	h.note(model, ok, ttfb, errMsg, false)
+}
+
+// recordProbe notes a background check: it moves the rating, the latency and
+// the cooldown like a real request, but is counted apart from real traffic.
+func (h *health) recordProbe(model string, ok bool, ttfb time.Duration, errMsg string) {
+	h.note(model, ok, ttfb, errMsg, true)
+}
+
+func (h *health) acquire(model string) {
+	h.mu.Lock()
+	h.inflight[model]++
+	h.mu.Unlock()
+}
+
+func (h *health) release(model string) {
+	h.mu.Lock()
+	if h.inflight[model] > 0 {
+		h.inflight[model]--
+	}
+	h.mu.Unlock()
+}
+
+func (h *health) note(model string, ok bool, ttfb time.Duration, errMsg string, probe bool) {
 	h.mu.Lock()
 	s := h.stat(model)
 	now := time.Now()
 	s.LastAt = now
-	if ok {
+	switch {
+	case probe && ok:
+		s.ProbeAt, s.ProbeOK = now, s.ProbeOK+1
+	case probe:
+		s.ProbeAt, s.ProbeFail = now, s.ProbeFail+1
+	case ok:
 		s.OK++
+	default:
+		s.Fail++
+	}
+	if ok {
 		s.Consecutive = 0
 		s.CoolUntil = time.Time{}
 		s.LastOKAt = now
@@ -105,7 +142,6 @@ func (h *health) record(model string, ok bool, ttfb time.Duration, errMsg string
 			s.TTFBMs = s.TTFBMs*(1-healthAlpha) + ms*healthAlpha
 		}
 	} else {
-		s.Fail++
 		s.Consecutive++
 		s.LastErr = errMsg
 		s.Score = s.Score * (1 - healthAlpha)
@@ -165,19 +201,26 @@ type candidate struct {
 	Model     string
 	Stat      modelStat
 	Preferred bool
+	InFlight  int // requests it is serving right now
 }
 
 // pick orders the configured local models for one request. Without failover
 // only the preferred model is returned. With it, models in cooldown go last,
 // the preferred model keeps its place at the head while it is healthy, and the
 // rest are sorted by score, then by latency.
+//
+// With balance > 1 the head is chosen among the first balance healthy models
+// (rating at least healthyMinimum, not cooling): the one with the fewest
+// requests in flight goes first, ties keeping the rating order. The rest stay
+// in rating order, so a request that fails on the chosen model moves to the
+// best-rated one, and the load spreads off it again once it is busy.
 func (h *health) pick(c config) []candidate {
 	l := c.local
 	var out []candidate
 	for _, m := range l.ordered() {
 		p, _ := l.provider(m.Provider)
 		key := m.Key()
-		out = append(out, candidate{Key: key, Provider: p, Model: m.Model, Stat: h.snapshot(key), Preferred: key == l.Preferred})
+		out = append(out, candidate{Key: key, Provider: p, Model: m.Model, Stat: h.snapshot(key), Preferred: key == l.Preferred, InFlight: h.load(key)})
 	}
 	if !c.failover && len(out) > 0 {
 		return out[:1]
@@ -206,7 +249,30 @@ func (h *health) pick(c config) []candidate {
 		}
 		return a.Stat.TTFBMs < b.Stat.TTFBMs
 	})
+	if c.balance > 1 {
+		group := 0
+		for group < len(out) && group < c.balance && rank(out[group]) < 2 && out[group].Stat.Score >= healthyMinimum {
+			group++
+		}
+		best := 0
+		for i := 1; i < group; i++ {
+			if out[i].InFlight < out[best].InFlight {
+				best = i
+			}
+		}
+		if best > 0 {
+			chosen := out[best]
+			copy(out[1:best+1], out[:best])
+			out[0] = chosen
+		}
+	}
 	return out
+}
+
+func (h *health) load(key string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.inflight[key]
 }
 
 func (h *health) snapshot(key string) modelStat {
