@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -79,9 +80,19 @@ func uiTemplates() (*template.Template, error) {
 }
 
 func startUI(addr string, st *store, cs *configStore, hl *health) {
-	tpl := template.Must(uiTemplates())
-	u := &uiServer{st: st, cs: cs, tpl: tpl, started: time.Now(), hl: hl}
+	u := newUIServer(st, cs, hl)
+	go func() {
+		if err := http.ListenAndServe(addr, u.handler()); err != nil {
+			log.Printf("ui: %v", err)
+		}
+	}()
+}
 
+func newUIServer(st *store, cs *configStore, hl *health) *uiServer {
+	return &uiServer{st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl}
+}
+
+func (u *uiServer) handler() http.Handler {
 	static, _ := fs.Sub(uiFS, "ui")
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
@@ -100,19 +111,20 @@ func startUI(addr string, st *store, cs *configStore, hl *health) {
 	mux.HandleFunc("POST /settings/models", u.settingsModels)
 	mux.HandleFunc("GET /settings/provider", u.settingsProvider)
 	mux.HandleFunc("POST /settings/providers", u.settingsProviders)
-
-	go func() {
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Printf("ui: %v", err)
-		}
-	}()
+	return mux
 }
 
+// render executes a template into a buffer first: a runtime template error
+// becomes a 500 with the message instead of a half-rendered page.
 func (u *uiServer) render(w http.ResponseWriter, name string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := u.tpl.ExecuteTemplate(w, name, data); err != nil {
+	var buf bytes.Buffer
+	if err := u.tpl.ExecuteTemplate(&buf, name, data); err != nil {
 		log.Printf("ui template %s: %v", name, err)
+		http.Error(w, "template "+name+": "+err.Error(), http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(buf.Bytes())
 }
 
 // ---- pages and partials ----

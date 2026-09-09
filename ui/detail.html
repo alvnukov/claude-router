@@ -36,7 +36,7 @@
 {{if eq .View "structure"}}{{template "ctx" (dict2 .Ctx .R.Headers .Q)}}{{end}}
 {{if eq .View "sent"}}
   {{if .Sent}}
-    {{if gt (len .R.Attempts) 1}}<div class="note warn">Переключение модели: {{range $i, $a := .R.Attempts}}{{if $i}} → {{end}}<code>{{$a.Model}}</code>{{if $a.Err}} <span class="err">✗ {{$a.Err}}</span>{{else}} <span class="ok">✓ {{dur $a.Dur}}</span>{{end}}{{end}}</div>{{else}}{{with .R.Served}}{{if ne . $.R.Model}}<div class="note">Ответила модель <code>{{.}}</code>{{with index $.R.Attempts 0}} <span class="muted">первый байт через {{dur .Dur}}</span>{{end}}</div>{{end}}{{end}}{{end}}
+    {{if gt (len .R.Attempts) 1}}<div class="note warn">Переключение модели: {{range $i, $a := .R.Attempts}}{{if $i}} → {{end}}<code>{{$a.Model}}</code>{{if $a.Err}} <span class="err">✗ {{$a.Err}}</span>{{else}} <span class="ok">✓ {{dur $a.Dur}}</span>{{end}}{{end}}</div>{{else}}{{with .R.Served}}{{if ne . $.R.Model}}<div class="note">Ответила модель <code>{{.}}</code>{{if $.R.Attempts}}{{with index $.R.Attempts 0}} <span class="muted">первый байт через {{dur .Dur}}</span>{{end}}{{end}}</div>{{end}}{{end}}{{end}}
     {{if .R.TrimNotes}}<div class="note warn">Обрезка до бюджета: {{kb .R.TrimBefore}} → {{kb .R.TrimAfter}}. {{join .R.TrimNotes "; "}}</div>{{end}}
     {{template "ctx" (dict2 .Sent nil .Q)}}
   {{else}}<div class="empty">Ещё не отправлено или запрос шёл в облако (там тело уходит байт в байт, см. «Структура»).</div>{{end}}
