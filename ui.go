@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,14 +28,22 @@ var uiFS embed.FS
 // (loopback by default) so nothing about it touches the API path, and it has
 // no auth: everything it shows is the traffic of the user running it.
 type uiServer struct {
-	st      *store
-	cs      *configStore
-	hl      *health
-	tpl     *template.Template
-	started time.Time
+	codexUsage     codexUsageCache
+	claudeProxy    *claudeProxy
+	catalogMu      sync.Mutex
+	fetchAnthropic func(context.Context) ([]string, error)
+	st             *store
+	cs             *configStore
+	hl             *health
+	tpl            *template.Template
+	started        time.Time
 
-	probeMu sync.Mutex
-	probe   map[string]probeResult // by provider name
+	probeMu     sync.Mutex
+	probe       map[string]probeResult // by provider name
+	oauthMu     sync.Mutex
+	oauthFlow   *codexBrowserFlow
+	oauthStatus string
+	oauthError  string
 }
 
 type probeResult struct {
@@ -79,8 +89,7 @@ func uiTemplates() (*template.Template, error) {
 	return template.New("").Funcs(funcs).ParseFS(uiFS, "ui/*.html")
 }
 
-func startUI(addr string, st *store, cs *configStore, hl *health) {
-	u := newUIServer(st, cs, hl)
+func startUI(addr string, u *uiServer) {
 	go func() {
 		if err := http.ListenAndServe(addr, u.handler()); err != nil {
 			log.Printf("ui: %v", err)
@@ -89,7 +98,7 @@ func startUI(addr string, st *store, cs *configStore, hl *health) {
 }
 
 func newUIServer(st *store, cs *configStore, hl *health) *uiServer {
-	return &uiServer{st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl}
+	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl}
 }
 
 func (u *uiServer) handler() http.Handler {
@@ -105,13 +114,28 @@ func (u *uiServer) handler() http.Handler {
 	mux.HandleFunc("GET /requests/{id}/sent.json", u.rawSent)
 	mux.HandleFunc("GET /requests/{id}/response.txt", u.rawResponse)
 	mux.HandleFunc("GET /settings", u.settings)
-	mux.HandleFunc("POST /settings", u.settingsSave)
+	mux.HandleFunc("POST /settings/pool-settings", u.settingsPoolSave)
+	mux.HandleFunc("POST /settings/claude-proxy", u.settingsClaudeProxy)
 	mux.HandleFunc("POST /settings/probe", u.settingsProbe)
 	mux.HandleFunc("POST /settings/route", u.settingsRoute)
 	mux.HandleFunc("POST /settings/models", u.settingsModels)
 	mux.HandleFunc("GET /settings/provider", u.settingsProvider)
 	mux.HandleFunc("POST /settings/providers", u.settingsProviders)
-	return mux
+	mux.HandleFunc("POST /settings/codex/import", u.settingsCodexImport)
+	mux.HandleFunc("POST /settings/codex/login", u.settingsCodexLogin)
+	mux.HandleFunc("GET /settings/codex/status", u.settingsCodexStatus)
+	mux.HandleFunc("GET /settings/codex/usage", u.settingsCodexUsage)
+	mux.HandleFunc("POST /settings/codex/usage", u.settingsCodexUsage)
+	mux.HandleFunc("POST /settings/pools", u.settingsPools)
+	mux.HandleFunc("POST /settings/refresh-models", u.settingsRefreshModels)
+	mux.HandleFunc("GET /settings/pool-add", u.settingsPoolAdd)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && !sameOriginPost(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // render executes a template into a buffer first: a runtime template error
@@ -136,9 +160,10 @@ type ctxArgs struct {
 }
 
 type pageView struct {
-	Q     string
-	Route string
-	Model string
+	Settings *settingsView
+	Q        string
+	Route    string
+	Model    string
 }
 
 func (u *uiServer) index(w http.ResponseWriter, r *http.Request) {
@@ -169,20 +194,6 @@ type statusView struct {
 func (u *uiServer) status(w http.ResponseWriter, r *http.Request) {
 	v := statusView{C: u.cs.get(), Uptime: fmtDur(time.Since(u.started))}
 	v.StoreLen, v.StoreMax = u.st.size()
-	v.Preferred = v.C.local.Preferred
-	if cands := u.hl.pick(v.C); len(cands) > 0 {
-		v.Active = cands[0].Key
-		v.ActiveURL = cands[0].Provider.BaseURL
-		v.Probe = u.probeProvider(cands[0].Provider, false)
-	} else {
-		v.Probe = probeResult{Msg: "нет локальных моделей"}
-	}
-	for _, cand := range u.ranked(v.C) {
-		v.NModels++
-		if cand.Stat.Cooling() {
-			v.Cooling++
-		}
-	}
 	var dc, dl time.Duration
 	var nc, nl int
 	for _, rec := range u.st.list() {
@@ -415,18 +426,71 @@ func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*r
 // ---- settings ----
 
 type settingsView struct {
-	C            config
-	EnvPath      string
-	ProvPath     string
-	Flash        string
-	Err          string
-	Seen         []routePreview
-	Suggest      []string
-	ModelChanged bool
-	Models       []candidate           // configured local models in failover order
-	Providers    []providerRow         // configured providers
-	Pick         *providerRow          // the provider open in the picker, if any
-	Info         map[string]probeModel // by provider/model, from the last probes
+	ClaudeProxy claudeProxyView
+	C           config
+	Flash, Err  string
+	Models      []candidate
+	Providers   []providerRow
+	Pick        *providerRow
+	Login       codexLoginView
+	Pools       []poolRow
+	Routes      []routeRow
+	Families    []routeRow
+	Catalog     modelCatalog
+	AllModels   []localModel
+	Efforts     []string
+}
+
+type routeRow struct {
+	Model, Label, Family string
+	IsFamily             bool
+	Choices              []routeChoice
+	Pools                []poolRow
+	Targets              []directTargetRow
+}
+type directTargetRow struct {
+	Key     string
+	Efforts []string
+}
+type routeChoice struct {
+	Effort      string
+	Destination string
+	Inherited   string
+}
+
+var claudeEfforts = []string{"default", "low", "medium", "high", "xhigh", "max"}
+var providerEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+type poolRow struct {
+	Settings  poolSettings
+	Name      string
+	Keys      []poolKeyRow
+	Available []localModel
+	Add       poolAddView
+	Uses      int
+}
+
+type poolKeyRow struct {
+	Key, Effort string
+	Options     []string
+	Unconfirmed bool
+	First, Last bool
+}
+
+type codexLoginView struct {
+	Connected bool
+	Pending   bool
+	Error     string
+}
+
+func (u *uiServer) codexLoginView() codexLoginView {
+	u.oauthMu.Lock()
+	defer u.oauthMu.Unlock()
+	problem := u.oauthError
+	if problem == "" {
+		problem = codexAuth.authStatus()
+	}
+	return codexLoginView{Connected: codexAuth.connected(), Pending: u.oauthStatus == "pending", Error: problem}
 }
 
 // providerRow is one provider with what the UI knows about it.
@@ -442,125 +506,235 @@ type providerRow struct {
 	Fresh   bool // a form for a provider that does not exist yet
 }
 
-type routePreview struct {
-	Model string
-	Route string
-	Count int
-	Last  time.Time
-}
-
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{C: c, EnvPath: u.cs.envPath, ProvPath: u.cs.provPath}
-	v.Models = u.ranked(c)
-	v.Info = map[string]probeModel{}
+	v := settingsView{ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts}
+	info := map[string]probeModel{}
 	for _, p := range c.local.Providers {
 		row := u.providerRow(c, p, false, modelFilter{})
 		v.Providers = append(v.Providers, row)
 		for _, m := range row.Probe.Info {
-			v.Info[p.Name+"/"+m.ID] = m
+			info[p.Name+"/"+m.ID] = m
 		}
 	}
-	counts := map[string]*routePreview{}
+	names := make([]string, 0, len(c.local.ModelPools))
+	for name := range c.local.ModelPools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		targets := c.local.ModelPools[name]
+		row := poolRow{Name: name, Settings: c.poolSettings(name)}
+		present := map[string]bool{}
+		for i, target := range targets {
+			options := modelEffortOptions(c.local, target.Model, info)
+			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1})
+			present[target.Model] = true
+		}
+		for _, m := range c.local.Models {
+			if !present[m.Key()] {
+				row.Available = append(row.Available, m)
+			}
+		}
+		for _, efforts := range c.local.allRouteRules() {
+			for _, route := range efforts {
+				if route.Mode == "pool" && route.Pool == name {
+					row.Uses++
+				}
+			}
+		}
+		row.Add = u.poolAddView(c.local, name, "", info)
+		v.Pools = append(v.Pools, row)
+	}
+	var directTargets []directTargetRow
+	for _, model := range c.local.Models {
+		directTargets = append(directTargets, directTargetRow{Key: model.Key(), Efforts: modelEffortOptions(c.local, model.Key(), info)})
+	}
+	models := map[string]bool{}
+	catalog := c.local.Catalog.Anthropic
+	if len(catalog) == 0 {
+		catalog = anthropicModels
+	}
+	for _, model := range catalog {
+		models[model] = true
+	}
+	for model := range c.local.Routes {
+		models[model] = true
+	}
 	for _, rec := range u.st.list() {
-		if rec.Model == "" {
-			continue
+		if rec.Model != "" {
+			models[rec.Model] = true
 		}
-		p, ok := counts[rec.Model]
-		if !ok {
-			p = &routePreview{Model: rec.Model, Last: rec.Start}
-			counts[rec.Model] = p
-		}
-		p.Count++
 	}
-	for _, p := range counts {
-		p.Route = "cloud"
-		if c.isLocal(p.Model) {
-			p.Route = "local"
+	families := map[string]bool{}
+	for model := range models {
+		if family := claudeFamily(model); family != "" {
+			families[family] = true
 		}
-		v.Seen = append(v.Seen, *p)
 	}
-	sort.Slice(v.Seen, func(i, j int) bool { return v.Seen[i].Model < v.Seen[j].Model })
-	have := map[string]bool{}
-	for _, e := range c.cloudOnly {
-		have[e] = true
+	for family := range c.local.FamilyRoutes {
+		families[family] = true
 	}
-	for _, s := range []string{"claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5"} {
-		if !have[s] {
-			v.Suggest = append(v.Suggest, s)
+	familyNames := make([]string, 0, len(families))
+	for family := range families {
+		familyNames = append(familyNames, family)
+	}
+	sort.Strings(familyNames)
+	for _, family := range familyNames {
+		row := routeRow{Model: family, Label: strings.ToUpper(family[:1]) + family[1:], IsFamily: true, Pools: v.Pools, Targets: directTargets}
+		for _, effort := range claudeEfforts {
+			route, ok := c.local.FamilyRoutes[family][effort]
+			if !ok {
+				route.Mode = "disabled"
+			}
+			row.Choices = append(row.Choices, routeChoice{Effort: effort, Destination: routeDestination(route)})
 		}
+		v.Families = append(v.Families, row)
+	}
+	ids := make([]string, 0, len(models))
+	for model := range models {
+		ids = append(ids, model)
+	}
+	sort.Strings(ids)
+	for _, model := range ids {
+		family := claudeFamily(model)
+		row := routeRow{Model: model, Label: model, Family: family, Pools: v.Pools, Targets: directTargets}
+		for _, effort := range claudeEfforts {
+			route, explicit := c.local.Routes[model][effort]
+			choice := routeChoice{Effort: effort, Destination: "disabled"}
+			if explicit {
+				choice.Destination = routeDestination(route)
+			} else if family != "" {
+				choice.Destination = "inherit"
+			}
+			inherited, ok := c.local.FamilyRoutes[family][effort]
+			choice.Inherited = "не настроено"
+			if ok && inherited.Mode == "anthropic" {
+				choice.Inherited = "Anthropic"
+			}
+			if ok && inherited.Mode == "pool" {
+				choice.Inherited = "пул " + inherited.Pool
+			}
+			if ok && inherited.Mode == "model" {
+				choice.Inherited = inherited.Model
+				if inherited.Effort != "" {
+					choice.Inherited += " / " + inherited.Effort
+				}
+			}
+			row.Choices = append(row.Choices, choice)
+		}
+		v.Routes = append(v.Routes, row)
 	}
 	return v
 }
 
 func (u *uiServer) settings(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("HX-Request") == "" {
-		u.render(w, "layout", pageView{})
+		v := u.settingsView()
+		u.render(w, "layout", pageView{Settings: &v})
 		return
 	}
 	u.render(w, "settings", u.settingsView())
 }
 
-func (u *uiServer) settingsSave(w http.ResponseWriter, r *http.Request) {
+func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	r.ParseForm()
-	in := settingsInput{
+	settings, err := parsePoolSettings(settingsInput{
 		MaxInputChars: r.FormValue("max_input_chars"),
-		CloudOnly:     r.Form["cloud_only"],
 		Failover:      r.FormValue("failover"),
 		FirstByte:     r.FormValue("first_byte"),
 		Balance:       r.FormValue("balance"),
 		ProbeEvery:    r.FormValue("probe_every"),
+	})
+	if err == nil {
+		err = u.cs.savePoolSettings(r.FormValue("name"), settings)
 	}
-	if extra := strings.TrimSpace(r.FormValue("cloud_only_new")); extra != "" {
-		in.CloudOnly = append(in.CloudOnly, splitList(extra)...)
-	}
-	err := u.cs.apply(in, true)
-	v := u.settingsView()
-	if err != nil {
-		v.Err = err.Error()
-		// Show what the user typed, not what is saved, so nothing is lost.
-		v.C.cloudOnly = in.CloudOnly
-		v.C.maxInputChars = atoiOr(in.MaxInputChars, v.C.maxInputChars)
-	} else {
-		v.Flash = "Сохранено и применено. Файл: " + u.cs.envPath
-		log.Printf("ui: settings applied: budget=%d cloud-only=%s failover=%v first-byte=%s",
-			v.C.maxInputChars, strings.Join(v.C.cloudOnly, ","), v.C.failover, v.C.firstByte)
-	}
-	u.render(w, "settings", v)
+	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены")
 }
 
 func splitList(s string) []string {
 	return strings.FieldsFunc(s, func(c rune) bool { return c == ',' || c == '\n' || c == ' ' })
 }
 
-// settingsRoute flips one model family between cloud and local without the
-// rest of the form: the quick toggle in the routing table.
+func disableDirectRoutes(l *localSetup, removed func(string) bool) {
+	for _, rules := range l.allRouteRules() {
+		for effort, route := range rules {
+			if route.Mode == "model" && removed(route.Model) {
+				rules[effort] = modelRoute{Mode: "disabled"}
+			}
+		}
+	}
+}
+
+func routeDestination(route modelRoute) string {
+	if route.Mode == "pool" {
+		return "pool:" + route.Pool
+	}
+	if route.Mode == "model" {
+		return "model:" + route.Model + ":" + route.Effort
+	}
+	return route.Mode
+}
+
+// settingsRoute saves family defaults or explicit version overrides.
 func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
-	entry := strings.TrimSpace(r.FormValue("entry"))
-	c := u.cs.get()
-	var cloud []string
-	found := false
-	for _, e := range c.cloudOnly {
-		if e == entry {
-			found = true
+	l := u.cs.get().local.clone()
+	if l.Routes == nil {
+		l.Routes = map[string]map[string]modelRoute{}
+	}
+	model := strings.TrimSpace(r.FormValue("model"))
+	familyScope := r.FormValue("scope") == "family"
+	choices := map[string]modelRoute{}
+	for _, effort := range claudeEfforts {
+		dest := r.FormValue(effort)
+		if !familyScope && (dest == "inherit" || dest == "" && claudeFamily(model) != "") {
 			continue
 		}
-		cloud = append(cloud, e)
+		route := modelRoute{Mode: dest}
+		if dest == "" {
+			route.Mode = "disabled"
+		}
+		if strings.HasPrefix(dest, "pool:") {
+			route = modelRoute{Mode: "pool", Pool: strings.TrimPrefix(dest, "pool:")}
+		}
+		if strings.HasPrefix(dest, "model:") {
+			target := strings.TrimPrefix(dest, "model:")
+			if i := strings.LastIndexByte(target, ':'); i >= 0 {
+				route = modelRoute{Mode: "model", Model: target[:i], Effort: target[i+1:]}
+			} else {
+				route = modelRoute{Mode: "model"}
+			}
+		}
+		if route.Mode == "model" {
+			if err := u.validateTargetEffort(l, route.Model, route.Effort); err != nil {
+				u.renderSettingsResult(w, err, "")
+				return
+			}
+		}
+		choices[effort] = route
 	}
-	if !found && entry != "" {
-		cloud = append(cloud, entry)
+	if familyScope {
+		if l.FamilyRoutes == nil {
+			l.FamilyRoutes = map[string]map[string]modelRoute{}
+		}
+		l.FamilyRoutes[model] = choices
+	} else {
+		l.Routes[model] = choices
 	}
-	in := inputFromConfig(c)
-	in.CloudOnly = cloud
-	v := settingsView{}
-	if err := u.cs.apply(in, true); err != nil {
-		v = u.settingsView()
+	u.renderSettingsResult(w, u.cs.applyLocal(l, true), "Маршруты сохранены: "+model)
+}
+
+func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {
+	v := u.settingsView()
+	if err != nil {
 		v.Err = err.Error()
 	} else {
-		v = u.settingsView()
-		v.Flash = "Маршрут изменён: " + entry
-		log.Printf("ui: cloud-only now %s", strings.Join(v.C.cloudOnly, ","))
+		v.Flash = message
 	}
 	u.render(w, "settings", v)
 }
@@ -591,7 +765,7 @@ func (u *uiServer) settingsProvider(w http.ResponseWriter, r *http.Request) {
 }
 
 // settingsProviders adds, edits or removes a provider. Removing one drops its
-// models too; the ids stay local for running sessions via extraLocal.
+// models too; affected pools remain empty and reject requests until configured.
 func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	c := u.cs.get()
@@ -606,7 +780,11 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("провайдер %q уже есть", name)
 			break
 		}
-		l.Providers = append(l.Providers, provider{Name: name, BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")})
+		p := provider{Name: name, Type: r.FormValue("type"), BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")}
+		if p.Type == "codex" {
+			p.BaseURL, p.APIKey = codexBaseURL, ""
+		}
+		l.Providers = append(l.Providers, p)
 		flash = "Провайдер добавлен: " + name
 	case "update":
 		idx := -1
@@ -625,20 +803,47 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		p := &l.Providers[idx]
 		p.Name = name
-		p.BaseURL = r.FormValue("base_url")
-		switch {
-		case r.FormValue("clear_key") == "1":
-			p.APIKey = ""
-		case r.FormValue("api_key") != "":
-			p.APIKey = r.FormValue("api_key")
+		if p.Type != "codex" {
+			p.BaseURL = r.FormValue("base_url")
+			switch {
+			case r.FormValue("clear_key") == "1":
+				p.APIKey = ""
+			case r.FormValue("api_key") != "":
+				p.APIKey = r.FormValue("api_key")
+			}
 		}
 		for i := range l.Models {
 			if l.Models[i].Provider == orig {
 				l.Models[i].Provider = name
 			}
 		}
-		if strings.HasPrefix(l.Preferred, orig+"/") {
-			l.Preferred = name + strings.TrimPrefix(l.Preferred, orig)
+		for pattern, pool := range l.ModelPools {
+			for i, key := range pool {
+				if strings.HasPrefix(key.Model, orig+"/") {
+					pool[i].Model = name + strings.TrimPrefix(key.Model, orig)
+				}
+			}
+			l.ModelPools[pattern] = pool
+		}
+		if name != orig {
+			for _, rules := range l.allRouteRules() {
+				for effort, route := range rules {
+					if route.Mode == "model" && strings.HasPrefix(route.Model, orig+"/") {
+						route.Model = name + strings.TrimPrefix(route.Model, orig)
+						rules[effort] = route
+					}
+				}
+			}
+		}
+		if name != orig {
+			if entry, ok := l.Catalog.Providers[orig]; ok {
+				l.Catalog.Providers[name] = entry
+				delete(l.Catalog.Providers, orig)
+			}
+			if ids, ok := l.Catalog.CodexSeen[orig]; ok {
+				l.Catalog.CodexSeen[name] = ids
+				delete(l.Catalog.CodexSeen, orig)
+			}
 		}
 		flash = "Провайдер сохранён: " + name
 	case "remove":
@@ -660,6 +865,18 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		l.Models = keepM
+		for pattern, pool := range l.ModelPools {
+			kept := pool[:0:0]
+			for _, key := range pool {
+				if !strings.HasPrefix(key.Model, name+"/") {
+					kept = append(kept, key)
+				}
+			}
+			l.ModelPools[pattern] = kept
+		}
+		disableDirectRoutes(&l, func(key string) bool { return strings.HasPrefix(key, name+"/") })
+		delete(l.Catalog.Providers, name)
+		delete(l.Catalog.CodexSeen, name)
 		flash = "Провайдер удалён: " + name
 	default:
 		err = fmt.Errorf("unknown op %q", op)
@@ -673,7 +890,6 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 	} else {
 		n := u.cs.get()
 		v.Flash = flash
-		v.ModelChanged = c.local.Preferred != n.local.Preferred
 		log.Printf("ui: providers: %s", n.local.summary())
 		if p, ok := n.local.provider(name); ok {
 			row := u.providerRow(n, p, true, modelFilter{})
@@ -681,6 +897,249 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	u.render(w, "settings", v)
+}
+
+func (u *uiServer) settingsCodexImport(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	err := codexAuth.importFromCLI()
+	if err == nil {
+		u.probeMu.Lock()
+		u.probe = nil
+		u.probeMu.Unlock()
+	}
+	v := u.settingsView()
+	if err != nil {
+		v.Err = err.Error()
+	} else {
+		v.Flash = "Вход Codex CLI обновлён"
+	}
+	u.render(w, "settings", v)
+}
+
+func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginPost(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	u.oauthMu.Lock()
+	if u.oauthStatus == "pending" && u.oauthFlow != nil {
+		url := u.oauthFlow.URL
+		u.oauthMu.Unlock()
+		http.Redirect(w, r, url, http.StatusSeeOther)
+		return
+	}
+	flow, err := startCodexBrowserFlow(r.Context(), codexCallbackAddr, codexIssuer)
+	if err != nil {
+		u.oauthStatus, u.oauthError = "failed", err.Error()
+		u.oauthMu.Unlock()
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	u.oauthFlow, u.oauthStatus, u.oauthError = flow, "pending", ""
+	u.oauthMu.Unlock()
+	go func() {
+		err := codexAuth.finishBrowserFlow(context.Background(), flow)
+		u.oauthMu.Lock()
+		if u.oauthFlow == flow {
+			u.oauthFlow = nil
+			if err != nil {
+				u.oauthStatus, u.oauthError = "failed", err.Error()
+			} else {
+				u.oauthStatus, u.oauthError = "complete", ""
+			}
+		}
+		u.oauthMu.Unlock()
+		if err == nil {
+			u.probeMu.Lock()
+			u.probe = nil
+			u.probeMu.Unlock()
+		}
+	}()
+	http.Redirect(w, r, flow.URL, http.StatusSeeOther)
+}
+
+func sameOriginPost(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && u.Host == r.Host && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+func (u *uiServer) settingsCodexStatus(w http.ResponseWriter, r *http.Request) {
+	u.render(w, "codex-login", u.codexLoginView())
+}
+
+func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	l := u.cs.get().local.clone()
+	if l.ModelPools == nil {
+		l.ModelPools = map[string][]poolTarget{}
+	}
+	name, key, op := strings.TrimSpace(r.FormValue("name")), r.FormValue("key"), r.FormValue("op")
+	pool, exists := l.ModelPools[name]
+	var err error
+	switch op {
+	case "create":
+		if exists {
+			err = fmt.Errorf("пул %q уже существует", name)
+		} else {
+			l.ModelPools[name] = []poolTarget{}
+		}
+	case "delete":
+		for _, efforts := range l.allRouteRules() {
+			for _, route := range efforts {
+				if route.Mode == "pool" && route.Pool == name {
+					err = fmt.Errorf("пул %q используется: сначала измените его маршруты", name)
+				}
+			}
+		}
+		if err == nil {
+			delete(l.ModelPools, name)
+			delete(l.PoolSettings, name)
+		}
+	case "add":
+		if !exists {
+			err = fmt.Errorf("пул не найден")
+		} else {
+			l.ModelPools[name] = append(pool, poolTarget{Model: key, Effort: r.FormValue("effort")})
+		}
+	case "remove", "up", "down", "effort":
+		idx := -1
+		for i, target := range pool {
+			if target.Model == key {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			err = fmt.Errorf("модель не входит в пул")
+			break
+		}
+		switch op {
+		case "remove":
+			l.ModelPools[name] = append(pool[:idx:idx], pool[idx+1:]...)
+		case "up":
+			if idx > 0 {
+				pool[idx-1], pool[idx] = pool[idx], pool[idx-1]
+			}
+		case "down":
+			if idx+1 < len(pool) {
+				pool[idx], pool[idx+1] = pool[idx+1], pool[idx]
+			}
+		case "effort":
+			pool[idx].Effort = r.FormValue("effort")
+		}
+	default:
+		err = fmt.Errorf("неизвестная операция")
+	}
+	if err == nil && (op == "add" || op == "effort") {
+		err = u.validateTargetEffort(l, key, r.FormValue("effort"))
+	}
+	if err == nil {
+		err = u.cs.applyLocal(l, true)
+	}
+	u.renderSettingsResult(w, err, "Пул сохранён")
+}
+
+func (u *uiServer) validateTargetEffort(l localSetup, key, effort string) error {
+	if effort == "" {
+		return nil
+	}
+	for _, model := range l.Models {
+		if model.Key() != key {
+			continue
+		}
+		p, _ := l.provider(model.Provider)
+		probe := u.probeProvider(p, false)
+		if p.Type == "codex" && probe.OK && !slices.Contains(probe.Models, model.Model) {
+			return fmt.Errorf("%s отсутствует в текущем каталоге Codex", key)
+		}
+		info := map[string]probeModel{}
+		for _, m := range probe.Info {
+			info[p.Name+"/"+m.ID] = m
+		}
+		if slices.Contains(modelEffortOptions(l, key, info), effort) {
+			return nil
+		}
+		return fmt.Errorf("%s: effort %q не подтверждён каталогом модели. Обновите модели или выберите доступный уровень.", key, effort)
+	}
+	return fmt.Errorf("модель %q не настроена", key)
+}
+
+// Codex levels come exclusively from this model's catalog, including the last
+// successful persisted catalog while temporarily offline. Never use a union of
+// unrelated models' capabilities for subscription models.
+func modelEffortOptions(l localSetup, key string, info map[string]probeModel) []string {
+	for _, model := range l.Models {
+		if model.Key() != key {
+			continue
+		}
+		p, _ := l.provider(model.Provider)
+		if m, ok := info[key]; ok && (p.Type == "codex" || len(m.Efforts) > 0) {
+			return m.Efforts
+		}
+		if p.Type != "codex" {
+			return providerEfforts
+		}
+		for _, m := range l.Catalog.Providers[p.Name].Models {
+			if m.ID == model.Model {
+				return m.Efforts
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+type poolAddView struct {
+	Name, Key string
+	Models    []localModel
+	Options   []string
+}
+
+func (u *uiServer) poolAddView(l localSetup, name, key string, info map[string]probeModel) poolAddView {
+	v := poolAddView{Name: name}
+	present := map[string]bool{}
+	for _, m := range l.ModelPools[name] {
+		present[m.Model] = true
+	}
+	for _, m := range l.Models {
+		if !present[m.Key()] {
+			v.Models = append(v.Models, m)
+			if key == m.Key() {
+				v.Key = key
+			}
+		}
+	}
+	if v.Key == "" && len(v.Models) > 0 {
+		v.Key = v.Models[0].Key()
+	}
+	v.Options = modelEffortOptions(l, v.Key, info)
+	return v
+}
+
+func (u *uiServer) settingsPoolAdd(w http.ResponseWriter, r *http.Request) {
+	l := u.cs.get().local
+	name, key := r.URL.Query().Get("name"), r.URL.Query().Get("key")
+	if _, ok := l.ModelPools[name]; !ok {
+		http.Error(w, "пул не найден", http.StatusNotFound)
+		return
+	}
+	info := map[string]probeModel{}
+	for _, m := range l.Models {
+		if m.Key() == key {
+			p, _ := l.provider(m.Provider)
+			for _, item := range u.probeProvider(p, false).Info {
+				info[p.Name+"/"+item.ID] = item
+			}
+		}
+	}
+	u.render(w, "pool-add", u.poolAddView(l, name, key, info))
 }
 
 // providerRow probes the provider and lists which of its models can still be added.
@@ -726,32 +1185,82 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 	if u.probe == nil {
 		u.probe = map[string]probeResult{}
 	}
-	if old, ok := u.probe[p.Name]; ok && !force && old.Base == p.BaseURL && old.Key == p.APIKey && time.Since(old.At) < 5*time.Second {
+	if old, ok := u.probe[p.Name]; ok && !force && old.Base == p.BaseURL && old.Key == p.APIKey && time.Since(old.At) < catalogRefreshInterval {
 		return old
 	}
 	res := probeResult{At: time.Now(), Base: p.BaseURL, Key: p.APIKey}
 	defer func() { u.probe[p.Name] = res }()
-	req, err := http.NewRequest("GET", p.BaseURL+"/models", nil)
+	endpoint := p.BaseURL + "/models"
+	if p.Type == "codex" {
+		endpoint = codexBaseURL + "/models?client_version=0.156.0"
+	}
+	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		res.Msg = err.Error()
 		return res
 	}
-	if p.APIKey != "" {
+	if p.Type == "codex" {
+		if err := codexAuth.authorize(req.Context(), req); err != nil {
+			res.Msg = err.Error()
+			return res
+		}
+	} else if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
+	if p.Type == "codex" {
+		client.Timeout = 5 * time.Second
+		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		req.Header.Set("User-Agent", "claude-router")
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		res.Msg = "недоступен: " + err.Error()
 		return res
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode >= 400 {
+	maxBytes := int64(1 << 20)
+	if p.Type == "codex" {
+		maxBytes = 16 << 20
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if int64(len(body)) > maxBytes {
+		res.Msg = "список моделей слишком велик"
+		return res
+	}
+	if resp.StatusCode >= 400 || (p.Type == "codex" && resp.StatusCode != http.StatusOK) {
 		res.Msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		return res
 	}
-	res.Info = parseModels(body)
+	if p.Type == "codex" {
+		var catalog struct {
+			Models []struct {
+				Slug       string `json:"slug"`
+				Name       string `json:"display_name"`
+				Visibility string `json:"visibility"`
+				Supported  []struct {
+					Effort string `json:"effort"`
+				} `json:"supported_reasoning_levels"`
+			} `json:"models"`
+		}
+		if json.Unmarshal(body, &catalog) != nil {
+			res.Msg = "некорректный список моделей Codex"
+			return res
+		}
+		for _, m := range catalog.Models {
+			if m.Slug != "" && m.Visibility == "list" {
+				info := probeModel{ID: m.Slug, Name: m.Name}
+				for _, level := range m.Supported {
+					if validProviderEffort(level.Effort) {
+						info.Efforts = append(info.Efforts, level.Effort)
+					}
+				}
+				res.Info = append(res.Info, info)
+			}
+		}
+	} else {
+		res.Info = parseModels(body)
+	}
 	res.Facets = facetsOf(res.Info)
 	for _, m := range res.Info {
 		res.Models = append(res.Models, m.ID)
@@ -908,7 +1417,9 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	switch op {
 	case "add":
 		for _, id := range splitList(r.FormValue("model")) {
-			l.Models = append(l.Models, localModel{Provider: pname, Model: id})
+			m := localModel{Provider: pname, Model: id}
+
+			l.Models = append(l.Models, m)
 		}
 	case "remove":
 		var keep []localModel
@@ -918,11 +1429,16 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		l.Models = keep
-	case "prefer":
-		if !l.hasModel(key) {
-			err = fmt.Errorf("модель %q не настроена", key)
+		for pattern, pool := range l.ModelPools {
+			kept := pool[:0:0]
+			for _, member := range pool {
+				if member.Model != key {
+					kept = append(kept, member)
+				}
+			}
+			l.ModelPools[pattern] = kept
 		}
-		l.Preferred = key
+		disableDirectRoutes(&l, func(model string) bool { return model == key })
 	case "failover":
 		local = false
 		in := inputFromConfig(c)
@@ -947,7 +1463,6 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	} else {
 		n := u.cs.get()
 		log.Printf("ui: local models: %s failover=%v", n.local.summary(), n.failover)
-		v.ModelChanged = c.local.Preferred != n.local.Preferred
 		if p, ok := n.local.provider(pname); ok && op == "add" {
 			row := u.providerRow(n, p, false, modelFilter{})
 			v.Pick = &row

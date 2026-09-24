@@ -6,28 +6,81 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
 
 // The checker pings every configured model that real traffic has not reached
-// in the last half interval, all of them in parallel, so ratings and cooldowns
+// in the last interval, all of them in parallel, so ratings and cooldowns
 // stay current for the models balancing is not sending anything to. A probe
 // is a one-token completion; it moves the rating, the latency and the
 // cooldown like a real request but is counted apart from real traffic.
 
 func startChecker(cs *configStore, hl *health) {
 	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		running := map[string]bool{}
+		done := make(chan string)
 		for {
-			c := cs.get()
-			if c.probeEvery <= 0 {
-				time.Sleep(5 * time.Second)
-				continue
+			for key, pc := range poolProbeConfigs(cs.get()) {
+				if running[key] {
+					continue
+				}
+				last := hl.snapshot(key).LastAt
+				if !last.IsZero() && time.Since(last) < pc.probeEvery {
+					continue
+				}
+				running[key] = true
+				go func() {
+					checkModels(pc, hl)
+					done <- key
+				}()
 			}
-			checkModels(c, hl)
-			time.Sleep(c.probeEvery)
+			select {
+			case key := <-done:
+				delete(running, key)
+			case <-ticker.C:
+			}
 		}
 	}()
+}
+
+// Probe only pool members. Shared members are checked once, using the shortest
+// enabled interval (and that pool's timeout). A disabled pool schedules nothing.
+func poolProbeConfigs(c config) map[string]config {
+	out := map[string]config{}
+	names := make([]string, 0, len(c.local.ModelPools))
+	for name := range c.local.ModelPools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		pc := c.poolSettings(name).apply(c)
+		if pc.probeEvery <= 0 {
+			continue
+		}
+		for _, target := range c.local.ModelPools[name] {
+			if previous, ok := out[target.Model]; ok && previous.probeEvery <= pc.probeEvery {
+				continue
+			}
+			for _, model := range c.local.Models {
+				if model.Key() != target.Model {
+					continue
+				}
+				p, ok := c.local.provider(model.Provider)
+				if !ok || p.Type == "codex" {
+					break
+				}
+				next := pc
+				next.local = localSetup{Providers: []provider{p}, Models: []localModel{model}}
+				out[target.Model] = next
+				break
+			}
+		}
+	}
+	return out
 }
 
 func checkModels(c config, hl *health) {
@@ -37,7 +90,11 @@ func checkModels(c config, hl *health) {
 	}
 	var wg sync.WaitGroup
 	for _, cand := range hl.pick(c) {
-		if !cand.Stat.LastAt.IsZero() && time.Since(cand.Stat.LastAt) < c.probeEvery/2 {
+		// Subscription quota must not be spent by background health checks.
+		if cand.Provider.Type == "codex" {
+			continue
+		}
+		if !cand.Stat.LastAt.IsZero() && time.Since(cand.Stat.LastAt) < c.probeEvery {
 			continue
 		}
 		wg.Add(1)

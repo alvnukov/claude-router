@@ -9,15 +9,16 @@
 </head>
 <body>
 <header id="status" hx-get="/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></header>
-<main class="cols">
+<main class="{{if .Settings}}settings-page{{else}}cols{{end}}">
+{{if .Settings}}<section id="detail">{{template "settings" .Settings}}</section>{{else}}
   <aside>
     <form id="filters" hx-get="/requests" hx-target="#list" hx-trigger="input changed delay:300ms from:#q, change from:#route, input changed delay:300ms from:#model, change" hx-swap="innerHTML">
       <input id="q" name="q" type="search" placeholder="поиск по контексту и ответам…" value="{{.Q}}" autocomplete="off">
       <div class="row">
         <select id="route" name="route">
           <option value="">все маршруты</option>
-          <option value="local">local</option>
-          <option value="cloud">cloud</option>
+          <option value="local">Пулы</option>
+          <option value="cloud">Anthropic</option>
         </select>
         <input id="model" name="model" placeholder="модель" size="12">
         <label class="live"><input type="checkbox" id="live" name="live" checked> live</label>
@@ -43,7 +44,7 @@
         ['q', 'route', 'model', 'session'].forEach(function (k) {
           if (u.has(k)) document.getElementById(k).value = u.get(k);
         });
-        if (u.get('page') === 'settings') htmx.ajax('GET', '/settings', '#detail');
+        if (u.get('page') === 'settings') location.replace('/settings');
         if (u.has('open')) {
           document.getElementById('sel').value = u.get('open');
           var url = '/requests/' + encodeURIComponent(u.get('open')) + '?view=' + (u.get('view') || 'structure') + '&q=' + encodeURIComponent(u.get('q') || '');
@@ -62,6 +63,7 @@
   <section id="detail">
     <div class="empty">Выберите запрос слева. Поиск ищет по сырому телу запроса и тексту ответа, а в открытом запросе подсвечивает совпадения по блокам.</div>
   </section>
+{{end}}
 </main>
 </body>
 </html>{{end}}
@@ -70,16 +72,14 @@
 <div class="strip">
   <div class="brand">local-router <span class="muted">{{.Uptime}}</span></div>
   <div class="stat"><b>{{.Total}}</b> запросов <span class="muted">/ {{.StoreLen}} из {{.StoreMax}} в буфере</span></div>
-  <div class="stat"><span class="tag cloud">cloud</span> {{.Cloud}} {{if .AvgCloud}}<span class="muted">~{{.AvgCloud}}</span>{{end}}</div>
-  <div class="stat"><span class="tag local">local</span> {{.Local}} {{if .AvgLocal}}<span class="muted">~{{.AvgLocal}}</span>{{end}}</div>
+  <div class="stat"><span class="tag cloud">Anthropic</span> {{.Cloud}} {{if .AvgCloud}}<span class="muted">~{{.AvgCloud}}</span>{{end}}</div>
+  <div class="stat"><span class="tag local">Пулы</span> {{.Local}} {{if .AvgLocal}}<span class="muted">~{{.AvgLocal}}</span>{{end}}</div>
   {{if .Pending}}<div class="stat pending">● {{.Pending}} в работе</div>{{end}}
   {{if .Errors}}<div class="stat err">✖ {{.Errors}} ошибок</div>{{end}}
   {{if .Trimmed}}<div class="stat warn">✂ {{.Trimmed}} обрезано</div>{{end}}
-  <div class="stat">локальный эндпоинт: {{if .Probe.OK}}<span class="ok">● {{.Probe.Msg}}</span>{{else}}<span class="err">● {{.Probe.Msg}}</span>{{end}}</div>
-  <div class="stat"><span class="muted">local model</span> <code>{{.Active}}</code>{{if ne .Active .Preferred}} <span class="warn">(основная {{.Preferred}} в откате)</span>{{end}} → <code>{{.ActiveURL}}</code>{{if gt .NModels 1}} <span class="muted">· моделей {{.NModels}}{{if .Cooling}}, в откате {{.Cooling}}{{end}}{{if not .C.Failover}}, автопереключение выкл{{end}}</span>{{end}}</div>
-  <div class="stat">{{if .C.CloudOnly}}<span class="muted">в облако только</span> {{range .C.CloudOnly}}<code>{{.}}</code> {{end}}<span class="muted">, остальное локально</span>{{else}}<span class="muted">режим:</span> локально только alias, остальное в облако{{end}}</div>
-  <div class="stat"><span class="muted">бюджет</span> {{if .C.MaxInputChars}}{{kb .C.MaxInputChars}}{{else}}выкл{{end}}</div>
-  <a class="btn" hx-get="/settings" hx-target="#detail" hx-swap="innerHTML" href="#">⚙ настройки</a>
+  <a class="btn" href="/">Запросы</a>
+  <a class="btn" href="/settings">Настройки</a>
+  <a class="btn" href="/settings#codex-subscription">Лимиты Codex</a>
 </div>
 {{end}}
 

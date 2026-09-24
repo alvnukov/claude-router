@@ -57,7 +57,7 @@ func TestPickBalances(t *testing.T) {
 // Probes move the rating and the cooldown but not the ok/fail counters, skip
 // models that had traffic in the last half interval, and run in parallel.
 func TestCheckModels(t *testing.T) {
-	var calls []string
+	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
 	hl := newHealth("")
@@ -68,8 +68,8 @@ func TestCheckModels(t *testing.T) {
 	if took := time.Since(t0); took > 1400*time.Millisecond {
 		t.Fatalf("probes ran one after another: %s", took)
 	}
-	if strings.Contains(strings.Join(calls, ","), "good") || len(calls) != 3 {
-		t.Fatalf("probed %v", calls)
+	if strings.Contains(strings.Join(calls.snapshot(), ","), "good") || len(calls.snapshot()) != 3 {
+		t.Fatalf("probed %v", calls.snapshot())
 	}
 	bad, other, slow := hl.snapshot("p/bad"), hl.snapshot("p/other"), hl.snapshot("p/slow")
 	if bad.ProbeFail != 1 || bad.Fail != 0 || !bad.Cooling() || bad.Score >= 1 || !strings.Contains(bad.LastErr, "проверка") {
@@ -83,14 +83,14 @@ func TestCheckModels(t *testing.T) {
 	}
 	hl.stat("p/bad").CoolUntil = time.Time{}
 	checkModels(cfg, hl)
-	if len(calls) != 3 {
-		t.Fatalf("just-probed models were probed again: %v", calls)
+	if len(calls.snapshot()) != 3 {
+		t.Fatalf("just-probed models were probed again: %v", calls.snapshot())
 	}
 }
 
 // A request releases its in-flight slot on every exit path.
 func TestInFlightReleased(t *testing.T) {
-	var calls []string
+	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
 	hl := newHealth("")

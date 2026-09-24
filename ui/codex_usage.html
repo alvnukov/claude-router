@@ -1,0 +1,20 @@
+{{define "codex-usage"}}
+<div id="codex-usage" aria-live="polite">
+{{if .Connected}}
+<div class="subscription-heading"><div><h3>{{if .Account.Email}}{{.Account.Email}}{{else if .Account.Name}}{{.Account.Name}}{{else}}Аккаунт ChatGPT{{end}}</h3><p class="help">Тариф: <b>{{if .Plan}}{{.Plan}}{{else}}не сообщён{{end}}</b>{{if and .Account.Name .Account.Email}} · {{.Account.Name}}{{end}}</p></div>
+<button class="btn" hx-post="/settings/codex/usage" hx-target="#codex-usage" hx-swap="outerHTML" hx-disabled-elt="this">Обновить лимиты</button></div>
+{{with .Error}}<p class="note warn" role="alert">{{.}}{{if not $.Updated.IsZero}} Показаны последние полученные данные.{{end}}</p>{{end}}
+<div class="quota-grid">{{range .Limits}}<article class="quota-card {{if or .Blocked (and .Known (le .Remaining 10.0))}}quota-low{{end}}"><h4>{{.Name}}</h4>
+{{if .Known}}<p class="quota-value">{{printf "%.0f" .Remaining}}% <span>осталось</span></p><progress max="100" value="{{.Remaining}}" aria-label="Остаток {{.Name}}">{{printf "%.0f" .Remaining}}%</progress><p class="help">Использовано {{printf "%.0f" .Used}}%</p>{{else}}<p class="help">Процент использования не сообщён</p>{{end}}
+{{if .Blocked}}<p class="warn">Сервис сообщает об ограничении доступа</p>{{end}}
+{{if not .Reset.IsZero}}<p class="help">Сброс: <time datetime="{{.Reset.Format "2006-01-02T15:04:05Z07:00"}}">{{.Reset.Format "02.01.2006 15:04 MST"}}</time><br>{{.ResetIn}}</p>{{else}}<p class="help">Время сброса не сообщено</p>{{end}}
+</article>{{else}}<p class="help">{{if .Updated.IsZero}}Нажмите «Обновить лимиты», чтобы загрузить данные подписки.{{else}}Сервис пока не сообщил лимиты.{{end}}</p>{{end}}</div>
+<p>Доступно сбросов лимита: <b>{{if .ResetsKnown}}{{.Resets}}{{else}}не сообщено{{end}}</b></p>
+<details class="settings-extra"><summary>Данные аккаунта</summary><p class="help">ID аккаунта: <code>{{.Account.ID}}</code></p></details>
+<p class="help">Лимиты общие для аккаунта, включая Codex и другие приложения. Запрос к OpenAI выполняется только по кнопке «Обновить лимиты».{{if not .Updated.IsZero}}<br>Данные получены {{ago .Updated}} · {{tfull .Updated}}{{end}}</p>
+{{else}}
+<p class="help">Войдите в Codex, чтобы увидеть аккаунт и лимиты подписки.</p>
+{{with .Error}}<p class="note warn">{{.}}</p>{{end}}
+{{end}}
+</div>
+{{end}}

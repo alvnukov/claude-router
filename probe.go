@@ -14,11 +14,12 @@ import (
 // derives the filters from the data itself rather than from a fixed schema.
 
 type probeModel struct {
-	ID    string
-	Name  string            // a display name, when the provider has one
-	Desc  string            // a description, when the provider has one
-	Attrs map[string]string // flattened scalar fields, minus id/object
-	Tags  []string          // the attrs worth showing inline, formatted
+	ID      string
+	Name    string            // a display name, when the provider has one
+	Efforts []string          // Codex subscription levels reported for this model
+	Desc    string            // a description, when the provider has one
+	Attrs   map[string]string // flattened scalar fields, minus id/object
+	Tags    []string          // the attrs worth showing inline, formatted
 }
 
 // facet is one filter: a key with few distinct values, or a numeric key

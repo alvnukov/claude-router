@@ -9,16 +9,19 @@ import (
 // ---- Anthropic request shapes (only the fields we act on) ----
 
 type anthropicRequest struct {
-	Model         string            `json:"model"`
-	System        json.RawMessage   `json:"system,omitempty"`
-	Messages      []anthropicMsg    `json:"messages"`
-	Tools         []anthropicTool   `json:"tools,omitempty"`
-	ToolChoice    json.RawMessage   `json:"tool_choice,omitempty"`
-	MaxTokens     int               `json:"max_tokens,omitempty"`
-	Temperature   *float64          `json:"temperature,omitempty"`
-	TopP          *float64          `json:"top_p,omitempty"`
-	StopSequences []string          `json:"stop_sequences,omitempty"`
-	Stream        bool              `json:"stream,omitempty"`
+	Model         string          `json:"model"`
+	System        json.RawMessage `json:"system,omitempty"`
+	Messages      []anthropicMsg  `json:"messages"`
+	Tools         []anthropicTool `json:"tools,omitempty"`
+	ToolChoice    json.RawMessage `json:"tool_choice,omitempty"`
+	MaxTokens     int             `json:"max_tokens,omitempty"`
+	Temperature   *float64        `json:"temperature,omitempty"`
+	TopP          *float64        `json:"top_p,omitempty"`
+	StopSequences []string        `json:"stop_sequences,omitempty"`
+	OutputConfig  struct {
+		Effort string `json:"effort,omitempty"`
+	} `json:"output_config,omitempty"`
+	Stream bool `json:"stream,omitempty"`
 }
 
 type anthropicMsg struct {
@@ -53,16 +56,17 @@ type imageSource struct {
 // ---- OpenAI request shapes ----
 
 type openaiRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openaiMsg     `json:"messages"`
-	Tools       []openaiTool    `json:"tools,omitempty"`
-	ToolChoice  any             `json:"tool_choice,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	Stop        []string        `json:"stop,omitempty"`
-	Stream      bool            `json:"stream,omitempty"`
-	StreamOpts  *streamOptions  `json:"stream_options,omitempty"`
+	Model           string         `json:"model"`
+	Messages        []openaiMsg    `json:"messages"`
+	Tools           []openaiTool   `json:"tools,omitempty"`
+	ToolChoice      any            `json:"tool_choice,omitempty"`
+	MaxTokens       int            `json:"max_tokens,omitempty"`
+	Temperature     *float64       `json:"temperature,omitempty"`
+	TopP            *float64       `json:"top_p,omitempty"`
+	Stop            []string       `json:"stop,omitempty"`
+	Stream          bool           `json:"stream,omitempty"`
+	StreamOpts      *streamOptions `json:"stream_options,omitempty"`
+	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
 }
 
 type streamOptions struct {

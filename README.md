@@ -1,17 +1,24 @@
-# local-router
+# claude-router
 
-Routes Claude Code's `haiku` model alias to an OpenAI-compatible endpoint.
-Every other alias reaches api.anthropic.com untouched, unless
-`ROUTER_CLOUD_ONLY` narrows that down further.
+Routes Claude Code requests to Anthropic, OpenAI-compatible providers, or a
+Codex subscription. Configure it at http://127.0.0.1:8788/settings.
 
-    cp env.example env   # if missing; then set ROUTER_LOCAL_* to your endpoint
-    ./claude-local       # launches Claude Code wired to the router
+```sh
+./router build
+./claude-local
+```
 
-`ROUTER_LOCAL_*` in `env` only seed the first run. After that, providers and
-models live in `providers.json` (see below) and the UI manages them.
+`claude-local` sets `ANTHROPIC_BASE_URL` and preserves the model selected in
+Claude Code. It no longer remaps Haiku to a local alias.
 
-Then `haiku` is the local slot: `--model haiku`, the model picker, or a subagent
-spawned with `model: "haiku"`. `fable` is a plain cloud alias again.
+To use the regular `claude` command, click **Подключить Claude к роутеру**
+in the dashboard. The same button becomes **Восстановить настройки Claude**.
+It changes only `env.ANTHROPIC_BASE_URL` in the user's Claude settings and
+keeps the original value in a private `settings.json.router-proxy-backup` file.
+Restore preserves unrelated edits made since connection. `CLAUDE_CONFIG_DIR`
+is respected. Relaunch Claude Code after switching; project or managed
+settings can override the user setting. See the official
+[environment-variable reference](https://code.claude.com/docs/en/env-vars).
 
 ## Running it
 
@@ -31,132 +38,202 @@ there is nothing to manage. For the rest:
     ./router restart     # rebuilds first; use after editing env or Go sources
     ./router logs        # tail -f router.log
 
-The router holds no state between requests, so a restart mid-session is safe:
-the next request reconnects. Everything the UI can change is hot: the router
-re-reads `env` and `providers.json` within two seconds of an edit, and the web
-UI writes the same files. Only the listen addresses and the upstream URL need
-`./router restart`. Claude Code sends the fixed alias `local-model`; the router
-substitutes the preferred local model itself, so switching the model does not
-touch a running session.
+## Routing and pools
 
-## How it routes
+Routing uses a model family (Opus, Sonnet, Haiku, Fable) plus
+`output_config.effort`. An explicit version override has priority. Each
+combination selects one of:
 
-`ANTHROPIC_BASE_URL` points Claude Code at the router. `ANTHROPIC_DEFAULT_HAIKU_MODEL`
-remaps the `haiku` alias to the fixed id `local-model`. The router dispatches on the
-model id in the body:
+- **Не настроено**: reject the request without contacting a provider.
+- **Anthropic**: forward it to the configured Anthropic upstream.
+- **Модель**: send to one configured `provider/model` with a fixed target effort.
+  There is no failover to another model if it fails.
+- **Пул**: choose among the members of a named pool, with optional failover.
 
-  a configured local model, or local-*   ->  translated to /chat/completions
-  anything else                          ->  byte-for-byte reverse proxy upstream
+An absent effort uses the separate `default` / **Не указан** row. There is no
+fallback from an unconfigured effort to another effort. New versions inherit
+their named family dynamically: `claude-opus-5-5` and future Opus versions
+use the Opus rules. Unconfigured families and empty pools reject requests.
+An explicit disabled version/effort overrides an enabled family. Backend
+model IDs do not bypass the routing table.
 
-`ROUTER_CLOUD_ONLY` inverts the second line. Set to a comma-separated list of
-substrings of model ids, it keeps only those on Anthropic and answers everything
-else locally:
+A named pool contains multiple `provider/model` members. Each member has its
+own fixed target effort. For example, Opus/high can select a pool containing
+`codex/gpt-6-sol` with `xhigh` and another provider's model with `high`.
+Opus/low can select a different pool. Sonnet/high can reuse either pool.
+Leaving a member's effort empty lets that backend use its default. A direct
+model assignment uses the same effort choices without creating a one-member
+pool; choose a pool instead when failover is wanted. For example, a direct
+family route can be stored as `"high": {"mode": "model", "model":
+"codex/gpt-6-sol", "effort": "xhigh"}`.
 
-    ROUTER_CLOUD_ONLY=claude-opus-5,claude-fable-5   # those two cloud, rest local
+`providers.json` beside the binary is authoritative (mode 0600, contains keys):
 
-Matching is by substring, so a short entry covers a family: `claude-fable-5`
-catches both `claude-fable-5-1` (first-party) and `claude-fable-5` (gateway),
-while the longer id would miss the shorter one.
-
-That closes a hole the model picker does not cover: a subagent spawned with
-`model: "sonnet"`, or a background chore Claude Code runs on haiku, chooses its
-own model id, and without this it reaches Anthropic no matter what the session
-was told to use. Two consequences to expect -- those calls are answered by
-whatever the preferred local model is, and they are subject to
-`ROUTER_LOCAL_MAX_INPUT_CHARS`, so a large subagent prompt is trimmed rather
-than refused.
-
-## Providers and local models
-
-A provider is one OpenAI-compatible endpoint: a name, a base URL and an
-optional API key. There can be several (LM Studio on this machine, Ollama on
-another box, a vLLM server). Every local model belongs to a provider and is
-addressed as `provider/model` in the UI, the history and the rating file.
-
-`providers.json` next to the binary (mode 0600, it holds the keys) is the
-source of truth:
-
-    {
-      "providers": [{"name": "lmstudio", "base_url": "http://127.0.0.1:1234/v1", "api_key": ""}],
-      "models":    [{"provider": "lmstudio", "model": "coding-large"}],
-      "preferred": "lmstudio/coding-large"
+```json
+{
+  "providers": [{"name": "codex", "type": "codex", "base_url": "https://chatgpt.com/backend-api/codex"}],
+  "models": [{"provider": "codex", "model": "gpt-6-sol"}],
+  "model_pools": {
+    "Deep work": [{"model": "codex/gpt-6-sol", "effort": "xhigh"}]
+  },
+  "family_routes": {
+    "opus": {
+      "high": {"mode": "pool", "pool": "Deep work"},
+      "low": {"mode": "anthropic"}
     }
+  }
+}
+```
 
-The file is created by the first change in the UI. Until then the set is
-seeded from `ROUTER_LOCAL_BASE_URL`, `ROUTER_LOCAL_API_KEY`,
-`ROUTER_LOCAL_MODEL` and `ROUTER_LOCAL_MODELS` in `env`, as one provider named
-after the host. Once the file exists those variables are ignored.
-`ROUTER_PROVIDERS_FILE` moves the file. A hand edit is applied within two
-seconds; an invalid one is logged and ignored.
+The example enables the two listed effort combinations for all Opus versions.
+Use `routes` with exact model IDs for individual exceptions; absent entries
+inherit the family. Add further
+members in **Пулы моделей** and assignments in **Маршруты**. Removing a
+model or provider disables its direct assignments; renaming a provider
+updates their model keys.
 
-In the UI, pick a provider from the list (or "+ новый провайдер") and the
-router asks it for `GET /models` and lists the ones not yet configured with a
-one-click add; a model the endpoint does not list can be typed in. Whatever
-metadata the server returns with each model (context size, capabilities,
-availability, display name, description: the fields differ per server) is
-flattened and shown as tags, both in that list and in the configured models
-table. Filters are derived from the data: a select per boolean or short enum
-field, an "at least" select per numeric field, and a search over id, name and
-description. Fields unique to every model (hashes, timestamps) are skipped. The
-provider's URL and key can be edited or the provider deleted in the same pane;
-deleting it drops its models.
+The dashboard offers three main sections: **Маршруты**, **Пулы**, and
+**Подключения**. Connections expose the provider model catalog, including
+effort choices when available. Removing a model also removes it from pools;
+an emptied pool remains disabled. A pool referenced by a route cannot be
+deleted until the assignments are changed.
 
-With `ROUTER_LOCAL_FAILOVER=1` (the default) a request that a model fails
-before answering is retried on the next candidate, across providers: no
-response headers within `ROUTER_LOCAL_FIRST_BYTE_TIMEOUT` seconds, a 5xx, 404,
-408 or 429, or a connection error. Once a response has started it belongs to
-that model; a failure after that point only counts against its rating.
+Settings apply to the next request. The router reloads `providers.json` and
+`env` within two seconds; invalid edits are ignored. Addresses and upstream
+URL require a restart. `ROUTER_PROVIDERS_FILE` overrides the config path.
 
-Every model has a rating: an exponential moving average of its success rate
-and of its time to first byte, plus a cooldown after a failure that doubles
-with each consecutive one (20s up to 5min). The next request goes to the
-preferred model while its rating is at least 50% and it is not cooling down,
-then to the best-rated healthy model, and to cooling models last. The rating
-lives in `models.json` next to the binary; the UI shows it and can reset it.
+### Migration
 
-`ROUTER_LOCAL_BALANCE=3` (the default) spreads requests over the best-rated
-healthy models: among the top N in rating order the one with the fewest
-requests in flight goes first, the rest keep their rating order, so a failure
-falls through to the best model. Set it to 1 to always start with the top one.
-Every `ROUTER_LOCAL_PROBE_INTERVAL` seconds (default 30, 0 disables it) the
-router sends a one-token request, in parallel, to every model that has seen
-no traffic for half that interval, so ratings and cooldowns of idle models
-stay current instead of freezing. Probes are counted separately in the UI.
+On first startup with an old providers file, the router writes a private
+`providers.json.before-pools` backup and converts known legacy routes to
+explicit destinations and named pools. Existing member order and effort
+mappings are retained. An old explicit empty pool becomes **Anthropic**.
+The old `local-model` alias is preserved as an explicit migrated route for
+already running clients. The next migration saves
+`providers.json.before-families` and seeds each family from its latest configured
+version. Equal version rules become inherited rules; different overrides remain
+explicit. Unconfigured families remain disabled.
 
-The upstream path never parses a body and never rewrites a header, with one
-exception while the UI is on: `Accept-Encoding` is dropped from `/v1/messages` so
-the transport negotiates gzip itself and the capture sees a decoded body. The local
-path never forwards Anthropic credentials: a provider sees its own key only.
+`ROUTER_CLOUD_ONLY`, legacy `pools`, and global `preferred` are migration inputs
+only. They no longer control routing. A fresh installation has no enabled
+routes; `ROUTER_LOCAL_BASE_URL`, `ROUTER_LOCAL_API_KEY`, `ROUTER_LOCAL_MODEL`,
+and `ROUTER_LOCAL_MODELS` only seed the backend catalog.
 
-## Web UI
+## Sessions, timeouts and streaming
 
-    http://127.0.0.1:8788        # ROUTER_UI_LISTEN; empty disables
+For requests with a Claude Code `metadata.user_id` session ID, the router pins
+the selected backend separately for each incoming model and effort. Subsequent
+requests retain that model despite load or rating changes. Requests without a
+session ID are selected independently.
 
-An htmx panel served by the router itself, loopback only, no auth:
+Each pool has its own **Сессии и таймауты** form: failover, response-start
+timeout, new-session balancing, idle probes and context character limit.
+Settings persist in `providers.json` under `pool_settings`. Existing pools
+receive a copy of their previous global values on upgrade (backup:
+`providers.json.before-pool-settings`). Legacy `ROUTER_LOCAL_*` behavior
+variables only supply initial defaults for new pools; they do not override
+saved pool settings.
 
-- status strip: counts per route, in-flight, errors, trimmed prompts, local
-  endpoint reachability (`GET /models`), current routing rule;
-- request list, live-updating, filtered by route and model, with full-text search
-  over the raw request body and the response text;
-- per request: **Структура** (system blocks, tool definitions, message timeline
-  with typed blocks, sizes, `cache_control` markers, a share-by-kind bar and a
-  clickable minimap), **Отправлено локально** (the translated OpenAI payload and
-  trim notes), **Ответ** (parsed blocks, usage, stop reason), **Raw**, and
-  download links; search matches are highlighted per block;
-- settings: the cloud-only list with one-click flips per model family; the
-  providers (add, edit, delete, probe) and the models each one offers; the
-  local models table with rating, ok/failure counts, first byte latency,
-  cooldown and the preferred model; the failover switch, first byte timeout
-  and input budget. Changes apply to the next request and are written back to
-  `env` or `providers.json` (0600, via temp file and rename). A model id that
-  was ever a configured local model stays local for the life of the process,
-  so a Claude Code session started before the change cannot be routed to
-  Anthropic by surprise.
+The pool’s **Распределять новые сессии** setting distributes new sessions over the least busy of the top
+N healthy candidates in the selected pool (0 or 1 selects the first). Pool
+order supplies the preferred first member and breaks rating ties; unhealthy
+models rank behind healthy ones. Ratings and cooldowns remain in `models.json`.
 
-History is a ring of `ROUTER_UI_HISTORY` requests (default 300), kept in memory
-and appended to `history.jsonl` next to the binary (mode 0600, it holds prompts),
-so it survives a restart. `ROUTER_UI_HISTORY_FILE` moves it; set it empty to
-keep history in memory only. "Очистить" in the UI truncates the file too.
+With **Переключать модель при сбое** enabled in the pool, a timeout, connection failure, HTTP 404/408/429
+or 5xx before the response begins retries another member of the same pool.
+The session then remains on that member. No implicit switch to Anthropic or
+another pool occurs. The pool’s **Ожидание начала ответа** setting limits time to the first
+usable streaming event, including text, thinking or a tool call. Headers,
+heartbeats, and role-only announcements do not end this timeout. For a
+non-streaming response the timeout ends at the first body byte. Zero disables
+this timeout; it is not an inactivity timeout after streaming starts.
+
+Only the first usable SSE event is read before committing to a backend; the
+response is forwarded incrementally. Text, thinking, and tool argument deltas
+are not held until completion. A failure after output has started ends that
+response without splicing in output from a different model; a later request
+can use the next member.
+
+Session bindings are in memory, expire after 24 hours of inactivity, and are
+bounded to 4096 entries. A restart, a different route/pool, removal of the
+pinned member, or a change to its effort/connection clears the affected
+selection. Appending newly discovered models preserves existing bindings. The conversation itself
+is supplied by the client on every request.
+
+Idle-model probes use each pool’s interval (0 disables). Models outside pools
+are not probed. A model shared by several pools is checked once at the shortest
+enabled interval, using that pool’s response-start timeout (capped at the probe
+interval). Health ratings are shared. Codex models are excluded so probes do not
+spend subscription quota.
+
+## Codex subscription
+
+Use **Войти через браузер** under **Подключения → Подписка Codex**. The router
+starts an OAuth callback on `127.0.0.1:1455`; finish sign-in in the opened tab.
+Add a provider of type **Codex**; the next catalog refresh imports the account
+models. Include the desired models in pools. Its endpoint is fixed and it does not use an API key.
+An existing CLI login can be imported explicitly from the provider pane; it
+is never read automatically.
+
+The router saves and refreshes its own credential in
+`~/.config/claude-router/codex-auth.json` (0600). `ROUTER_CODEX_AUTH_FILE` changes
+that path. Calls use stateless Responses requests and subscription access,
+not OpenAI API billing. Availability follows the signed-in account catalog.
+Anthropic credentials are never forwarded to other providers.
+
+## Codex subscription limits
+
+**Лимиты Codex** opens the subscription section with the connected account’s
+email, plan and account ID. **Обновить лимиты** is the only action that requests
+subscription usage from OpenAI: opening or reloading the page reads the local
+identity and in-memory cache, without quota polling. The last successful result
+remains visible with its timestamp and an error if a subsequent refresh fails.
+Changing accounts clears the displayed quotas from the previous account.
+
+The read-only adapter follows Cozyphi’s `doc/codex-usage.md` contract and calls
+only `GET https://chatgpt.com/backend-api/wham/usage`. It displays primary and
+additional windows, remaining percentages, reset times and available reset
+credits. Missing data is shown as unavailable, not zero. Reset credits are
+shown as a count; no credit-consuming action is provided. These are account-wide
+limits, not a token budget or usage limited to requests through this router.
+Redirects are rejected, responses are bounded to 1 MiB, errors omit response
+bodies and credentials, and cached results are bound to the connected account.
+
+## Automatic catalog updates
+
+The router checks catalogs at startup and once per hour. **Обновить модели**
+in the dashboard runs the same update for Anthropic and every configured
+provider. Anthropic IDs come from the copyable model IDs in the official
+[model comparison](https://platform.claude.com/docs/en/models/overview), without
+requiring an API key. Codex uses the connected account's model catalog. Last
+successful catalogs and check results persist inside `providers.json`; a
+failed fetch keeps previous data and displays the failure.
+
+New Claude versions immediately inherit their family's routes, even before
+catalog refresh. Version controls show **Наследовать** and the effective
+family destination. Updating family rules updates all inheriting versions.
+
+Newly discovered Codex versions are added to the model registry. In every pool,
+a newer version of the same named variant inherits that pool's newest earlier
+member's effort and is appended after existing members. Sol, Astra, Luna,
+Terra and other distinct variants are kept separate. Older models remain.
+A manually removed known member is not re-added on the next hourly refresh.
+
+Codex effort choices are read from `supported_reasoning_levels` for the selected
+model, including the persisted successful catalog while offline. The form
+refreshes the choices when its model changes; unsupported submitted values
+are rejected. Auto-inheritance only adds a member if its target effort is
+confirmed by that new model's catalog (or the target uses the model default).
+Unsupported inheritance is skipped and reported in the refresh result.
+
+## Request history
+
+The web UI is served on loopback, without authentication. History supports
+filtering by model, route and session, full-text search, request/response
+inspection, translated payloads and downloads. It retains up to
+`ROUTER_UI_HISTORY` requests (default 300), persisted in `history.jsonl` (0600,
+contains prompts). `ROUTER_UI_HISTORY_FILE` overrides its location; set it empty
+for memory only. Capturing history does not delay forwarding the response.
 
 ## Running it as a service
 
@@ -173,23 +250,18 @@ Once the agent is installed, `start`, `stop` and `restart` delegate to
 `launchctl` -- a plain kill would only be undone by `KeepAlive`. `stop` unloads
 the agent, so it stays down until the next login or an explicit `start`.
 
-## Limits worth knowing
+## Context handling
 
-- `ANTHROPIC_BASE_URL` is per process, not per subagent, so all traffic in the
-  session traverses the router, cloud calls included.
-- Claude Code has no per-model context window, so it cannot size a conversation
-  for the local endpoint. `ROUTER_LOCAL_MAX_INPUT_CHARS` is a character budget
-  the router enforces by trimming, not by refusing: refusing would wedge the
-  session, because `/compact` is itself a request carrying the same
-  conversation. Trimming elides oversized blocks first, drops the oldest turns
-  only if that is not enough, never touches tool definitions, and never leaves a
-  tool reply whose call it dropped. Each trim is logged with what it cost.
-  `LOCAL_CONTEXT_TOKENS` clamps the whole session and should stay empty unless
-  everything runs locally.
-- `thinking` blocks are dropped in translation; there is no OpenAI equivalent.
+`ROUTER_LOCAL_MAX_INPUT_CHARS` limits the prompt sent to pool members; zero
+disables trimming. Oversized blocks are elided first, then the oldest turns.
+Tool definitions are retained and tool replies are not left without their
+calls. The history records trimming. Thinking blocks in previous assistant
+messages are omitted when translating to an OpenAI-compatible provider.
 
-## Confidentiality
+## Verification
 
-Routing decides where a model runs, not what the orchestrator already read. A
-prompt the cloud model composed by reading a sensitive file is already in the
-cloud. Give the local subagent a path and let it read the file itself.
+```sh
+go test ./...
+go test -race ./...
+go vet ./...
+```

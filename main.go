@@ -1,14 +1,12 @@
-// localrouter sits between Claude Code and api.anthropic.com.
-//
-// Requests naming the local model are translated to an OpenAI-compatible
-// endpoint. Everything else is forwarded to Anthropic byte for byte: the
-// upstream path never parses a body and never sees a rewritten header, so
-// normal cloud traffic behaves exactly as it would without the proxy.
+// localrouter dispatches explicitly configured Anthropic model/effort routes
+// to Anthropic or a named pool of OpenAI-compatible and Codex models.
 package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -16,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -27,28 +24,24 @@ type config struct {
 	listen        string
 	upstream      *url.URL
 	local         localSetup
-	cloudOnly     []string
 	maxInputChars int
-	// extraLocal holds model ids that used to be the local model; see configStore.
-	extraLocal []string
-	failover   bool
-	firstByte  time.Duration // give up on a model that has not answered by then
-	balance    int           // spread requests over this many best-rated models; <2 sends everything to the first
-	probeEvery time.Duration // ping idle models this often; 0 disables
+	failover      bool
+	firstByte     time.Duration // give up on a model that has not answered by then
+	balance       int           // spread requests over this many best-rated models; <2 sends everything to the first
+	probeEvery    time.Duration // ping idle models this often; 0 disables
 
 	uiListen  string
 	uiHistory int
 }
 
 // Exported readers for the templates, which cannot see unexported fields.
-func (c config) Local() localSetup   { return c.local }
-func (c config) Failover() bool      { return c.failover }
-func (c config) FirstByteSec() int   { return int(c.firstByte / time.Second) }
-func (c config) Balance() int        { return c.balance }
-func (c config) ProbeSec() int       { return int(c.probeEvery / time.Second) }
-func (c config) CloudOnly() []string { return c.cloudOnly }
-func (c config) MaxInputChars() int  { return c.maxInputChars }
-func (c config) Upstream() string    { return c.upstream.String() }
+func (c config) Local() localSetup  { return c.local }
+func (c config) Failover() bool     { return c.failover }
+func (c config) FirstByteSec() int  { return int(c.firstByte / time.Second) }
+func (c config) Balance() int       { return c.balance }
+func (c config) ProbeSec() int      { return int(c.probeEvery / time.Second) }
+func (c config) MaxInputChars() int { return c.maxInputChars }
+func (c config) Upstream() string   { return c.upstream.String() }
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -81,58 +74,99 @@ func loadConfig() config {
 	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
-	for _, s := range strings.Split(os.Getenv("ROUTER_CLOUD_ONLY"), ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			c.cloudOnly = append(c.cloudOnly, s)
+	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
+		if err := savePoolMigration(providersPath(), migrated); err != nil {
+			log.Fatalf("pool migration: %v", err)
 		}
+		c.local = migrated
+	}
+	if migrated, changed := migrateFamilyRoutes(c.local); changed {
+		if err := saveConfigurationMigration(providersPath(), migrated, ".before-families"); err != nil {
+			log.Fatalf("family migration: %v", err)
+		}
+		c.local = migrated
+	}
+	if migrated, changed := migratePoolSettings(c); changed {
+		if err := saveConfigurationMigration(providersPath(), migrated, ".before-pool-settings"); err != nil {
+			log.Fatalf("pool settings migration: %v", err)
+		}
+		c.local = migrated
 	}
 	return c
 }
 
-// isLocal decides whether a model id belongs to the local endpoint. Any
-// "local-" prefixed id is accepted as an extra alias for the same single
-// ROUTER_LOCAL_MODEL, so an alias can be renamed without touching the config.
-//
-// ROUTER_CLOUD_ONLY inverts the default: with it set, the listed substrings are
-// the only models that still reach Anthropic and everything else -- a subagent
-// asked for on sonnet, the small model behind a page fetch -- is answered
-// locally. That is the point of the switch: a model id chosen somewhere else in
-// the tool, by a subagent or by a background chore, can no longer put the
-// prompt on the network by accident. An empty model is never claimed: an
-// unrecognised body is forwarded rather than interpreted.
-func (c config) isLocal(model string) bool {
-	if strings.HasPrefix(model, "local-") {
-		return true
+// Only explicit routes can serve a model. Unknown and disabled models never
+// fall through to Anthropic or to another model's pool.
+func (c config) routeFor(model, effort string) modelRoute { return c.local.routeFor(model, effort) }
+
+func (c config) forModel(model, effort string) config {
+	if effort == "" {
+		effort = "default"
 	}
-	for _, m := range c.local.Models {
-		if model == m.Model {
-			return true
+	route := c.routeFor(model, effort)
+	next := c
+	next.local = c.local.clone()
+	next.local.Models = nil
+	next.local.Preferred = ""
+	var targets []poolTarget
+	switch route.Mode {
+	case "model":
+		targets = []poolTarget{{Model: route.Model, Effort: route.Effort}}
+		next.failover = false
+	case "pool":
+		targets = c.local.ModelPools[route.Pool]
+		if settings, ok := c.local.PoolSettings[route.Pool]; ok {
+			next = settings.apply(next)
+		}
+	default:
+		return next
+	}
+	if len(targets) == 0 {
+		return next
+	}
+	next.local.Preferred = targets[0].Model
+	for _, target := range targets {
+		for _, m := range c.local.Models {
+			if m.Key() == target.Model {
+				m.Efforts = map[string]string{effort: target.Effort}
+				next.local.Models = append(next.local.Models, m)
+				break
+			}
 		}
 	}
-	for _, m := range c.extraLocal {
-		if model == m {
-			return true
-		}
+	return next
+}
+
+func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error) {
+	var probe anthropicRequest
+	if err := json.Unmarshal(body, &probe); err != nil || probe.Model == "" {
+		return "", modelRoute{}, fmt.Errorf("request must contain a model")
 	}
-	if len(c.cloudOnly) == 0 || model == "" {
-		return false
+	effort := probe.OutputConfig.Effort
+	if effort == "" {
+		effort = "default"
 	}
-	for _, s := range c.cloudOnly {
-		if strings.Contains(model, s) {
-			return false
-		}
+	route := cfg.routeFor(probe.Model, effort)
+	if route.Mode == "disabled" {
+		return probe.Model, route, fmt.Errorf("Для %s / %s маршрут не настроен. Назначьте Anthropic или пул моделей в настройках роутера.", probe.Model, effort)
 	}
-	return true
+	if route.Mode == "pool" && len(cfg.local.ModelPools[route.Pool]) == 0 {
+		return probe.Model, route, fmt.Errorf("Пул %s пуст. Добавьте модели в настройках роутера.", route.Pool)
+	}
+	return probe.Model, route, nil
 }
 
 func main() {
 	loadEnvFile()
+	codexAuth = newCodexAuthStore()
 	cfg := loadConfig()
 	cs := newConfigStore(cfg, providersPath())
 	cs.watch(2 * time.Second)
 	st := newStore(cfg.uiHistory, historyPath())
 	hl := newHealth(healthPath())
 	startChecker(cs, hl)
+	u := newUIServer(st, cs, hl)
+	u.startCatalogUpdates(context.Background())
 
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -160,15 +194,16 @@ func main() {
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
-		var probe struct {
-			Model  string `json:"model"`
-			Stream bool   `json:"stream"`
-		}
-		// A body we cannot parse is not ours to interpret: forward it.
-		local := json.Unmarshal(body, &probe) == nil && cfg.isLocal(probe.Model)
+		var probe anthropicRequest
+		json.Unmarshal(body, &probe)
+		_, target, routeErr := configuredRequestRoute(cfg, body)
+		local := target.Mode == "pool" || target.Mode == "model"
 		route := "cloud"
 		if local {
 			route = "local"
+		}
+		if routeErr != nil {
+			route = "disabled"
 		}
 		log.Printf("req model=%q -> %s", probe.Model, route)
 
@@ -181,6 +216,10 @@ func main() {
 			tr = &localTrace{}
 		}
 		defer st.finish(rec.ID, rw, tr)
+		if routeErr != nil {
+			writeAnthropicError(rw, http.StatusBadRequest, "invalid_request_error", routeErr.Error())
+			return
+		}
 
 		if !local {
 			// With the client's Accept-Encoding gone, the transport negotiates
@@ -193,19 +232,22 @@ func main() {
 			pass(rw, r, body)
 			return
 		}
-		handleLocal(rw, r, cfg, body, tr, hl)
+		handleLocal(rw, r, cfg.forModel(probe.Model, probe.OutputConfig.Effort), body, tr, hl, st)
 	})
 
 	mux.HandleFunc("/v1/messages/count_tokens", func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.get()
 		body, _ := io.ReadAll(r.Body)
-		var probe struct {
-			Model string `json:"model"`
+		_, target, err := configuredRequestRoute(cfg, body)
+		if err != nil {
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
 		}
-		if json.Unmarshal(body, &probe) != nil || !cfg.isLocal(probe.Model) {
+		if target.Mode == "anthropic" {
 			pass(w, r, body)
 			return
 		}
+
 		// The local endpoint has no token-count API. Claude Code uses this only
 		// for budget display, so a length-based estimate is honest enough.
 		w.Header().Set("Content-Type", "application/json")
@@ -223,12 +265,10 @@ func main() {
 	log.Printf("listening on %s", cfg.listen)
 	log.Printf("  upstream     %s", cfg.upstream)
 	log.Printf("  local        %s", cfg.local.summary())
-	if len(cfg.cloudOnly) > 0 {
-		log.Printf("  cloud only   %s (everything else goes local)", strings.Join(cfg.cloudOnly, ", "))
-	}
+
 	if cfg.uiListen != "" {
 		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
-		startUI(cfg.uiListen, st, cs, hl)
+		startUI(cfg.uiListen, u)
 	}
 	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
 		log.Fatal(err)

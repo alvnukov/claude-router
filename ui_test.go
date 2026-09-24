@@ -5,10 +5,52 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSettingsUsesAnthropicPools(t *testing.T) {
+	u, h := testUI(t)
+	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	for _, model := range []string{"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"} {
+		if !strings.Contains(body, `data-model="`+model+`"`) {
+			t.Errorf("missing editable pool for %s", model)
+		}
+	}
+	for _, obsolete := range []string{"всё локально", "сделать локальной", "сделать основной", "Локальные провайдеры"} {
+		if strings.Contains(body, obsolete) {
+			t.Errorf("obsolete routing UI: %s", obsolete)
+		}
+	}
+	get(t, h, "POST", "/settings/pools", url.Values{"op": {"create"}, "name": {"Сложные задачи"}})
+	get(t, h, "POST", "/settings/pools", url.Values{"op": {"add"}, "name": {"Сложные задачи"}, "key": {"p/m1"}, "effort": {"high"}})
+	pool := u.cs.get().local.ModelPools["Сложные задачи"]
+	if len(pool) != 1 || pool[0].Model != "p/m1" || pool[0].Effort != "high" {
+		t.Fatalf("pool not saved: %+v", pool)
+	}
+	get(t, h, "POST", "/settings/route", url.Values{"model": {"claude-opus-5"}, "high": {"pool:Сложные задачи"}, "low": {"anthropic"}})
+	cfg := u.cs.get()
+	if cfg.routeFor("claude-opus-5", "high").Pool != "Сложные задачи" || cfg.routeFor("claude-opus-5", "low").Mode != "anthropic" {
+		t.Fatal("routes not saved")
+	}
+	if cfg.routeFor("claude-sonnet-5", "high").Mode != "disabled" || cfg.routeFor("claude-opus-5", "default").Mode != "disabled" {
+		t.Fatal("unassigned routes enabled")
+	}
+	get(t, h, "POST", "/settings/pools", url.Values{"op": {"delete"}, "name": {"Сложные задачи"}})
+	if _, ok := u.cs.get().local.ModelPools["Сложные задачи"]; !ok {
+		t.Fatal("deleted a referenced pool")
+	}
+	// A normal navigation must render settings as a full-width page too.
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/settings", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `class="settings-page"`) || !strings.Contains(w.Body.String(), `data-model="claude-opus-5"`) {
+		t.Fatal("settings page not rendered")
+	}
+
+}
 
 // Templates are parsed at startup only; a stray {{end}} must fail here,
 // not when launchd restarts the router.

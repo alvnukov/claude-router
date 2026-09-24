@@ -1,114 +1,70 @@
 {{define "settings"}}
-<div class="detail settings">
-<div class="dhead"><div class="title"><span class="big">⚙ Настройки роутера</span> <span class="muted">{{.EnvPath}} · {{.ProvPath}}</span></div></div>
-{{with .Flash}}<div class="note ok">{{.}}</div>{{end}}
-{{with .Err}}<div class="note err">{{.}}</div>{{end}}
-{{if .ModelChanged}}<div class="note ok">Локальная модель переключена. Уже запущенные сессии Claude Code продолжат работать: они шлют alias <code>local-model</code>, а имя модели подставляет роутер. Сессии, запущенные старым <code>claude-local</code> со старым id, тоже остаются локальными.</div>{{end}}
+<div class="settings">
+<div class="settings-heading"><div><h1>Настройки роутера</h1><p class="help">Семейство модели → входной effort → Anthropic, модель или пул</p></div><a class="btn" href="/">История запросов</a></div>
+{{with .Flash}}<div class="note ok" role="status">{{.}}</div>{{end}}
+{{with .Err}}<div class="note err" role="alert">{{.}}</div>{{end}}
+{{template "claude-proxy" .ClaudeProxy}}
+<div class="catalog-status"><form hx-post="/settings/refresh-models" hx-target="#detail" hx-disabled-elt="find button"><button class="btn" type="submit">Обновить модели</button></form><span class="help">Автоматически раз в час{{if not .Catalog.CheckedAt.IsZero}} · проверено {{ago .Catalog.CheckedAt}}{{end}}</span></div>
+{{range .Catalog.Notes}}<div class="note warn">{{.}}</div>{{end}}
+<nav class="settings-nav"><a href="#routes">Маршруты</a><a href="#pools">Пулы</a><a href="#codex-subscription">Подписка Codex</a><a href="#connections">Подключения</a></nav>
+<section class="settings-section" id="routes">
+<h2>Маршруты по семействам</h2><p class="help">Новые версии Opus, Sonnet, Haiku и Fable наследуют назначения своего семейства для каждого effort. Прямая модель не переключается при сбое; для переключений выберите пул. «Не настроено» запрещает запрос. «Не указан» применяется, когда клиент не передал effort.</p>
+<div class="route-grid">{{range .Families}}{{template "route-card" .}}{{end}}</div>
+<details class="settings-extra"><summary>Версии моделей и индивидуальные настройки · {{len .Routes}}</summary>
+<p class="help">«Наследовать» следует настройкам семейства. Явное назначение или запрет здесь имеет приоритет только для этой версии.</p>
+<div class="route-grid">{{range .Routes}}{{template "route-card" .}}{{end}}</div>
+<details class="settings-extra"><summary>Добавить другую модель Anthropic</summary><form class="inline-form" hx-post="/settings/route" hx-target="#detail"><input name="model" placeholder="Точный ID модели" aria-label="ID модели Anthropic" required><button class="btn" type="submit">Добавить</button></form><p class="help">Версия наследует настройки по имени семейства.</p></details>
+</details>
+</section>
+<section class="settings-section" id="pools"><h2>Пулы моделей</h2><p class="help">Пул содержит несколько моделей со своим effort у каждой. Один пул можно назначить нескольким маршрутам. Порядок задаёт приоритет выбора; здоровые модели имеют преимущество перед моделями после сбоя.</p>
+{{range .Pools}}{{$pool:=.}}
+<div class="pool-card" data-pool="{{.Name}}"><div class="pool-heading"><h3>{{.Name}}</h3><span class="muted">Маршрутов: {{.Uses}}</span>
+<form hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="name" value="{{.Name}}"><button class="link err" name="op" value="delete" type="submit">Удалить пул</button></form></div>
+{{range .Keys}}<div class="pool-member"><code>{{.Key}}</code><form class="inline-form" hx-post="/settings/pools" hx-target="#detail">
+<input type="hidden" name="name" value="{{$pool.Name}}"><input type="hidden" name="key" value="{{.Key}}">
+{{$member:=.}}<label>Effort <select name="effort" aria-label="Effort {{.Key}} в {{$pool.Name}}"><option value="" {{if eq .Effort ""}}selected{{end}}>По умолчанию модели</option>{{if .Unconfirmed}}<option value="{{.Effort}}" selected>{{.Effort}} — не подтверждён каталогом</option>{{end}}{{range .Options}}<option value="{{.}}" {{if eq . $member.Effort}}selected{{end}}>{{.}}</option>{{end}}</select></label>
+<button class="btn" name="op" value="effort" type="submit">Сохранить</button>
+{{if not .First}}<button class="btn" name="op" value="up" aria-label="Поднять {{.Key}}" type="submit">↑</button>{{end}}
+{{if not .Last}}<button class="btn" name="op" value="down" aria-label="Опустить {{.Key}}" type="submit">↓</button>{{end}}
+<button class="link" name="op" value="remove" type="submit">Убрать</button></form></div>
+{{else}}<p class="note warn">В пуле нет моделей — назначенные ему запросы не выполняются.</p>{{end}}
+{{if .Available}}{{template "pool-add" .Add}}{{else}}<p class="help">Другие модели можно добавить в разделе «Подключения».</p>{{end}}
+<details class="settings-extra pool-behavior"><summary>Сессии и таймауты</summary><p class="help">Внутри сессии каждый маршрут закрепляется за выбранной моделью. При сбое до начала ответа роутер пробует следующую модель этого пула и запоминает новый выбор. Начавшийся ответ передаётся потоком; переключение посреди ответа не выполняется.</p>
+<form hx-post="/settings/pool-settings" hx-target="#detail" class="behavior-form" aria-label="Сессии и таймауты пула {{.Name}}">
+<input type="hidden" name="name" value="{{.Name}}">
+<label><input type="checkbox" name="failover" value="1" {{if .Settings.Failover}}checked{{end}}> Переключать модель при сбое</label>
+<label>Ожидание начала ответа, сек.<input type="number" name="first_byte" min="0" value="{{.Settings.FirstByteSec}}"><small>0 — без ограничения</small></label>
+<label>Распределять новые сессии между лучшими моделями<input type="number" name="balance" min="0" value="{{.Settings.Balance}}"><small>0 или 1 — первая здоровая модель; закреплённые сессии не перераспределяются</small></label>
+<label>Проверять простаивающие модели каждые, сек.<input type="number" name="probe_every" min="0" value="{{.Settings.ProbeSec}}"><small>0 — отключить. Подписка Codex не расходуется на проверки.</small></label>
+<label>Лимит символов контекста для моделей пула<input type="number" name="max_input_chars" min="0" value="{{.Settings.MaxInputChars}}"><small>0 — без обрезки</small></label>
+<button class="btn primary" type="submit">Сохранить настройки пула</button>
+</form></details>
+</div>{{else}}<p class="empty small">Пулы пока не созданы.</p>{{end}}
+<form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="op" value="create"><input name="name" aria-label="Название пула" placeholder="Название: быстрый, сложные задачи…" required><button class="btn primary" type="submit">Создать пул</button></form>
+</section>
+<section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
+{{template "codex-login" .Login}}
+<div id="codex-usage" hx-get="/settings/codex/usage" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>
+</section>
+<section class="settings-section" id="connections"><h2>Подключения</h2><p class="help">Подключите провайдера и добавьте его модели в каталог. Затем их можно назначить напрямую или включить в пул.</p>
 
-<div class="ctx">
-  <details class="sect" open><summary>Локальные провайдеры</summary>
-    <p class="help">Провайдер — это OpenAI-совместимый эндпоинт: адрес и ключ. Выберите его, и роутер спросит у него <code>/models</code> и покажет, какие модели оттуда можно добавить. Провайдеров может быть несколько; модели с разных провайдеров участвуют в автопереключении наравне.</p>
-    {{if .Providers}}
-    <table class="params routes providers">
-      <tr><th>провайдер</th><th>адрес</th><th>ключ</th><th>моделей</th><th>состояние</th></tr>
-      {{range .Providers}}
-      <tr>
-        <td><code>{{.P.Name}}</code></td>
-        <td><code>{{.P.BaseURL}}</code></td>
-        <td>{{if .KeySet}}задан{{else}}<span class="muted">нет</span>{{end}}</td>
-        <td>{{.NModels}}</td>
-        <td><span class="{{if .Probe.OK}}ok{{else}}err{{end}}">● {{.Probe.Msg}}</span></td>
-      </tr>
-      {{end}}
-    </table>
-    {{end}}
-    <p>
-      <label>провайдер:
-      <select name="name" hx-get="/settings/provider" hx-target="#provider-pane" hx-swap="innerHTML" hx-trigger="change">
-        <option value="" {{if not .Pick}}selected{{end}}>— выберите —</option>
-        {{$pick := .Pick}}{{range .Providers}}<option value="{{.P.Name}}" {{if and $pick (eq $pick.P.Name .P.Name)}}selected{{end}}>{{.P.Name}}</option>{{end}}
-        <option value="+" {{if and $pick $pick.Fresh}}selected{{end}}>+ новый провайдер</option>
-      </select></label>
-    </p>
-    <div id="provider-pane">{{with .Pick}}{{template "provider" .}}{{end}}</div>
-  </details>
-
-<form hx-post="/settings" hx-target="#detail" hx-swap="innerHTML">
-  <details class="sect" open><summary>Маршрутизация моделей</summary>
-    <p class="help">
-      {{if .C.CloudOnly}}Режим <b>«всё локально, кроме списка»</b>: в Anthropic уходят только модели, id которых содержит одну из подстрок ниже. Всё остальное, включая сабагентов на sonnet и фоновые вызовы, отвечает локальный эндпоинт.{{else}}Режим <b>«локально только alias»</b>: локально идут только alias <code>local-model</code>, настроенные локальные модели и id с префиксом <code>local-</code>, всё остальное в Anthropic. Добавьте хотя бы одну запись, чтобы перевернуть правило.{{end}}
-    </p>
-    <table class="params routes">
-      <tr><th>подстрока id</th><th>маршрут</th><th></th></tr>
-      {{range .C.CloudOnly}}
-      <tr>
-        <td><code>{{.}}</code><input type="hidden" name="cloud_only" value="{{.}}"></td>
-        <td><span class="tag cloud">cloud</span></td>
-        <td><button type="button" class="link" hx-post="/settings/route" hx-vals='{"entry":"{{.}}"}' hx-target="#detail" hx-swap="innerHTML">→ сделать локальной</button></td>
-      </tr>
-      {{end}}
-      <tr>
-        <td><input name="cloud_only_new" placeholder="добавить: claude-opus-5, …" size="32"></td>
-        <td colspan="2" class="muted">через запятую; сохраняется кнопкой ниже</td>
-      </tr>
-    </table>
-    {{if .Suggest}}<p class="help">быстро добавить в облако:
-      {{range .Suggest}}<button type="button" class="chip" hx-post="/settings/route" hx-vals='{"entry":"{{.}}"}' hx-target="#detail" hx-swap="innerHTML">+ {{.}}</button> {{end}}
-    </p>{{end}}
-
-    {{if .Seen}}
-    <p class="help">Модели, которые видел роутер, и куда они пойдут при текущих правилах:</p>
-    <table class="params routes">
-      <tr><th>model id</th><th>запросов</th><th>маршрут</th><th></th></tr>
-      {{range .Seen}}
-      <tr>
-        <td><code>{{.Model}}</code></td>
-        <td>{{.Count}}</td>
-        <td><span class="tag {{.Route}}">{{.Route}}</span></td>
-        <td>{{if eq .Route "local"}}<button type="button" class="link" hx-post="/settings/route" hx-vals='{"entry":"{{.Model}}"}' hx-target="#detail" hx-swap="innerHTML">→ в облако</button>{{end}}</td>
-      </tr>
-      {{end}}
-    </table>
-    {{end}}
-  </details>
-
-  <details class="sect" open><summary>Локальные модели и автопереключение</summary>
-    <p class="help">Модели добавляются из провайдеров выше. Запрос идёт в первую по списку; если она не ответила за таймаут первого байта, вернула 5xx, 404, 408 или 429, или соединение оборвалось до начала ответа, роутер тут же повторяет запрос на следующей. Порядок ниже — тот, в котором пойдёт следующий запрос: основная модель держит первое место, пока её рейтинг не ниже 50%, дальше по рейтингу, модели в откате — в конце. При балансировке первой идёт наименее загруженная из лучших, а при сбое запрос уходит на лучшую по рейтингу. Простаивающие модели проверяются в фоне коротким запросом, чтобы рейтинг и откат не зависали без трафика.</p>
-    <table class="params routes models">
-      <tr><th>#</th><th>провайдер</th><th>model id</th><th>параметры</th><th>рейтинг</th><th>ok / сбоев</th><th>1-й байт</th><th>состояние</th><th></th></tr>
-      {{range $i, $m := .Models}}
-      <tr class="{{if $m.Stat.Cooling}}cooling{{end}}">
-        <td>{{add $i 1}}</td>
-        <td><code>{{$m.Provider.Name}}</code></td>
-        <td><code>{{$m.Model}}</code>{{if $m.Preferred}} <span class="tag local">основная</span>{{end}}{{with index $.Info $m.Key}}{{if .Name}}<div class="help">{{.Name}}</div>{{end}}{{end}}</td>
-        <td class="attrs">{{with index $.Info $m.Key}}{{range .Tags}}<span class="attr">{{.}}</span> {{end}}{{else}}<span class="muted">—</span>{{end}}</td>
-        <td><b>{{score $m.Stat.Score}}</b></td>
-        <td>{{$m.Stat.OK}} / {{$m.Stat.Fail}}{{if $m.Stat.Failovers}} <span class="muted" title="сколько раз запрос ушёл с неё на другую">⇄{{$m.Stat.Failovers}}</span>{{end}}{{if $m.Stat.ServedAfter}} <span class="muted" title="сколько раз спасла запрос после чужого сбоя">🛟{{$m.Stat.ServedAfter}}</span>{{end}}{{if $m.InFlight}} <span class="tag local" title="запросов в работе прямо сейчас">{{$m.InFlight}} в работе</span>{{end}}</td>
-        <td>{{ms $m.Stat.TTFBMs}}</td>
-        <td>{{if $m.Stat.Cooling}}<span class="err">откат ещё {{$m.Stat.CoolLeft}}</span> <span class="muted">({{$m.Stat.Consecutive}} подряд)</span>{{else if $m.Stat.LastAt.IsZero}}<span class="muted">не пробовали</span>{{else}}<span class="ok">ok</span> <span class="muted">{{ago $m.Stat.LastAt}}</span>{{end}}{{with $m.Stat.LastErr}}<div class="help err">{{.}}</div>{{end}}{{if not $m.Stat.ProbeAt.IsZero}}<div class="help" title="фоновые проверки: в рейтинг идут, в ok/сбоев нет">проверка {{ago $m.Stat.ProbeAt}} · {{$m.Stat.ProbeOK}} ok / {{$m.Stat.ProbeFail}} сбоев</div>{{end}}</td>
-        <td>{{if not $m.Preferred}}<button type="button" class="link" hx-post="/settings/models" hx-vals='{"op":"prefer","key":"{{$m.Key}}"}' hx-target="#detail" hx-swap="innerHTML">сделать основной</button> <button type="button" class="link" hx-post="/settings/models" hx-vals='{"op":"remove","key":"{{$m.Key}}"}' hx-target="#detail" hx-swap="innerHTML">убрать</button>{{end}} <button type="button" class="link" hx-post="/settings/models" hx-vals='{"op":"reset","key":"{{$m.Key}}"}' hx-target="#detail" hx-swap="innerHTML">сбросить рейтинг</button></td>
-      </tr>
-      {{end}}
-      {{if not .Models}}<tr><td colspan="9" class="muted">ни одной модели: выберите провайдера выше и добавьте модель</td></tr>{{end}}
-    </table>
-    <p class="help">
-      <label><input type="checkbox" name="failover" value="1" {{if .C.Failover}}checked{{end}}> автопереключение при сбое</label>
-      &nbsp; таймаут первого байта <input name="first_byte" value="{{.C.FirstByteSec}}" size="4"> с <span class="muted">(0 — ждать сколько угодно)</span>
-      <br>балансировать между <input name="balance" value="{{.C.Balance}}" size="2"> лучшими <span class="muted">(запрос идёт на наименее загруженную из них; 0 или 1 — всегда на первую)</span>
-      &nbsp; проверять простаивающие модели каждые <input name="probe_every" value="{{.C.ProbeSec}}" size="3"> с <span class="muted">(0 — не проверять)</span>
-      &nbsp; <button type="button" class="link" hx-post="/settings/models" hx-vals='{"op":"reset"}' hx-target="#detail" hx-swap="innerHTML">сбросить все рейтинги</button>
-    </p>
-  </details>
-
-  <details class="sect" open><summary>Обрезка контекста</summary>
-    <table class="params form">
-      <tr><th>ROUTER_LOCAL_MAX_INPUT_CHARS</th><td><input name="max_input_chars" value="{{.C.MaxInputChars}}" size="12"> <span class="help">0 — без обрезки</span></td></tr>
-    </table>
-  </details>
-
-  <p><button type="submit" class="btn primary">Сохранить и применить</button> <span class="help">Применяется сразу к следующему запросу и записывается в env-файл; провайдеры и модели — в <code>{{.ProvPath}}</code>. Правка любого из файлов руками тоже подхватывается в течение пары секунд.</span></p>
-</form>
+<div class="connection-grid">{{range .Providers}}<div class="connection-card"><h3>{{.P.Name}}</h3><p class="help">{{if eq .P.Type "codex"}}Подписка ChatGPT{{else}}{{.P.BaseURL}}{{end}}</p><p>{{.NModels}} моделей в каталоге · {{if .Probe.OK}}<span class="ok">Доступен</span>{{else}}<span class="err">Недоступен</span>{{end}}</p><button class="btn" hx-get="/settings/provider" hx-vals='{"name":"{{.P.Name}}"}' hx-target="#provider-pane">Модели и подключение</button></div>{{end}}</div>
+<p><button class="btn" hx-get="/settings/provider" hx-target="#provider-pane">Добавить подключение</button></p>
+<div id="provider-pane">{{with .Pick}}{{template "provider" .}}{{end}}</div>
+<details class="settings-extra"><summary>Каталог добавленных моделей · {{len .Models}}</summary>
+{{range .Models}}<div class="pool-member"><code>{{.Key}}</code><span class="help">{{.Stat.OK}} ответов · {{.Stat.Fail}} сбоев · {{if .Stat.Cooling}}пауза после сбоя{{else}}доступна для выбора{{end}}</span><form hx-post="/settings/models" hx-target="#detail"><input type="hidden" name="key" value="{{.Key}}"><button class="link" name="op" value="remove">Убрать из каталога и пулов</button></form></div>{{end}}</details>
+</section>
 </div>
+{{end}}
+{{define "codex-login"}}
+<div id="codex-login" hx-get="/settings/codex/status" hx-trigger="every 2s" hx-swap="outerHTML">
+  {{if .Pending}}<span class="muted">Ожидаем вход в браузере…</span>
+  {{else if .Error}}<span class="err">{{.Error}}</span>
+  {{else if .Connected}}<span class="ok">● Подписка подключена</span>
+  {{else}}<span class="muted">Подписка не подключена</span>{{end}}
+  <form method="post" action="/settings/codex/login" target="_blank" style="display:inline">
+    <button type="submit" class="btn primary">{{if .Connected}}Войти заново{{else}}Войти через браузер{{end}}</button>
+  </form>
 </div>
 {{end}}
 
@@ -118,7 +74,8 @@
   <input type="hidden" name="op" value="add">
   <table class="params form">
     <tr><th>имя</th><td><input name="name" placeholder="lmstudio, ollama, box2…" size="24"> <span class="help">без пробелов и «/»; становится префиксом модели: <code>имя/model</code></span></td></tr>
-    <tr><th>адрес</th><td><input name="base_url" value="{{.P.BaseURL}}" size="48"> <span class="help">OpenAI-совместимый, до <code>/chat/completions</code></span></td></tr>
+    <tr><th>тип</th><td><select name="type"><option value="">OpenAI-совместимый</option><option value="codex">Codex (подписка ChatGPT)</option></select></td></tr>
+    <tr><th>адрес</th><td><input name="base_url" value="{{.P.BaseURL}}" size="48"> <span class="help">для Codex адрес выбирается автоматически; для обычного провайдера — URL до <code>/chat/completions</code></span></td></tr>
     <tr><th>API key</th><td><input name="api_key" type="password" placeholder="если нужен" size="48" autocomplete="new-password"></td></tr>
   </table>
   <p><button type="submit" class="btn primary">Добавить провайдера</button></p>
@@ -127,6 +84,7 @@
 <div class="provider">
   <p><b>{{.P.Name}}</b> <code>{{.P.BaseURL}}</code> — <span class="{{if .Probe.OK}}ok{{else}}err{{end}}">● {{.Probe.Msg}}</span>
     <button type="button" class="link" hx-post="/settings/probe" hx-vals='{"provider":"{{.P.Name}}"}' hx-target="#provider-pane" hx-swap="innerHTML">проверить снова</button></p>
+  {{if eq .P.Type "codex"}}<p><button type="button" class="link" hx-post="/settings/codex/import" hx-target="#detail" hx-swap="innerHTML">подхватить новый вход из Codex CLI</button></p>{{end}}
   {{if .Probe.OK}}
   <form class="filter" hx-get="/settings/provider" hx-target="#provider-pane" hx-swap="innerHTML" hx-trigger="change, keyup changed delay:300ms from:input">
     <input type="hidden" name="name" value="{{.P.Name}}"><input type="hidden" name="filter" value="1">
@@ -164,9 +122,10 @@
     <input type="hidden" name="op" value="update"><input type="hidden" name="orig" value="{{.P.Name}}">
     <table class="params form">
       <tr><th>имя</th><td><input name="name" value="{{.P.Name}}" size="24"></td></tr>
-      <tr><th>адрес</th><td><input name="base_url" value="{{.P.BaseURL}}" size="48"></td></tr>
+      {{if ne .P.Type "codex"}}<tr><th>адрес</th><td><input name="base_url" value="{{.P.BaseURL}}" size="48"></td></tr>
       <tr><th>API key</th><td><input name="api_key" type="password" placeholder="{{if .KeySet}}задан — оставьте пустым, чтобы не менять{{else}}не задан{{end}}" size="48" autocomplete="new-password">
         {{if .KeySet}}<label class="help"><input type="checkbox" name="clear_key" value="1"> удалить ключ</label>{{end}}</td></tr>
+      {{end}}
     </table>
     <p><button type="submit" class="btn primary">Сохранить провайдера</button>
        <button type="button" class="link err" hx-post="/settings/providers" hx-vals='{"op":"remove","name":"{{.P.Name}}"}' hx-confirm="Удалить провайдера {{.P.Name}} вместе с его моделями ({{.NModels}})?" hx-target="#detail" hx-swap="innerHTML">удалить провайдера</button></p>
@@ -174,4 +133,37 @@
   </details>
 </div>
 {{end}}
+{{end}}
+
+{{define "route-card"}}
+{{$route:=.}}
+<details class="route-card" data-model="{{.Model}}" {{if .IsFamily}}open{{end}}><summary><b>{{.Label}}</b>{{if .IsFamily}} <span class="muted">· все версии</span>{{else if .Family}} <span class="muted">· семейство {{.Family}}</span>{{end}}</summary>
+<form hx-post="/settings/route" hx-target="#detail" hx-swap="innerHTML">
+<input type="hidden" name="model" value="{{.Model}}">{{if .IsFamily}}<input type="hidden" name="scope" value="family">{{end}}
+{{range .Choices}}{{$choice:=.}}<label class="route-line"><span>{{if eq .Effort "default"}}Не указан{{else}}{{.Effort}}{{end}}</span><select name="{{.Effort}}" aria-label="{{$route.Model}} / {{.Effort}}">
+{{if and (not $route.IsFamily) $route.Family}}<option value="inherit" {{if eq .Destination "inherit"}}selected{{end}}>Наследовать: {{.Inherited}}</option>{{end}}
+<option value="disabled" {{if eq .Destination "disabled"}}selected{{end}}>Не настроено</option><option value="anthropic" {{if eq .Destination "anthropic"}}selected{{end}}>Anthropic</option>
+{{range $route.Pools}}<option value="pool:{{.Name}}" {{if eq $choice.Destination (printf "pool:%s" .Name)}}selected{{end}}>Пул: {{.Name}} · {{len .Keys}} мод.</option>{{end}}
+{{range $route.Targets}}{{$target:=.}}<option value="model:{{.Key}}:" {{if eq $choice.Destination (printf "model:%s:" .Key)}}selected{{end}}>Модель: {{.Key}} · по умолчанию</option>{{range .Efforts}}<option value="model:{{$target.Key}}:{{.}}" {{if eq $choice.Destination (printf "model:%s:%s" $target.Key .)}}selected{{end}}>Модель: {{$target.Key}} · effort {{.}}</option>{{end}}{{end}}
+</select></label>{{end}}
+<button class="btn primary" type="submit">Сохранить маршруты</button></form></details>
+{{end}}
+
+{{define "pool-add"}}
+<form class="inline-form pool-add" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="op" value="add"><input type="hidden" name="name" value="{{.Name}}">
+{{$add:=.}}<select name="key" aria-label="Добавить модель в {{.Name}}" hx-get="/settings/pool-add" hx-trigger="change" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML">{{range .Models}}<option value="{{.Key}}" {{if eq .Key $add.Key}}selected{{end}}>{{.Key}}</option>{{end}}</select>
+<label>Effort <select name="effort" aria-label="Effort новой модели в {{.Name}}"><option value="">По умолчанию модели</option>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label><button class="btn" type="submit">Добавить в пул</button></form>
+{{end}}
+
+{{define "claude-proxy"}}
+<div id="claude-proxy" class="pool-card">
+<h3>Claude Code</h3>
+{{with .Flash}}<p class="note ok" role="status">{{.}}</p>{{end}}
+{{with .Error}}<p class="note err" role="alert">{{.}}</p>{{end}}
+<p>{{if .Enabled}}В пользовательских настройках выбран этот роутер.{{else}}В пользовательских настройках этот роутер не выбран.{{end}}</p>
+<form hx-post="/settings/claude-proxy" hx-target="#claude-proxy" hx-swap="outerHTML" hx-disabled-elt="find button">
+{{if .Enabled}}<button class="btn" name="op" value="restore" type="submit">{{if .CanRestore}}Восстановить настройки Claude{{else}}Отключить Claude от роутера{{end}}</button>{{else}}<button class="btn primary" name="op" value="connect" type="submit">Подключить Claude к роутеру</button>{{end}}
+</form>
+<p class="help">Подключение применяется ко всем проектам. После переключения перезапустите Claude Code. Настройки отдельного проекта могут переопределять подключение.</p>
+</div>
 {{end}}

@@ -117,10 +117,12 @@ func TestParseGzipResponse(t *testing.T) {
 	}
 }
 
-func TestExtraLocalStaysLocal(t *testing.T) {
-	c := config{local: oneProvider("http://h/v1", "new"), extraLocal: []string{"old"}}
-	if !c.isLocal("old") || !c.isLocal("new") || c.isLocal("claude-opus-5") {
-		t.Fatal("extraLocal not honoured")
+func TestUnassignedBackendIsDisabled(t *testing.T) {
+	c := config{local: oneProvider("http://h/v1", "new")}
+	for _, model := range []string{"old", "new", "p/new", "local-model"} {
+		if c.routeFor(model, "default").Mode != "disabled" {
+			t.Fatalf("unassigned %s is enabled", model)
+		}
 	}
 }
 
@@ -148,7 +150,7 @@ func TestReloadEnv(t *testing.T) {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
 	c := cs.get()
-	if c.failover || len(c.cloudOnly) != 1 || c.firstByte != 45*time.Second {
+	if c.failover || c.routeFor("claude-opus-5", "default").Mode != "disabled" || c.firstByte != 45*time.Second {
 		t.Fatalf("%+v", c)
 	}
 	if changed, _ = cs.reloadEnv(); changed {
@@ -160,9 +162,10 @@ func TestProvidersFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "providers.json")
 	cs := &configStore{c: config{local: oneProvider("http://h/v1", "zero")}, provPath: p}
 	l := localSetup{
-		Providers: []provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
-		Models:    []localModel{{"a", "m1"}, {"b", "m2"}, {"a", "m1"}},
-		Preferred: "b/m2",
+		Providers:  []provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
+		Models:     []localModel{{Provider: "a", Model: "m1"}, {Provider: "b", Model: "m2"}, {Provider: "a", Model: "m1"}},
+		ModelPools: map[string][]poolTarget{"work": {{Model: "b/m2", Effort: "high"}}},
+		Routes:     map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}}},
 	}
 	if err := cs.applyLocal(l, true); err != nil {
 		t.Fatal(err)
@@ -171,14 +174,14 @@ func TestProvidersFile(t *testing.T) {
 		t.Fatalf("mode %v", st.Mode())
 	}
 	c := cs.get()
-	if len(c.local.Models) != 2 || c.local.Providers[0].BaseURL != "http://a/v1" || !c.isLocal("zero") || !c.isLocal("m2") {
-		t.Fatalf("%+v extra=%v", c.local, c.extraLocal)
+	if len(c.local.Models) != 2 || c.local.Providers[0].BaseURL != "http://a/v1" || c.routeFor("zero", "default").Mode != "disabled" || c.routeFor("m2", "default").Mode != "disabled" {
+		t.Fatalf("%+v", c.local)
 	}
 	got, err := readProviders(p)
-	if err != nil || got.Preferred != "b/m2" || got.Providers[1].APIKey != "k" {
+	if err != nil || got.Preferred != "" || got.routeFor("claude-opus-5", "high").Pool != "work" || got.ModelPools["work"][0].Effort != "high" || got.Providers[1].APIKey != "k" {
 		t.Fatalf("%+v %v", got, err)
 	}
-	bad := localSetup{Providers: []provider{{Name: "x", BaseURL: "http://x/v1"}}, Models: []localModel{{"nope", "m"}}}
+	bad := localSetup{Providers: []provider{{Name: "x", BaseURL: "http://x/v1"}}, Models: []localModel{{Provider: "nope", Model: "m"}}}
 	if err := cs.applyLocal(bad, false); err == nil {
 		t.Fatal("model on unknown provider accepted")
 	}

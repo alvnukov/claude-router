@@ -45,6 +45,7 @@ func (m modelStat) Cooling() bool           { return time.Now().Before(m.CoolUnt
 func (m modelStat) CoolLeft() time.Duration { return time.Until(m.CoolUntil).Truncate(time.Second) }
 
 type health struct {
+	sessions map[string]sessionBinding
 	mu       sync.Mutex
 	m        map[string]*modelStat
 	inflight map[string]int // requests being served right now, by model key
@@ -135,7 +136,7 @@ func (h *health) note(model string, ok bool, ttfb time.Duration, errMsg string, 
 		s.LastOKAt = now
 		s.LastErr = ""
 		s.Score = s.Score*(1-healthAlpha) + healthAlpha
-		ms := float64(ttfb.Milliseconds())
+		ms := float64(ttfb) / float64(time.Millisecond)
 		if s.TTFBMs == 0 {
 			s.TTFBMs = ms
 		} else {
@@ -199,6 +200,7 @@ type candidate struct {
 	Key       string // provider/model, the id in stats and history
 	Provider  provider
 	Model     string
+	Efforts   map[string]string
 	Stat      modelStat
 	Preferred bool
 	InFlight  int // requests it is serving right now
@@ -220,7 +222,7 @@ func (h *health) pick(c config) []candidate {
 	for _, m := range l.ordered() {
 		p, _ := l.provider(m.Provider)
 		key := m.Key()
-		out = append(out, candidate{Key: key, Provider: p, Model: m.Model, Stat: h.snapshot(key), Preferred: key == l.Preferred, InFlight: h.load(key)})
+		out = append(out, candidate{Key: key, Provider: p, Model: m.Model, Efforts: m.Efforts, Stat: h.snapshot(key), Preferred: key == l.Preferred, InFlight: h.load(key)})
 	}
 	if !c.failover && len(out) > 0 {
 		return out[:1]

@@ -6,13 +6,31 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
+type testCalls struct {
+	mu     sync.Mutex
+	values []string
+}
+
+func (c *testCalls) add(model string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.values = append(c.values, model)
+}
+func (c *testCalls) snapshot() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.values...)
+}
+func (c *testCalls) reset() { c.mu.Lock(); defer c.mu.Unlock(); c.values = nil }
+
 // fakeEndpoint answers /chat/completions per model: "good" -> 200, "bad" -> 500,
 // "slow" -> sleeps, "gone" -> 404.
-func fakeEndpoint(t *testing.T, calls *[]string) *httptest.Server {
+func fakeEndpoint(t *testing.T, calls *testCalls) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -20,7 +38,7 @@ func fakeEndpoint(t *testing.T, calls *[]string) *httptest.Server {
 		}
 		b, _ := io.ReadAll(r.Body)
 		json.Unmarshal(b, &req)
-		*calls = append(*calls, req.Model)
+		calls.add(req.Model)
 		switch req.Model {
 		case "bad":
 			http.Error(w, `{"error":"boom"}`, 500)
@@ -47,7 +65,7 @@ func runLocal(t *testing.T, cfg config, hl *health) (*httptest.ResponseRecorder,
 }
 
 func TestFailoverToNextModel(t *testing.T) {
-	var calls []string
+	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
 	cfg := config{local: oneProvider(srv.URL, "bad", "gone", "good"), failover: true, firstByte: 5 * time.Second}
@@ -56,8 +74,8 @@ func TestFailoverToNextModel(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "ok from good") {
 		t.Fatalf("code=%d body=%s", w.Code, w.Body.String())
 	}
-	if tr.Served != "p/good" || len(tr.Attempts) != 3 || strings.Join(calls, ",") != "bad,gone,good" {
-		t.Fatalf("served=%s attempts=%+v calls=%v", tr.Served, tr.Attempts, calls)
+	if tr.Served != "p/good" || len(tr.Attempts) != 3 || strings.Join(calls.snapshot(), ",") != "bad,gone,good" {
+		t.Fatalf("served=%s attempts=%+v calls=%v", tr.Served, tr.Attempts, calls.snapshot())
 	}
 	if s := hl.snapshot("p/bad"); s.Fail != 1 || !s.Cooling() || s.Score >= 1 {
 		t.Fatalf("bad stat %+v", s)
@@ -66,7 +84,7 @@ func TestFailoverToNextModel(t *testing.T) {
 		t.Fatalf("good stat %+v", s)
 	}
 	// Next request: bad is cooling, so good goes first.
-	calls = nil
+	calls.reset()
 	_, tr = runLocal(t, cfg, hl)
 	if tr.Served != "p/good" || len(tr.Attempts) != 1 {
 		t.Fatalf("second: served=%s attempts=%+v", tr.Served, tr.Attempts)
@@ -74,7 +92,7 @@ func TestFailoverToNextModel(t *testing.T) {
 }
 
 func TestFirstByteTimeoutFailsOver(t *testing.T) {
-	var calls []string
+	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
 	cfg := config{local: oneProvider(srv.URL, "slow", "good"), failover: true, firstByte: 200 * time.Millisecond}
@@ -89,13 +107,13 @@ func TestFirstByteTimeoutFailsOver(t *testing.T) {
 }
 
 func TestFailoverOffReportsError(t *testing.T) {
-	var calls []string
+	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
 	cfg := config{local: oneProvider(srv.URL, "bad", "good"), failover: false, firstByte: time.Second}
 	w, tr := runLocal(t, cfg, newHealth(""))
-	if w.Code != 500 || len(tr.Attempts) != 1 || len(calls) != 1 {
-		t.Fatalf("code=%d attempts=%+v calls=%v", w.Code, tr.Attempts, calls)
+	if w.Code != 500 || len(tr.Attempts) != 1 || len(calls.snapshot()) != 1 {
+		t.Fatalf("code=%d attempts=%+v calls=%v", w.Code, tr.Attempts, calls.snapshot())
 	}
 }
 

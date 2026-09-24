@@ -18,21 +18,43 @@ import (
 
 type provider struct {
 	Name    string `json:"name"`
+	Type    string `json:"type,omitempty"` // "" (OpenAI chat) or "codex" (ChatGPT subscription)
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key,omitempty"`
 }
 
 type localModel struct {
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
+	Provider string            `json:"provider"`
+	Model    string            `json:"model"`
+	Efforts  map[string]string `json:"efforts,omitempty"` // Claude effort -> provider effort
 }
 
 func (m localModel) Key() string { return m.Provider + "/" + m.Model }
 
+type poolTarget struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"`
+}
+
+type modelRoute struct {
+	Mode   string `json:"mode"` // disabled, anthropic, pool, model
+	Pool   string `json:"pool,omitempty"`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
+}
+
+var anthropicModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"}
+
 type localSetup struct {
-	Providers []provider   `json:"providers"`
-	Models    []localModel `json:"models"`
-	Preferred string       `json:"preferred"` // a model Key
+	PoolSettings map[string]poolSettings          `json:"pool_settings,omitempty"`
+	FamilyRoutes map[string]map[string]modelRoute `json:"family_routes"`
+	Catalog      modelCatalog                     `json:"catalog,omitempty"`
+	Providers    []provider                       `json:"providers"`
+	Models       []localModel                     `json:"models"`
+	Preferred    string                           `json:"preferred,omitempty"` // legacy input / request-scoped first pool member
+	Pools        map[string][]string              `json:"pools,omitempty"`     // legacy, read only
+	Routes       map[string]map[string]modelRoute `json:"routes"`
+	ModelPools   map[string][]poolTarget          `json:"model_pools"`
 }
 
 func providersPath() string {
@@ -79,15 +101,6 @@ func (l localSetup) ordered() []localModel {
 	return out
 }
 
-func (l localSetup) preferredModel() (localModel, bool) {
-	for _, m := range l.Models {
-		if m.Key() == l.Preferred {
-			return m, true
-		}
-	}
-	return localModel{}, false
-}
-
 // ProvidersOf lists provider names, for templates.
 func (l localSetup) ProviderNames() []string {
 	out := make([]string, 0, len(l.Providers))
@@ -108,6 +121,17 @@ func (l *localSetup) validate() error {
 		p := &l.Providers[i]
 		p.Name = strings.TrimSpace(p.Name)
 		p.BaseURL = strings.TrimSuffix(strings.TrimSpace(p.BaseURL), "/")
+		if p.Type != "" && p.Type != "codex" {
+			return fmt.Errorf("provider %q: неизвестный тип %q", p.Name, p.Type)
+		}
+		if p.Type == "codex" {
+			if p.BaseURL == "" {
+				p.BaseURL = codexBaseURL
+			}
+			if p.BaseURL != codexBaseURL || p.APIKey != "" {
+				return fmt.Errorf("provider %q: Codex использует фиксированный адрес и подписку, без API key", p.Name)
+			}
+		}
 		if !providerNameOK(p.Name) {
 			return fmt.Errorf("provider %q: имя без пробелов, «/», запятых и кавычек", p.Name)
 		}
@@ -130,6 +154,11 @@ func (l *localSetup) validate() error {
 		if !seen[m.Provider] {
 			return fmt.Errorf("model %q: провайдер %q не существует", m.Model, m.Provider)
 		}
+		for source, target := range m.Efforts {
+			if !validClaudeEffort(source) || !validProviderEffort(target) {
+				return fmt.Errorf("model %q: неверное соответствие effort %q → %q", m.Key(), source, target)
+			}
+		}
 		if keys[m.Key()] {
 			continue
 		}
@@ -137,10 +166,81 @@ func (l *localSetup) validate() error {
 		models = append(models, m)
 	}
 	l.Models = models
-	if l.Preferred == "" || !keys[l.Preferred] {
-		l.Preferred = ""
-		if len(models) > 0 {
-			l.Preferred = models[0].Key()
+	for pattern, pool := range l.Pools {
+		if !modelIDOK(pattern) {
+			return fmt.Errorf("pool %q: шаблон без пробелов, запятых и кавычек", pattern)
+		}
+		poolSeen := map[string]bool{}
+		for _, key := range pool {
+			if !keys[key] {
+				return fmt.Errorf("pool %q: модель %q не настроена", pattern, key)
+			}
+			if poolSeen[key] {
+				return fmt.Errorf("pool %q: модель %q повторяется", pattern, key)
+			}
+			poolSeen[key] = true
+		}
+	}
+
+	for name, settings := range l.PoolSettings {
+		if _, ok := l.ModelPools[name]; !ok {
+			return fmt.Errorf("настройки несуществующего пула %q", name)
+		}
+		if err := settings.validate(); err != nil {
+			return fmt.Errorf("пул %s: %w", name, err)
+		}
+	}
+	for name, targets := range l.ModelPools {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("нужно название пула")
+		}
+		seen := map[string]bool{}
+		for _, target := range targets {
+			if !keys[target.Model] || seen[target.Model] {
+				return fmt.Errorf("пул %s: модель %q отсутствует или повторяется", name, target.Model)
+			}
+			if target.Effort != "" && !validProviderEffort(target.Effort) {
+				return fmt.Errorf("%s: неверный effort %q", target.Model, target.Effort)
+			}
+			seen[target.Model] = true
+		}
+	}
+	for model, efforts := range l.allRouteRules() {
+		if !modelIDOK(model) {
+			return fmt.Errorf("неверный id модели %q", model)
+		}
+		for effort, route := range efforts {
+			if !validClaudeEffort(effort) {
+				return fmt.Errorf("%s: неизвестный effort %q", model, effort)
+			}
+			switch route.Mode {
+			case "disabled", "anthropic":
+				if route.Pool != "" || route.Model != "" || route.Effort != "" {
+					return fmt.Errorf("%s / %s: адресат не соответствует маршруту", model, effort)
+				}
+			case "pool":
+				if route.Model != "" || route.Effort != "" {
+					return fmt.Errorf("%s / %s: модель допустима только для прямого маршрута", model, effort)
+				}
+				if _, ok := l.ModelPools[route.Pool]; !ok {
+					return fmt.Errorf("пул %q не существует", route.Pool)
+				}
+			case "model":
+				if route.Pool != "" || !keys[route.Model] {
+					return fmt.Errorf("%s / %s: модель %q не настроена", model, effort, route.Model)
+				}
+				if route.Effort != "" && !validProviderEffort(route.Effort) {
+					return fmt.Errorf("%s / %s: неверный effort %q", model, effort, route.Effort)
+				}
+			default:
+				return fmt.Errorf("%s: неизвестный маршрут %q", model, route.Mode)
+			}
+		}
+	}
+
+	for family := range l.FamilyRoutes {
+		if claudeFamily(family) != family {
+			return fmt.Errorf("неверное семейство %q", family)
 		}
 	}
 	return nil
@@ -148,6 +248,22 @@ func (l *localSetup) validate() error {
 
 func modelIDOK(m string) bool {
 	return m != "" && !strings.ContainsAny(m, ", \t\n\"'")
+}
+
+func validClaudeEffort(value string) bool {
+	switch value {
+	case "default", "low", "medium", "high", "xhigh", "max":
+		return true
+	}
+	return false
+}
+
+func validProviderEffort(value string) bool {
+	switch value {
+	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	}
+	return false
 }
 
 func readProviders(path string) (localSetup, error) {
@@ -166,6 +282,15 @@ func readProviders(path string) (localSetup, error) {
 }
 
 func writeProviders(path string, l localSetup) error {
+	l = l.clone()
+	l.Preferred = "" // priority belongs to each pool, never the model catalog
+	for i := range l.Models {
+		l.Models[i].Efforts = nil
+	}
+	l.Pools = nil
+	if l.Routes == nil {
+		l.Routes = map[string]map[string]modelRoute{}
+	}
 	data, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return err
@@ -185,7 +310,7 @@ func seedFromEnv() localSetup {
 	if u, err := url.Parse(base); err == nil && u.Hostname() != "" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
 		name = strings.SplitN(u.Hostname(), ".", 2)[0]
 	}
-	l := localSetup{Providers: []provider{{Name: name, BaseURL: base, APIKey: os.Getenv("ROUTER_LOCAL_API_KEY")}}}
+	l := localSetup{FamilyRoutes: map[string]map[string]modelRoute{}, Routes: map[string]map[string]modelRoute{}, ModelPools: map[string][]poolTarget{}, Providers: []provider{{Name: name, BaseURL: base, APIKey: os.Getenv("ROUTER_LOCAL_API_KEY")}}}
 	first := strings.TrimSpace(env("ROUTER_LOCAL_MODEL", "local-model"))
 	l.Models = append(l.Models, localModel{Provider: name, Model: first})
 	for _, m := range strings.Split(os.Getenv("ROUTER_LOCAL_MODELS"), ",") {
@@ -216,7 +341,87 @@ func loadLocalSetup(path string) localSetup {
 
 // clone copies the slices so an edit never touches the snapshot readers hold.
 func (l localSetup) clone() localSetup {
+	if l.PoolSettings != nil {
+		settings := make(map[string]poolSettings, len(l.PoolSettings))
+		for name, value := range l.PoolSettings {
+			settings[name] = value
+		}
+		l.PoolSettings = settings
+	}
 	l.Providers = append([]provider(nil), l.Providers...)
 	l.Models = append([]localModel(nil), l.Models...)
+	for i := range l.Models {
+		if l.Models[i].Efforts != nil {
+			copyMap := make(map[string]string, len(l.Models[i].Efforts))
+			for k, v := range l.Models[i].Efforts {
+				copyMap[k] = v
+			}
+			l.Models[i].Efforts = copyMap
+		}
+	}
+	if l.Pools != nil {
+		pools := make(map[string][]string, len(l.Pools))
+		for k, v := range l.Pools {
+			pools[k] = append([]string(nil), v...)
+		}
+		l.Pools = pools
+	}
+	if l.ModelPools != nil {
+		pools := make(map[string][]poolTarget, len(l.ModelPools))
+		for name, targets := range l.ModelPools {
+			pools[name] = append([]poolTarget(nil), targets...)
+		}
+		l.ModelPools = pools
+	}
+	if l.Routes != nil {
+		routes := make(map[string]map[string]modelRoute, len(l.Routes))
+		for model, efforts := range l.Routes {
+			copyEfforts := make(map[string]modelRoute, len(efforts))
+			for effort, route := range efforts {
+				copyEfforts[effort] = route
+			}
+			routes[model] = copyEfforts
+		}
+		l.Routes = routes
+	}
+	if l.FamilyRoutes != nil {
+		families := map[string]map[string]modelRoute{}
+		for family, rules := range l.FamilyRoutes {
+			copyRules := map[string]modelRoute{}
+			for effort, route := range rules {
+				copyRules[effort] = route
+			}
+			families[family] = copyRules
+		}
+		l.FamilyRoutes = families
+	}
+	l.Catalog = l.Catalog.clone()
+
 	return l
+}
+
+// Exact effort overrides win; otherwise the named model family supplies it.
+func (l localSetup) routeFor(model, effort string) modelRoute {
+	if effort == "" {
+		effort = "default"
+	}
+	if route, ok := l.Routes[model][effort]; ok {
+		return route
+	}
+	if route, ok := l.FamilyRoutes[claudeFamily(model)][effort]; ok {
+		return route
+	}
+	return modelRoute{Mode: "disabled"}
+}
+
+// Flatten only for validation/reference checks; preserve independent override maps.
+func (l localSetup) allRouteRules() map[string]map[string]modelRoute {
+	out := map[string]map[string]modelRoute{}
+	for key, rules := range l.Routes {
+		out[key] = rules
+	}
+	for key, rules := range l.FamilyRoutes {
+		out["family:"+key] = rules
+	}
+	return out
 }

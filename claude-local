@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Launch Claude Code with the `haiku` model alias routed to a local endpoint.
-# Every other alias still reaches api.anthropic.com untouched.
+# Launch Claude Code through the router; model pools are configured in the dashboard.
 set -euo pipefail
 SRC="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 DIR="${ROUTER_HOME:-$HOME/.claude/local-router}"
@@ -19,14 +18,5 @@ if ! curl -sf "http://${ROUTER_LISTEN}/healthz" >/dev/null 2>&1; then
 fi
 
 export ANTHROPIC_BASE_URL="http://${ROUTER_LISTEN}"
-# A fixed alias, not ROUTER_LOCAL_MODEL: any `local-*` id is local to the router,
-# and the router substitutes the real model name itself. That keeps the model a
-# router-side setting, switchable in the UI while this session is running.
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="local-model"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME="${LOCAL_SLOT_NAME}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL_DESCRIPTION="${LOCAL_SLOT_DESCRIPTION}"
-if [ -n "${LOCAL_CONTEXT_TOKENS:-}" ]; then
-  export CLAUDE_CODE_MAX_CONTEXT_TOKENS="${LOCAL_CONTEXT_TOKENS}"
-fi
 
 exec claude "$@"

@@ -35,7 +35,7 @@ func writeAnthropicError(w http.ResponseWriter, status int, kind, msg string) {
 // handleLocal serves one /v1/messages call from the OpenAI-compatible endpoint.
 // The caller's Anthropic credentials are deliberately not forwarded: the local
 // endpoint gets ROUTER_LOCAL_API_KEY and nothing else.
-func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte, tr *localTrace, hl *health) {
+func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte, tr *localTrace, hl *health, history ...*store) {
 	var req anthropicRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -65,7 +65,14 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	// response is skipped for the next one; once bytes have gone to the client
 	// the response belongs to that model, and a later failure only counts
 	// against its score.
-	cands := hl.pick(cfg)
+	pickCfg := cfg
+	pickCfg.failover = true
+	cands := hl.pick(pickCfg)
+	scope := affinityKey(cfg, body, req)
+	cands = hl.bindCandidates(scope, cands)
+	if !cfg.failover && len(cands) > 1 {
+		cands = cands[:1]
+	}
 	if len(cands) == 0 {
 		writeAnthropicError(w, http.StatusBadGateway, "api_error", "no local models configured; add one in the router UI")
 		return
@@ -73,7 +80,30 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	var last attemptResult
 	for i, cand := range cands {
 		oreq.Model = cand.Model
-		payload, err := json.Marshal(oreq)
+		sourceEffort := req.OutputConfig.Effort
+		if sourceEffort == "" {
+			sourceEffort = "default"
+		}
+		oreq.ReasoningEffort = cand.Efforts[sourceEffort]
+		var payload []byte
+		if cand.Provider.Type == "codex" {
+			codexInput := oreq
+			if len(history) > 0 {
+				codexInput, err = restoreCodexCalls(oreq, sessionOf(body), history[0])
+				if err != nil {
+					writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+					return
+				}
+			}
+			creq, err := toCodex(codexInput)
+			if err != nil {
+				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+				return
+			}
+			payload, err = json.Marshal(creq)
+		} else {
+			payload, err = json.Marshal(oreq)
+		}
 		if err != nil {
 			writeAnthropicError(w, http.StatusInternalServerError, "api_error", err.Error())
 			return
@@ -83,6 +113,20 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		}
 		hl.acquire(cand.Key)
 		res := tryModel(r, cfg, cand, payload, oreq.Stream)
+		var responseBody io.Reader
+		if res.err == nil && cand.Provider.Type == "codex" && !oreq.Stream {
+			var result codexResult
+			result, err = readCodexEvents(res.resp.Body)
+			res.resp.Body.Close()
+			res.cancel()
+			if err != nil {
+				res.err, res.retryable = err, true
+			}
+			responseBody = bytes.NewReader(codexAsChatResponse(result))
+		} else if res.err == nil {
+			responseBody = res.resp.Body
+		}
+
 		if tr != nil {
 			tr.Attempts = append(tr.Attempts, attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
 		}
@@ -98,6 +142,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			}
 			log.Printf("local model %s failed (%v), trying %s", cand.Key, res.err, cands[i+1].Key)
 			hl.noteFailover(cand.Key, cands[i+1].Key)
+			hl.moveSession(scope, cand.Key, cands[i+1])
 			continue
 		}
 		if tr != nil {
@@ -105,15 +150,18 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		}
 		var werr error
 		if oreq.Stream {
-			werr = streamResponse(w, res.resp.Body, req.Model)
+			werr = streamResponse(w, responseBody, req.Model)
 		} else {
-			werr = blockingResponse(w, res.resp.Body, req.Model)
+			werr = blockingResponse(w, responseBody, req.Model)
 		}
 		res.resp.Body.Close()
 		res.cancel()
 		hl.release(cand.Key)
 		if werr != nil {
 			hl.record(cand.Key, false, 0, werr.Error())
+			if cfg.failover && i+1 < len(cands) {
+				hl.moveSession(scope, cand.Key, cands[i+1])
+			}
 			if tr != nil {
 				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
 			}
@@ -148,19 +196,27 @@ func (a attemptResult) errMsg() string {
 	return a.err.Error()
 }
 
-// tryModel sends one request and waits for the response headers, at most
+// tryModel waits for the first usable response event (not just headers), at most
 // cfg.firstByte. On success the caller owns resp.Body and must call cancel.
 func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, stream bool) attemptResult {
 	model := cand.Key
 	ctx, cancel := context.WithCancel(r.Context())
-	up, err := http.NewRequestWithContext(ctx, "POST",
-		cand.Provider.BaseURL+"/chat/completions", bytes.NewReader(payload))
+	endpoint := cand.Provider.BaseURL + "/chat/completions"
+	if cand.Provider.Type == "codex" {
+		endpoint = codexBaseURL + "/responses"
+	}
+	up, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(payload))
 	if err != nil {
 		cancel()
 		return attemptResult{err: err}
 	}
 	up.Header.Set("Content-Type", "application/json")
-	if cand.Provider.APIKey != "" {
+	if cand.Provider.Type == "codex" {
+		if err := codexAuth.authorize(ctx, up); err != nil {
+			cancel()
+			return attemptResult{err: err}
+		}
+	} else if cand.Provider.APIKey != "" {
 		up.Header.Set("Authorization", "Bearer "+cand.Provider.APIKey)
 	}
 	if stream {
@@ -171,11 +227,18 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	var timer *time.Timer
 	if cfg.firstByte > 0 {
 		timer = time.AfterFunc(cfg.firstByte, func() { slow.Store(true); cancel() })
+		defer timer.Stop()
 	}
 	t0 := time.Now()
-	resp, err := http.DefaultClient.Do(up)
-	if timer != nil {
-		timer.Stop()
+	client := http.DefaultClient
+	if cand.Provider.Type == "codex" {
+		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	}
+	var resp *http.Response
+	if cand.Provider.Type == "codex" {
+		resp, err = codexAuth.doWithReauth(client, up)
+	} else {
+		resp, err = client.Do(up)
 	}
 	ttfb := time.Since(t0)
 	if err != nil {
@@ -186,13 +249,24 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		if slow.Load() {
 			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
 		}
+		if errors.Is(err, errCodexSignIn) {
+			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb}
+		}
 		return attemptResult{err: err, ttfb: ttfb, retryable: true}
 	}
 	if resp.StatusCode >= 400 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		cancel()
-		log.Printf("local endpoint %d (%s): %s", resp.StatusCode, model, detail)
+		if cand.Provider.Type != "codex" {
+			log.Printf("local endpoint %d (%s): %s", resp.StatusCode, model, detail)
+		}
+		if cand.Provider.Type == "codex" {
+			detail = []byte("Codex request failed")
+			if resp.StatusCode == http.StatusUnauthorized {
+				detail = []byte(errCodexSignIn.Error())
+			}
+		}
 		res := attemptResult{
 			ttfb: ttfb, status: resp.StatusCode, detail: string(detail),
 			err: fmt.Errorf("%s: HTTP %d: %s", model, resp.StatusCode, shortDetail(detail)),
@@ -205,7 +279,36 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		}
 		return res
 	}
-	return attemptResult{resp: resp, cancel: cancel, ttfb: ttfb}
+	original := resp.Body
+	var body io.ReadCloser = original
+	if stream && cand.Provider.Type == "codex" {
+		body = codexChatStream(original)
+	}
+	var ready io.Reader
+	if stream {
+		ready, err = firstChatEvent(body)
+	} else {
+		reader := bufio.NewReader(body)
+		_, err = reader.Peek(1)
+		ready = reader
+	}
+	if timer != nil && !timer.Stop() {
+		err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+	}
+	if err != nil {
+		body.Close()
+		original.Close()
+		cancel()
+		if r.Context().Err() != nil {
+			return attemptResult{err: err, clientGone: true}
+		}
+		if slow.Load() {
+			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+		}
+		return attemptResult{err: err, ttfb: time.Since(t0), retryable: true}
+	}
+	resp.Body = &responseReader{Reader: ready, close: func() error { body.Close(); return original.Close() }}
+	return attemptResult{resp: resp, cancel: cancel, ttfb: time.Since(t0)}
 }
 
 func shortDetail(b []byte) string {
@@ -363,6 +466,7 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 
 	inTokens, outTokens := 0, 0
 	finish := "stop"
+	completed := false
 
 	s.event("message_start", map[string]any{
 		"type": "message_start",
@@ -375,7 +479,7 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	})
 
 	nextIndex := 0
-	var reasoning strings.Builder
+	thinkingOpen := false
 	openIndex := -1
 	textOpen := false
 	// toolBlock maps an OpenAI tool_call index to the Anthropic block index we
@@ -389,6 +493,7 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 			})
 			openIndex = -1
 			textOpen = false
+			thinkingOpen = false
 		}
 	}
 
@@ -401,7 +506,11 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 			continue
 		}
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
+		if data == "[DONE]" {
+			completed = true
+			break
+		}
+		if data == "" {
 			continue
 		}
 
@@ -418,10 +527,18 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 		}
 		choice := chunk.Choices[0]
 		if choice.Delta.ReasoningContent != "" {
-			reasoning.WriteString(choice.Delta.ReasoningContent)
+			if !thinkingOpen {
+				closeOpen()
+				openIndex = nextIndex
+				nextIndex++
+				thinkingOpen = true
+				s.event("content_block_start", map[string]any{"type": "content_block_start", "index": openIndex, "content_block": map[string]any{"type": "thinking", "thinking": ""}})
+			}
+			s.event("content_block_delta", map[string]any{"type": "content_block_delta", "index": openIndex, "delta": map[string]any{"type": "thinking_delta", "thinking": choice.Delta.ReasoningContent}})
 		}
 		if choice.FinishReason != "" {
 			finish = choice.FinishReason
+			completed = true
 		}
 
 		if choice.Delta.Content != "" {
@@ -478,15 +595,16 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	readErr := scanner.Err()
 	if readErr != nil {
 		log.Printf("stream read: %v", readErr)
+		return fmt.Errorf("stream read: %w", readErr)
 	}
 
-	// Ни одного блока за весь поток — тот же случай, что и выше: всё ушло в
-	// reasoning_content. Отдаём его текстом, иначе клиент увидит пустой ответ.
+	if !completed {
+		return io.ErrUnexpectedEOF
+	}
+
+	// An empty completion still needs a content block for the client.
 	if nextIndex == 0 {
-		text := reasoning.String()
-		if text == "" {
-			text = fmt.Sprintf("(локальная модель не вернула содержимого; finish_reason=%q)", finish)
-		}
+		text := fmt.Sprintf("(модель не вернула содержимого; finish_reason=%q)", finish)
 		openIndex = 0
 		nextIndex = 1
 		textOpen = true
@@ -509,8 +627,5 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 		"usage": map[string]int{"input_tokens": inTokens, "output_tokens": outTokens},
 	})
 	s.event("message_stop", map[string]any{"type": "message_stop"})
-	if readErr != nil {
-		return fmt.Errorf("stream read: %w", readErr)
-	}
 	return nil
 }

@@ -1,35 +1,35 @@
 package main
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
-// The routing decision now decides whether a prompt leaves the machine, so it
-// is worth a test of its own.
-func TestIsLocal(t *testing.T) {
-	base := config{local: oneProvider("http://h/v1", "local-model")}
-	cloudOnly := config{local: oneProvider("http://h/v1", "local-model"), cloudOnly: []string{"claude-opus-5"}}
-
-	cases := []struct {
-		cfg   config
-		model string
-		want  bool
-	}{
-		{base, "local-model", true},
-		{base, "local-fable", true},
-		{base, "claude-sonnet-5", false},
-		{base, "claude-opus-5", false},
-		{base, "", false},
-
-		{cloudOnly, "claude-opus-5", false},
-		{cloudOnly, "claude-opus-5-20260501", false},
-		{cloudOnly, "claude-sonnet-5", true},
-		{cloudOnly, "claude-haiku-4-5-20251001", true},
-		{cloudOnly, "claude-opus-4-5-20251101", true},
-		{cloudOnly, "local-model", true},
-		{cloudOnly, "", false},
+func TestExplicitModelEffortRoutes(t *testing.T) {
+	l := oneProvider("http://h/v1", "a")
+	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/a", Effort: "high"}}, "empty": {}}
+	l.Routes = map[string]map[string]modelRoute{
+		"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}, "low": {Mode: "anthropic"}, "max": {Mode: "pool", Pool: "empty"}},
 	}
-	for _, c := range cases {
-		if got := c.cfg.isLocal(c.model); got != c.want {
-			t.Errorf("isLocal(%q) with cloudOnly=%v = %v, want %v", c.model, c.cfg.cloudOnly, got, c.want)
+	cfg := config{local: l}
+	for _, tc := range []struct {
+		model, effort, mode string
+		rejected            bool
+	}{
+		{"claude-opus-5", "high", "pool", false},
+		{"claude-opus-5", "low", "anthropic", false},
+		{"claude-opus-5", "max", "pool", true},
+		{"claude-opus-5", "", "disabled", true},
+		{"claude-opus-5", "ultra", "disabled", true},
+		{"claude-sonnet-5", "high", "disabled", true},
+		{"claude-opus-5-other", "high", "disabled", true},
+		{"local-model", "high", "disabled", true},
+		{"p/a", "high", "disabled", true},
+	} {
+		body := []byte(fmt.Sprintf(`{"model":%q,"output_config":{"effort":%q}}`, tc.model, tc.effort))
+		_, route, err := configuredRequestRoute(cfg, body)
+		if route.Mode != tc.mode || (err != nil) != tc.rejected {
+			t.Errorf("%s/%s: route=%+v err=%v", tc.model, tc.effort, route, err)
 		}
 	}
 }

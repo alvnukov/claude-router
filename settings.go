@@ -14,14 +14,9 @@ import (
 // configStore holds the live config behind a lock so the UI can change it while
 // requests are in flight. Every request handler takes a snapshot with get().
 //
-// Two files back it: env for the router settings (routing rule, budget,
+// Two files back it: env for the router settings (budget,
 // failover) and providers.json for local providers and models. Both are
 // rewritten in place by the UI and re-read on a hand edit.
-//
-// A model id that was ever a configured local model stays local for the life
-// of the process: a Claude Code session launched before the change keeps
-// sending the old id, and routing that to Anthropic by surprise is the one
-// thing the router exists to prevent.
 type configStore struct {
 	mu        sync.RWMutex
 	c         config
@@ -95,8 +90,8 @@ func (s *configStore) watch(every time.Duration) {
 					log.Printf("env reload: %v", err)
 				} else if changed {
 					c := s.get()
-					log.Printf("env reloaded: failover=%v first-byte=%s balance=%d probe=%s budget=%d cloud-only=%s",
-						c.failover, c.firstByte, c.balance, c.probeEvery, c.maxInputChars, strings.Join(c.cloudOnly, ","))
+					log.Printf("env reloaded: failover=%v first-byte=%s balance=%d probe=%s budget=%d",
+						c.failover, c.firstByte, c.balance, c.probeEvery, c.maxInputChars)
 				}
 			}
 			if s.provPath == "" {
@@ -137,7 +132,6 @@ func (s *configStore) reloadEnv() (bool, error) {
 	before := s.get()
 	in := inputFromConfig(before)
 	in.MaxInputChars = pick(vals, "ROUTER_LOCAL_MAX_INPUT_CHARS", in.MaxInputChars)
-	in.CloudOnly = strings.Split(pick(vals, "ROUTER_CLOUD_ONLY", strings.Join(in.CloudOnly, ",")), ",")
 	in.Failover = pick(vals, "ROUTER_LOCAL_FAILOVER", in.Failover)
 	in.FirstByte = pick(vals, "ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", in.FirstByte)
 	in.Balance = pick(vals, "ROUTER_LOCAL_BALANCE", in.Balance)
@@ -147,7 +141,6 @@ func (s *configStore) reloadEnv() (bool, error) {
 	}
 	after := s.get()
 	return before.maxInputChars != after.maxInputChars ||
-		strings.Join(before.cloudOnly, ",") != strings.Join(after.cloudOnly, ",") ||
 		before.failover != after.failover || before.firstByte != after.firstByte ||
 		before.balance != after.balance || before.probeEvery != after.probeEvery, nil
 }
@@ -155,7 +148,6 @@ func (s *configStore) reloadEnv() (bool, error) {
 // settingsInput is the env-backed part of the settings, as strings from a form.
 type settingsInput struct {
 	MaxInputChars string
-	CloudOnly     []string
 	Failover      string // "1" / "0"
 	FirstByte     string // seconds
 	Balance       string // models to spread over
@@ -169,7 +161,6 @@ func inputFromConfig(c config) settingsInput {
 	}
 	return settingsInput{
 		MaxInputChars: strconv.Itoa(c.maxInputChars),
-		CloudOnly:     append([]string(nil), c.cloudOnly...),
 		Failover:      fo,
 		FirstByte:     strconv.Itoa(int(c.firstByte / time.Second)),
 		Balance:       strconv.Itoa(c.balance),
@@ -198,25 +189,11 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 	}
 	fo := strings.TrimSpace(in.Failover)
 	failover := fo != "0" && fo != ""
-	seen := map[string]bool{}
-	var cloud []string
-	for _, e := range in.CloudOnly {
-		e = strings.TrimSpace(e)
-		if e == "" || seen[e] {
-			continue
-		}
-		if strings.ContainsAny(e, ", \t\n\"'") {
-			return fmt.Errorf("cloud-only entry %q: без пробелов, запятых и кавычек", e)
-		}
-		seen[e] = true
-		cloud = append(cloud, e)
-	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.c
 	next.maxInputChars = budget
-	next.cloudOnly = cloud
 	next.failover = failover
 	next.firstByte = time.Duration(firstByte) * time.Second
 	next.balance = balance
@@ -228,7 +205,6 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 		}
 		updates := map[string]string{
 			"ROUTER_LOCAL_MAX_INPUT_CHARS":    strconv.Itoa(budget),
-			"ROUTER_CLOUD_ONLY":               strings.Join(cloud, ","),
 			"ROUTER_LOCAL_FAILOVER":           foS,
 			"ROUTER_LOCAL_FIRST_BYTE_TIMEOUT": strconv.Itoa(firstByte),
 			"ROUTER_LOCAL_BALANCE":            strconv.Itoa(balance),
@@ -244,8 +220,7 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 }
 
 // applyLocal validates and installs a providers/models setup; with write set
-// it also rewrites providers.json. Model ids that drop out of the setup are
-// kept in extraLocal so a running session is never rerouted to the cloud.
+// it also rewrites providers.json.
 func (s *configStore) applyLocal(l localSetup, write bool) error {
 	if err := l.validate(); err != nil {
 		return err
@@ -253,10 +228,11 @@ func (s *configStore) applyLocal(l localSetup, write bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.c
-	for _, m := range next.local.Models {
-		next.extraLocal = appendUnique(next.extraLocal, m.Model)
-	}
 	next.local = l
+	if migrated, changed := migratePoolSettings(next); changed {
+		l = migrated
+		next.local = l
+	}
 	if write {
 		if s.provPath == "" {
 			return fmt.Errorf("providers file disabled (ROUTER_PROVIDERS_FILE пуст)")
