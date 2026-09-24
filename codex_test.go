@@ -16,7 +16,9 @@ import (
 	"time"
 )
 
-func TestCodexRequestPreservesOutputLimit(t *testing.T) {
+// The ChatGPT subscription endpoint rejects max_output_tokens with HTTP 400;
+// every request that carried it failed in production.
+func TestCodexRequestOmitsOutputLimit(t *testing.T) {
 	out, err := toCodex(openaiRequest{Model: "gpt-test", MaxTokens: 32, Messages: []openaiMsg{{Role: "user", Content: "hello"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -29,8 +31,8 @@ func TestCodexRequestPreservesOutputLimit(t *testing.T) {
 	if err := json.Unmarshal(body, &request); err != nil {
 		t.Fatal(err)
 	}
-	if request["max_output_tokens"] != float64(32) {
-		t.Fatalf("Codex request lost caller's output limit: %s", body)
+	if _, ok := request["max_output_tokens"]; ok {
+		t.Fatalf("Codex request carries max_output_tokens, which the endpoint rejects: %s", body)
 	}
 }
 

@@ -11,16 +11,15 @@ import (
 )
 
 type codexRequest struct {
-	Model           string           `json:"model"`
-	Instructions    string           `json:"instructions,omitempty"`
-	Input           []any            `json:"input"`
-	Tools           []map[string]any `json:"tools,omitempty"`
-	ToolChoice      any              `json:"tool_choice,omitempty"`
-	Store           bool             `json:"store"`
-	Stream          bool             `json:"stream"`
-	Include         []string         `json:"include"`
-	MaxOutputTokens int              `json:"max_output_tokens,omitempty"`
-	Reasoning       *struct {
+	Model        string           `json:"model"`
+	Instructions string           `json:"instructions,omitempty"`
+	Input        []any            `json:"input"`
+	Tools        []map[string]any `json:"tools,omitempty"`
+	ToolChoice   any              `json:"tool_choice,omitempty"`
+	Store        bool             `json:"store"`
+	Stream       bool             `json:"stream"`
+	Include      []string         `json:"include"`
+	Reasoning    *struct {
 		Effort string `json:"effort"`
 	} `json:"reasoning,omitempty"`
 	Temperature *float64 `json:"temperature,omitempty"`
@@ -31,9 +30,8 @@ type codexRequest struct {
 // round trip so Claude Code can send their outputs on the following turn.
 func toCodex(req openaiRequest) (codexRequest, error) {
 	out := codexRequest{Model: req.Model, Store: false, Stream: true,
-		Include:         []string{"reasoning.encrypted_content"},
-		MaxOutputTokens: req.MaxTokens,
-		Temperature:     req.Temperature, TopP: req.TopP,
+		Include:     []string{"reasoning.encrypted_content"},
+		Temperature: req.Temperature, TopP: req.TopP,
 		Input: make([]any, 0, len(req.Messages))}
 	if req.ReasoningEffort != "" {
 		out.Reasoning = &struct {
