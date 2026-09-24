@@ -54,7 +54,7 @@ func loadEnvFile() {
 		return
 	}
 	for k, v := range vals {
-		if os.Getenv("ROUTER_SLOT") != "" && (k == "ROUTER_LISTEN" || k == "ROUTER_UI_LISTEN" || k == "ROUTER_STANDBY" || k == "ROUTER_SLOT") {
+		if os.Getenv("ROUTER_SLOT") != "" && (k == "ROUTER_LISTEN" || k == "ROUTER_UI_LISTEN" || k == "ROUTER_STANDBY" || k == "ROUTER_SLOT" || k == "ROUTER_ACTIVE_SLOT_FILE") {
 			continue
 		}
 		os.Setenv(k, v)

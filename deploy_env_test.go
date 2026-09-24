@@ -8,10 +8,10 @@ import (
 
 func TestLaunchdSlotAddressesOverrideLegacyEnvFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "env")
-	if err := os.WriteFile(path, []byte("ROUTER_LISTEN=127.0.0.1:8787\nROUTER_UI_LISTEN=127.0.0.1:8788\nROUTER_STANDBY=0\n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte("ROUTER_LISTEN=127.0.0.1:8787\nROUTER_UI_LISTEN=127.0.0.1:8788\nROUTER_STANDBY=0\nROUTER_ACTIVE_SLOT_FILE=/elsewhere/active-slot\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"ROUTER_LISTEN", "ROUTER_UI_LISTEN", "ROUTER_STANDBY", "ROUTER_SLOT", "ROUTER_ENV_FILE"} {
+	for _, key := range []string{"ROUTER_LISTEN", "ROUTER_UI_LISTEN", "ROUTER_STANDBY", "ROUTER_SLOT", "ROUTER_ENV_FILE", "ROUTER_ACTIVE_SLOT_FILE"} {
 		original, set := os.LookupEnv(key)
 		t.Cleanup(func() {
 			if set {
@@ -26,8 +26,12 @@ func TestLaunchdSlotAddressesOverrideLegacyEnvFile(t *testing.T) {
 	os.Setenv("ROUTER_LISTEN", "127.0.0.1:8792")
 	os.Setenv("ROUTER_UI_LISTEN", "127.0.0.1:8794")
 	os.Setenv("ROUTER_STANDBY", "1")
+	os.Setenv("ROUTER_ACTIVE_SLOT_FILE", "/slot/active-slot")
 	loadEnvFile()
 	if os.Getenv("ROUTER_LISTEN") != "127.0.0.1:8792" || os.Getenv("ROUTER_UI_LISTEN") != "127.0.0.1:8794" || os.Getenv("ROUTER_STANDBY") != "1" {
 		t.Fatalf("legacy env took slot ports or standby mode: %s %s %s", os.Getenv("ROUTER_LISTEN"), os.Getenv("ROUTER_UI_LISTEN"), os.Getenv("ROUTER_STANDBY"))
+	}
+	if os.Getenv("ROUTER_ACTIVE_SLOT_FILE") != "/slot/active-slot" {
+		t.Fatalf("legacy env replaced the active-slot marker: %s", os.Getenv("ROUTER_ACTIVE_SLOT_FILE"))
 	}
 }

@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -85,7 +86,7 @@ func loadConfigChecked() (config, error) {
 	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
-	if os.Getenv("ROUTER_STANDBY") == "1" {
+	if routerStartsStandby() {
 		return c, nil // standby reads config but never runs a migration that writes it
 	}
 	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
@@ -281,10 +282,16 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "deploy" {
+		if err := runDeploy(context.Background(), os.Args[2:], os.Stdout, newDeployOps); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	loadEnvFile()
 	codexAuth = newCodexAuthStore()
 	cfg := loadConfig()
-	life := newLifecycle(os.Getenv("ROUTER_STANDBY") == "1")
+	life := newLifecycle(routerStartsStandby())
 	server := newRouterServer(cfg, life, statePath())
 	if life.mode() != modeStandby {
 		if err := server.cs.ensureProfiles(); err != nil {

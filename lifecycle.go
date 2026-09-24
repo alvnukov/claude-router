@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -23,6 +24,22 @@ type lifecycle struct {
 	state    lifecycleMode
 	pending  int
 	inflight sync.WaitGroup
+}
+
+// routerStartsStandby decides the start mode. A blue/green slot is active only
+// when the active-slot marker names it, so launchd restarting the serving slot
+// brings it back active while a freshly loaded candidate waits in standby.
+func routerStartsStandby() bool {
+	if os.Getenv("ROUTER_STANDBY") == "1" {
+		return true
+	}
+	slot := os.Getenv("ROUTER_SLOT")
+	marker := os.Getenv("ROUTER_ACTIVE_SLOT_FILE")
+	if slot == "" || marker == "" {
+		return false
+	}
+	data, err := os.ReadFile(marker)
+	return err != nil || strings.TrimSpace(string(data)) != slot
 }
 
 func newLifecycle(standby bool) *lifecycle {
@@ -114,7 +131,8 @@ func (l *lifecycle) healthz(w http.ResponseWriter, r *http.Request) {
 	}
 	json.NewEncoder(w).Encode(struct {
 		PID     int           `json:"pid"`
+		Slot    string        `json:"slot"`
 		Mode    lifecycleMode `json:"mode"`
 		Pending int           `json:"pending"`
-	}{os.Getpid(), state, pending})
+	}{os.Getpid(), os.Getenv("ROUTER_SLOT"), state, pending})
 }

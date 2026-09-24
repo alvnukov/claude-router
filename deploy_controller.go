@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
-	"strings"
+	"syscall"
+	"testing"
 	"time"
 )
 
@@ -18,18 +18,17 @@ type deployConfig struct {
 	GreenAPI, GreenUI   string
 }
 
-func (c deployConfig) validate(test bool) error {
+// validate accepts distinct loopback host:port addresses. A test binary may
+// never name a live router port, whoever built the config.
+func (c deployConfig) validate() error {
 	addresses := []string{c.PublicAPI, c.PublicUI, c.BlueAPI, c.BlueUI, c.GreenAPI, c.GreenUI}
 	seen := make(map[string]bool)
 	for _, address := range addresses {
-		if strings.HasPrefix(address, "http://") {
-			address = strings.TrimPrefix(address, "http://")
-		}
 		host, port, err := net.SplitHostPort(address)
 		if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() || port == "0" || seen[address] {
 			return fmt.Errorf("invalid or duplicate loopback address %q", address)
 		}
-		if test {
+		if testing.Testing() {
 			switch port {
 			case "8787", "8788", "8791", "8792", "8793", "8794":
 				return fmt.Errorf("reserved live port %s cannot be used in tests", port)
@@ -41,6 +40,7 @@ func (c deployConfig) validate(test bool) error {
 }
 
 type deploySlotState struct {
+	Slot    string        `json:"slot"`
 	Mode    lifecycleMode `json:"mode"`
 	PID     int           `json:"pid"`
 	Pending int           `json:"pending"`
@@ -63,14 +63,12 @@ type deployController struct {
 	client *http.Client
 }
 
-func (d *deployController) validate(test bool) error { return d.config.validate(test) }
-
 func (d *deployController) ready(ctx context.Context, slot string, pid int) error {
 	client := d.client
 	if client == nil {
 		client = &http.Client{Timeout: 3 * time.Second}
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(d.config.PublicAPI, "/")+"/healthz", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+d.config.PublicAPI+"/healthz", nil)
 	if err != nil {
 		return err
 	}
@@ -97,7 +95,7 @@ func (d *deployController) ready(ctx context.Context, slot string, pid int) erro
 }
 
 func (d *deployController) deploy(ctx context.Context, digest string, force bool) (err error) {
-	if err := d.validate(false); err != nil {
+	if err := d.config.validate(); err != nil {
 		return err
 	}
 	old, err := d.ops.current(ctx)
@@ -115,18 +113,13 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 	if err != nil || current.Mode != modeActive {
 		return fmt.Errorf("old slot is not active: %w", err)
 	}
-	other, stateErr := d.ops.state(ctx, newSlot)
+	// Whatever an interrupted deploy left on the other slot goes first: a
+	// draining old slot finishes its requests, a stale candidate is unloaded.
+	if err = d.retire(ctx, newSlot); err != nil {
+		return err
+	}
 	if current.Digest == digest && !force {
-		if stateErr == nil && other.Mode == modeDraining && other.PID != 0 {
-			if err = d.waitDrain(ctx, newSlot); err != nil {
-				return err
-			}
-			if err = d.ops.stop(ctx, newSlot); err != nil {
-				return err
-			}
-			return d.ops.save(ctx, old)
-		}
-		return nil
+		return d.ops.save(ctx, old)
 	}
 	started, quiesced, flipped := false, false, false
 	defer func() {
@@ -170,6 +163,12 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 	if stateErr != nil || active.Mode != modeActive || active.PID != standby.PID {
 		return fmt.Errorf("new slot did not activate: %v", stateErr)
 	}
+	// Until the flip the marker names the old slot, so a launchd restart of
+	// it comes back active; switching then would leave two writers.
+	prior, stateErr := d.ops.state(ctx, old)
+	if stateErr != nil || prior.PID != current.PID || prior.Mode != modeQuiesced {
+		return fmt.Errorf("old slot changed before the switch (pid %d mode %s): %v", prior.PID, prior.Mode, stateErr)
+	}
 	if err = d.ops.flip(ctx, newSlot); err != nil {
 		return err
 	}
@@ -191,13 +190,39 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 	return d.ops.save(ctx, newSlot)
 }
 
+// retire drains and unloads a slot that Caddy no longer routes to. Standby
+// holds no requests; a slot nothing answers for may still have a launchd
+// label, and unloading a label that is not there is fine.
+func (d *deployController) retire(ctx context.Context, slot string) error {
+	state, err := d.ops.state(ctx, slot)
+	if err != nil || state.PID == 0 {
+		d.ops.stop(ctx, slot)
+		return nil
+	}
+	if state.Mode == modeActive || state.Mode == modeQuiesced {
+		if err := d.ops.admin(ctx, slot, "drain"); err != nil {
+			return err
+		}
+	}
+	if err := d.waitDrain(ctx, slot); err != nil {
+		return err
+	}
+	return d.ops.stop(ctx, slot)
+}
+
+// waitDrain returns once the slot has no request in flight. A slot launchd
+// restarted comes back standby or not listening yet; either way the process
+// that held the requests is gone.
 func (d *deployController) waitDrain(ctx context.Context, slot string) error {
 	for {
 		state, err := d.ops.state(ctx, slot)
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		if state.Mode == modeDraining && state.Pending == 0 {
+		if state.Mode == modeStandby || state.Mode == modeDraining && state.Pending == 0 {
 			return nil
 		}
 		select {
@@ -206,19 +231,4 @@ func (d *deployController) waitDrain(ctx context.Context, slot string) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-}
-
-func parseLoopbackAddress(address string) (string, error) {
-	if strings.Contains(address, "://") {
-		u, err := url.Parse(address)
-		if err != nil {
-			return "", err
-		}
-		address = u.Host
-	}
-	ip, _, err := net.SplitHostPort(address)
-	if err != nil || net.ParseIP(ip) == nil || !net.ParseIP(ip).IsLoopback() {
-		return "", fmt.Errorf("not a loopback address: %s", address)
-	}
-	return address, nil
 }

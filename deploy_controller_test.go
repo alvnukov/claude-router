@@ -7,9 +7,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 )
 
 type deployFixture struct {
@@ -18,6 +21,7 @@ type deployFixture struct {
 	slots      map[string]*deploySlotState
 	calls      []string
 	fail       string
+	onState    func(slot string, s *deploySlotState) error // simulates launchd restarts
 	controller *deployController
 	api        *httptest.Server
 }
@@ -50,7 +54,7 @@ func newDeployFixture(t *testing.T) *deployFixture {
 		defer l.Close()
 		return l.Addr().String()
 	}
-	cfg := deployConfig{PublicAPI: f.api.URL, PublicUI: port(), BlueAPI: port(), BlueUI: port(), GreenAPI: port(), GreenUI: port()}
+	cfg := deployConfig{PublicAPI: f.api.Listener.Addr().String(), PublicUI: port(), BlueAPI: port(), BlueUI: port(), GreenAPI: port(), GreenUI: port()}
 	f.controller = &deployController{config: cfg, ops: f}
 	return f
 }
@@ -65,6 +69,11 @@ func (f *deployFixture) state(_ context.Context, slot string) (deploySlotState, 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "state:"+slot)
+	if f.onState != nil {
+		if err := f.onState(slot, f.slots[slot]); err != nil {
+			return deploySlotState{}, err
+		}
+	}
 	return *f.slots[slot], nil
 }
 func (f *deployFixture) start(_ context.Context, slot, digest string) error {
@@ -212,12 +221,96 @@ func TestDeployDoesNotStopNewSlotAfterDrainFailure(t *testing.T) {
 	}
 }
 
+func TestDeployTreatsOldSlotRestartedDuringDrainAsDrained(t *testing.T) {
+	restarts := map[string]func(*deploySlotState) error{
+		// The marker already names green, so launchd brings blue back standby.
+		"standby": func(s *deploySlotState) error {
+			*s = deploySlotState{Mode: modeStandby, PID: 44, Digest: s.Digest}
+			return nil
+		},
+		"refused": func(*deploySlotState) error {
+			return &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+		},
+	}
+	for name, restart := range restarts {
+		t.Run(name, func(t *testing.T) {
+			f := newDeployFixture(t)
+			f.onState = func(slot string, s *deploySlotState) error {
+				if slot == "blue" && s.Mode == modeDraining {
+					s.Pending = 3
+					return restart(s)
+				}
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			if err := f.controller.deploy(ctx, "new", false); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(f.calls, ","); !strings.Contains(got, "stop:blue") || !strings.HasSuffix(got, "save:green") {
+				t.Fatalf("restarted old slot was not retired: %s", got)
+			}
+		})
+	}
+}
+
+func TestDeployAbortsWhenOldSlotRestartsBeforeFlip(t *testing.T) {
+	f := newDeployFixture(t)
+	f.onState = func(slot string, s *deploySlotState) error {
+		if slot == "blue" && s.Mode == modeQuiesced && f.slots["green"].Mode == modeActive {
+			// The marker still names blue, so the restart comes back active.
+			*s = deploySlotState{Mode: modeActive, PID: 44, Digest: s.Digest}
+		}
+		return nil
+	}
+	if err := f.controller.deploy(t.Context(), "new", false); err == nil {
+		t.Fatal("switched while the restarted old slot was writing")
+	}
+	if got := strings.Join(f.calls, ","); strings.Contains(got, "flip:green") || f.active != "blue" || f.slots["green"].PID != 0 || f.slots["blue"].Mode != modeActive {
+		t.Fatalf("two writers left behind: active=%s slots=%+v calls=%s", f.active, f.slots, got)
+	}
+}
+
+func TestDeployRetiresLeftoverCandidateBeforeStart(t *testing.T) {
+	for _, mode := range []lifecycleMode{modeStandby, modeDraining, modeActive} {
+		t.Run(string(mode), func(t *testing.T) {
+			f := newDeployFixture(t)
+			f.slots["green"] = &deploySlotState{Mode: mode, PID: 40, Pending: 2, Digest: "stale"}
+			polls := 0
+			f.onState = func(slot string, s *deploySlotState) error {
+				if slot == "green" && s.Mode == modeDraining {
+					if polls++; polls > 2 {
+						s.Pending = 0
+					}
+				}
+				return nil
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			if err := f.controller.deploy(ctx, "new", false); err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(f.calls, ",")
+			stop, start := strings.Index(got, "stop:green"), strings.Index(got, "start:green")
+			if stop < 0 || start < stop {
+				t.Fatalf("leftover green not stopped before start: %s", got)
+			}
+			if mode != modeStandby && polls < 3 {
+				t.Fatalf("leftover green stopped with requests in flight: %s", got)
+			}
+		})
+	}
+}
+
 func TestDeployRejectsReservedPortsInTests(t *testing.T) {
 	for _, port := range []string{"8787", "8788", "8791", "8792", "8793", "8794"} {
 		f := newDeployFixture(t)
 		f.controller.config.GreenAPI = "127.0.0.1:" + port
-		if err := f.controller.validate(true); err == nil {
+		if err := f.controller.deploy(t.Context(), "new", false); err == nil {
 			t.Fatalf("test accepted reserved port %s", port)
+		}
+		if len(f.calls) != 0 {
+			t.Fatalf("touched slots before refusing port %s: %v", port, f.calls)
 		}
 	}
 }

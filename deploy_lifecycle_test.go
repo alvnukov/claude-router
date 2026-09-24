@@ -8,6 +8,7 @@ import (
 )
 
 func TestAdminDrainReportsPendingUntilStreamFinishes(t *testing.T) {
+	t.Setenv("ROUTER_SLOT", "green")
 	life := newLifecycle(false)
 	admin := newRuntimeAdmin(life, newHealth(""), "")
 	entered, release := make(chan struct{}), make(chan struct{})
@@ -30,10 +31,14 @@ func TestAdminDrainReportsPendingUntilStreamFinishes(t *testing.T) {
 	w = httptest.NewRecorder()
 	life.healthz(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	var state struct {
-		Pending int `json:"pending"`
+		Pending int    `json:"pending"`
+		Slot    string `json:"slot"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &state); err != nil || state.Pending != 1 {
 		t.Fatalf("draining pending = %d, err %v", state.Pending, err)
+	}
+	if state.Slot != "green" {
+		t.Fatalf("health omitted slot: %+v", state)
 	}
 	close(release)
 	<-finished

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manage the local-router: start|stop|restart|status|logs|build|install|uninstall
+# Manage the local-router: start|stop|restart|status|logs|build|deploy|install|uninstall
 #
 # Once installed as a launchd agent, launchd owns the process. Every command
 # below then delegates to launchctl, because a plain kill would only be undone
@@ -116,6 +116,12 @@ case "${1:-status}" in
       stop; sleep 0.5; start
     fi ;;
   build)     build; echo "built" ;;
+  deploy)
+    # Build a candidate and let it switch the blue/green slots behind Caddy.
+    shift
+    mkdir -p "$DIR"
+    (cd "$SRC" && go build -o "$DIR/localrouter.candidate" .)
+    "$DIR/localrouter.candidate" deploy -home "$DIR" -binary "$DIR/localrouter.candidate" "$@" ;;
   install)   install_agent ;;
   uninstall) uninstall_agent ;;
   status)
@@ -126,5 +132,5 @@ case "${1:-status}" in
     fi
     alive && echo "running on ${ADDR}" || echo "not running" ;;
   logs)      tail -f "$LOG" ;;
-  *) echo "usage: router {start|stop|restart|status|logs|build|install|uninstall}" >&2; exit 2 ;;
+  *) echo "usage: router {start|stop|restart|status|logs|build|deploy [-force]|install|uninstall}" >&2; exit 2 ;;
 esac
