@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -51,6 +52,9 @@ func loadEnvFile() {
 		return
 	}
 	for k, v := range vals {
+		if os.Getenv("ROUTER_SLOT") != "" && (k == "ROUTER_LISTEN" || k == "ROUTER_UI_LISTEN" || k == "ROUTER_STANDBY" || k == "ROUTER_SLOT") {
+			continue
+		}
 		os.Setenv(k, v)
 	}
 	log.Printf("env: %d vars from %s", len(vals), p)
@@ -95,9 +99,19 @@ func (s *configStore) get() config {
 // settings the UI can change are reloaded; addresses and the upstream URL are
 // bound at start and still need one. A write from the UI bumps the mtime too;
 // that reload is a no-op because the values already match.
-func (s *configStore) watch(every time.Duration) {
+func (s *configStore) watch(ctx context.Context, every time.Duration, life *lifecycle) {
 	go func() {
-		for range time.Tick(every) {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if life.mode() != modeActive {
+				continue
+			}
 			if m := mtime(s.envPath); !m.Equal(s.envMtime) {
 				s.envMtime = m
 				if changed, err := s.reloadEnv(); err != nil {

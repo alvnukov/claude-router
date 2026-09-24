@@ -57,8 +57,8 @@ func slotStatePath(path string) string {
 
 func (r *routerServer) startBackground() {
 	r.once.Do(func() {
-		r.cs.watch(2 * time.Second)
-		startChecker(r.cs, r.health)
+		r.cs.watch(r.background, 2*time.Second, r.life)
+		startChecker(r.background, r.cs, r.health, r.life)
 		r.ui.startCatalogUpdates(r.background)
 	})
 }

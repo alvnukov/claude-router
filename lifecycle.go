@@ -21,6 +21,7 @@ const (
 type lifecycle struct {
 	mu       sync.Mutex
 	state    lifecycleMode
+	pending  int
 	inflight sync.WaitGroup
 }
 
@@ -91,20 +92,29 @@ func (l *lifecycle) guard(next http.Handler) http.Handler {
 			return
 		}
 		l.inflight.Add(1)
+		l.pending++
 		l.mu.Unlock()
-		defer l.inflight.Done()
+		defer func() {
+			l.mu.Lock()
+			l.pending--
+			l.mu.Unlock()
+			l.inflight.Done()
+		}()
 		next.ServeHTTP(w, r)
 	})
 }
 
 func (l *lifecycle) healthz(w http.ResponseWriter, r *http.Request) {
-	state := l.mode()
+	l.mu.Lock()
+	state, pending := l.state, l.pending
+	l.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	if state == modeDraining {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 	json.NewEncoder(w).Encode(struct {
-		PID  int           `json:"pid"`
-		Mode lifecycleMode `json:"mode"`
-	}{os.Getpid(), state})
+		PID     int           `json:"pid"`
+		Mode    lifecycleMode `json:"mode"`
+		Pending int           `json:"pending"`
+	}{os.Getpid(), state, pending})
 }
