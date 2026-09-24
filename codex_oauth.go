@@ -176,10 +176,15 @@ func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrows
 	c.Tokens.AccessToken, c.Tokens.RefreshToken, c.Tokens.IDToken, c.Tokens.AccountID = token.Access, token.Refresh, token.ID, account
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.save(c); err != nil {
-		return err
-	}
-	s.credential, s.loaded = c, true
-	s.rejectedToken, s.authProblem = "", ""
-	return nil
+	return withFileLock(ctx, s.path+".lock", func() error {
+		if s.life != nil && !s.life.writesSharedState() {
+			return errors.New("Codex login unavailable while router is not active")
+		}
+		if err := s.save(c); err != nil {
+			return err
+		}
+		s.credential, s.loaded = c, true
+		s.rejectedToken, s.authProblem = "", ""
+		return nil
+	})
 }

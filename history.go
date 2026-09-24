@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -99,7 +100,7 @@ func (s *store) persist(r *record) {
 	s.lines++
 	compact := s.lines > 2*s.max
 	s.mu.Unlock()
-	if compact {
+	if compact && s.life == nil {
 		s.rewrite()
 	}
 }
@@ -141,6 +142,65 @@ func (s *store) rewrite() {
 	s.mu.Lock()
 	s.lines = len(recs)
 	s.mu.Unlock()
+}
+
+// compactAfterDrain runs only after the other slot has exited. Both the
+// history file and the lock file retain stable inodes across compaction.
+func (s *store) compactAfterDrain() error {
+	if s.path == "" {
+		return nil
+	}
+	return withFileLock(context.Background(), s.path+".lock", func() error {
+		f, err := os.Open(s.path)
+		if err != nil {
+			return err
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 1<<20), 64<<20)
+		var lines [][]byte
+		for sc.Scan() {
+			line := append([]byte(nil), sc.Bytes()...)
+			var r record
+			if json.Unmarshal(line, &r) == nil && r.ID != "" {
+				lines = append(lines, line)
+				if len(lines) > s.max {
+					lines = lines[1:]
+				}
+			}
+		}
+		err = sc.Err()
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(s.path), ".history-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmp.Name())
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			return err
+		}
+		for _, line := range lines {
+			if _, err := tmp.Write(append(line, '\n')); err != nil {
+				tmp.Close()
+				return err
+			}
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp.Name(), s.path); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.lines = len(lines)
+		s.mu.Unlock()
+		return nil
+	})
 }
 
 // truncate empties the file; used by clear.

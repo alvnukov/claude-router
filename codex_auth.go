@@ -40,6 +40,7 @@ type codexAuthStore struct {
 	rejectedAt    time.Time
 	authProblem   string
 	mu            sync.Mutex
+	life          *lifecycle
 	credential    codexCredential
 	loaded        bool
 	path          string
@@ -87,7 +88,7 @@ func readCodexCredential(path string) (codexCredential, error) {
 func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.loaded {
+	if !s.loaded || (s.life != nil && !s.life.writesSharedState()) {
 		c, err := readCodexCredential(s.path)
 		if err != nil {
 			return c, fmt.Errorf("Codex login: %w; войдите через панель роутера", err)
@@ -98,10 +99,29 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 	if jwtExpiry(s.credential.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
 		return s.credential, nil
 	}
-	if err := s.refresh(ctx); err != nil {
+	if s.life != nil && !s.life.writesSharedState() {
+		return codexCredential{}, errors.New("Codex token expired while router is quiesced; retry after deployment")
+	}
+	if err := s.refreshLocked(ctx); err != nil {
 		return codexCredential{}, err
 	}
 	return s.credential, nil
+}
+
+func (s *codexAuthStore) refreshLocked(ctx context.Context) error {
+	return withFileLock(ctx, s.path+".lock", func() error {
+		if disk, err := readCodexCredential(s.path); err == nil {
+			if disk.Tokens.RefreshToken != s.credential.Tokens.RefreshToken || disk.Tokens.AccessToken != s.credential.Tokens.AccessToken {
+				s.credential = disk
+				if jwtExpiry(disk.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
+					return nil
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return s.refresh(ctx)
+	})
 }
 
 func jwtExpiry(token string) time.Time {
@@ -219,18 +239,26 @@ func (s *codexAuthStore) save(c codexCredential) error {
 }
 
 func (s *codexAuthStore) importFromCLI() error {
+	if s.life != nil && !s.life.writesSharedState() {
+		return errors.New("Codex login unavailable while router is not active")
+	}
 	c, err := readCodexCredential(s.cliPath)
 	if err != nil {
 		return fmt.Errorf("Codex login: %w", err)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.save(c); err != nil {
-		return err
-	}
-	s.credential, s.loaded = c, true
-	s.rejectedToken, s.authProblem = "", ""
-	return nil
+	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if s.life != nil && !s.life.writesSharedState() {
+			return errors.New("Codex login unavailable while router is not active")
+		}
+		if err := s.save(c); err != nil {
+			return err
+		}
+		s.credential, s.loaded = c, true
+		s.rejectedToken, s.authProblem = "", ""
+		return nil
+	})
 }
 
 func (s *codexAuthStore) connected() bool {
@@ -306,7 +334,14 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 		return codexCredential{}, errCodexSignIn
 	}
 	s.rejectedToken, s.rejectedAt = rejected, time.Now()
-	if err := s.refresh(ctx); err != nil {
+	if s.life != nil && !s.life.writesSharedState() {
+		if disk, err := readCodexCredential(s.path); err == nil && disk.Tokens.AccessToken != rejected {
+			s.credential = disk
+			return disk, nil
+		}
+		return codexCredential{}, errCodexSignIn
+	}
+	if err := s.refreshLocked(ctx); err != nil {
 		s.authProblem = errCodexSignIn.Error()
 		return codexCredential{}, errCodexSignIn
 	}

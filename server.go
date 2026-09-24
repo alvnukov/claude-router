@@ -32,6 +32,8 @@ type routerServer struct {
 func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	cs := newConfigStore(cfg, providersPath())
 	st := newStore(cfg.uiHistory, historyPath())
+	st.life = life
+	codexAuth.life = life
 	h := newHealth(healthPath())
 	h.life = life
 	if life.mode() != modeStandby {
