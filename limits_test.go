@@ -3,14 +3,19 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -260,5 +265,351 @@ func TestAnthropicLimitsIgnoresLocalAndOtherPaths(t *testing.T) {
 	}
 	if v := u.limits.view(time.Now()); v.State != "unavailable" {
 		t.Fatalf("non-messages or local response updated the snapshot: %+v", v)
+	}
+}
+
+func limitsHeader(kv ...string) http.Header {
+	h := http.Header{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		h.Set(kv[i], kv[i+1])
+	}
+	return h
+}
+
+func TestAnthropicLimitsViewStates(t *testing.T) {
+	captureLog(t)
+	now := time.Now()
+	with := limitsHeader("Anthropic-Ratelimit-Example-Status", "allowed")
+
+	l := newAnthropicLimits("", 30*time.Minute)
+	if v := l.view(now); v.State != "unavailable" || !v.ObservedAt.IsZero() || v.AgeSeconds != nil || v.MaxAgeSeconds != 1800 || v.Headers != nil {
+		t.Fatalf("nothing observed: %+v", v)
+	}
+	l.observe(http.Header{}, now.Add(-10*time.Minute))
+	if v := l.view(now); v.State != "no_headers" || !v.ObservedAt.Equal(now.Add(-10*time.Minute)) || v.AgeSeconds == nil || *v.AgeSeconds != 600 || v.Headers != nil {
+		t.Fatalf("response without headers: %+v", v)
+	}
+	l.observe(with, now.Add(-30*time.Minute))
+	if v := l.view(now); v.State != "unverified" || *v.AgeSeconds != 1800 || strings.Join(v.Headers, ",") != "anthropic-ratelimit-example-status" {
+		t.Fatalf("headers exactly max age old are still current: %+v", v)
+	}
+	if v := l.view(now.Add(time.Second)); v.State != "no_headers" {
+		t.Fatalf("stale headers must not be shown as current: %+v", v)
+	}
+	if v := l.view(now.Add(21 * time.Minute)); v.State != "unavailable" || !v.ObservedAt.Equal(now.Add(-10*time.Minute)) || *v.AgeSeconds != 31*60 || v.Headers != nil {
+		t.Fatalf("everything stale: %+v", v)
+	}
+
+	// A later answer without the headers (an error, say) does not hide a
+	// current snapshot.
+	l.observe(with, now.Add(-time.Minute))
+	l.observe(http.Header{}, now)
+	if v := l.view(now); v.State != "unverified" || !v.ObservedAt.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("newer response without headers hid current snapshot: %+v", v)
+	}
+}
+
+func TestAnthropicLimitsIgnoresOlderObservation(t *testing.T) {
+	captureLog(t)
+	now := time.Now()
+	l := newAnthropicLimits("", anthropicLimitsMaxAge)
+	l.observe(limitsHeader("Anthropic-Ratelimit-New", "1"), now)
+	l.observe(limitsHeader("Anthropic-Ratelimit-Old", "1"), now.Add(-time.Second))
+	if v := l.view(now); strings.Join(v.Headers, ",") != "anthropic-ratelimit-new" || !v.ObservedAt.Equal(now) {
+		t.Fatalf("older response replaced newer snapshot: %+v", v)
+	}
+	l2 := newAnthropicLimits("", anthropicLimitsMaxAge)
+	l2.observe(http.Header{}, now)
+	l2.observe(http.Header{}, now.Add(-time.Second))
+	if v := l2.view(now); !v.ObservedAt.Equal(now) {
+		t.Fatalf("older response moved time back: %+v", v)
+	}
+}
+
+// A timestamp from the future (clock moved back, hand-edited file) must
+// neither look current nor block real observations.
+func TestAnthropicLimitsFutureTimestamp(t *testing.T) {
+	captureLog(t)
+	now := time.Now()
+	l := newAnthropicLimits("", anthropicLimitsMaxAge)
+	l.observe(limitsHeader("Anthropic-Ratelimit-Future", "1"), now.Add(2*time.Hour))
+	if v := l.view(now); v.State != "unavailable" || !v.ObservedAt.IsZero() || v.AgeSeconds != nil {
+		t.Fatalf("future snapshot shown: %+v", v)
+	}
+	l.observe(limitsHeader("Anthropic-Ratelimit-Now", "1"), now)
+	if v := l.view(now); v.State != "unverified" || strings.Join(v.Headers, ",") != "anthropic-ratelimit-now" {
+		t.Fatalf("future snapshot blocked a real one: %+v", v)
+	}
+}
+
+func TestAnthropicLimitsPersistRoundTrip(t *testing.T) {
+	captureLog(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "limits.json")
+	now := time.Now()
+	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	t.Cleanup(l.close)
+	l.observe(limitsHeader("Anthropic-Ratelimit-A", "value-a"), now.Add(-time.Minute))
+	l.observe(http.Header{}, now.Add(-2*time.Minute))
+	if err := l.save(); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("limits.json: %v %v", fi, err)
+	}
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Name() != "limits.json" && e.Name() != "limits.json.lock" {
+			t.Fatalf("temporary file left behind: %s", e.Name())
+		}
+	}
+	var disk limitsState
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &disk); err != nil || disk.WithHeaders == nil || disk.WithHeaders.Headers["anthropic-ratelimit-a"] != "value-a" || !disk.WithoutAt.Equal(now.Add(-2*time.Minute)) {
+		t.Fatalf("file content %s: %v", data, err)
+	}
+
+	again := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	a, _ := json.Marshal(l.view(now))
+	b, _ := json.Marshal(again.view(now))
+	if string(a) != string(b) {
+		t.Fatalf("after restart %s, before %s", b, a)
+	}
+}
+
+// Two router processes share limits.json during a deploy: a save never
+// replaces a newer observation on disk with an older one.
+func TestAnthropicLimitsSaveKeepsNewerDiskState(t *testing.T) {
+	captureLog(t)
+	path := filepath.Join(t.TempDir(), "limits.json")
+	now := time.Now()
+	older := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	t.Cleanup(older.close)
+	newer := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	t.Cleanup(newer.close)
+	older.observe(limitsHeader("Anthropic-Ratelimit-Old", "1"), now.Add(-5*time.Minute))
+	newer.observe(limitsHeader("Anthropic-Ratelimit-New", "1"), now.Add(-time.Minute))
+	newer.observe(http.Header{}, now)
+	if err := newer.save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := older.save(); err != nil {
+		t.Fatal(err)
+	}
+	reread := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	for name, l := range map[string]*anthropicLimits{"file": reread, "stale process": older} {
+		if v := l.view(now); strings.Join(v.Headers, ",") != "anthropic-ratelimit-new" {
+			t.Fatalf("%s regressed to older snapshot: %+v", name, v)
+		}
+	}
+	var disk limitsState
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &disk); err != nil || !disk.WithoutAt.Equal(now) {
+		t.Fatalf("without_at regressed: %s %v", data, err)
+	}
+}
+
+// The read-merge-write of one process must not interleave with another's.
+func TestAnthropicLimitsSaveWaitsForOtherWriter(t *testing.T) {
+	captureLog(t)
+	path := filepath.Join(t.TempDir(), "limits.json")
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	t.Cleanup(l.close)
+	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
+	saved := make(chan error, 1)
+	go func() { saved <- l.save() }()
+	select {
+	case err := <-saved:
+		t.Fatalf("saved while another writer held the lock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("written while another writer held the lock")
+	}
+	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := <-saved; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnthropicLimitsBadFile(t *testing.T) {
+	buf := captureLog(t)
+	dir := t.TempDir()
+	missing := newAnthropicLimits(filepath.Join(dir, "missing.json"), anthropicLimitsMaxAge)
+	if v := missing.view(time.Now()); v.State != "unavailable" {
+		t.Fatalf("missing file: %+v", v)
+	}
+	missing.close()
+	if _, err := os.Stat(filepath.Join(dir, "missing.json")); !os.IsNotExist(err) {
+		t.Fatal("file created without an observation")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("missing file reported: %q", buf.String())
+	}
+
+	path := filepath.Join(dir, "limits.json")
+	os.WriteFile(path, []byte("{not json"), 0o600)
+	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	t.Cleanup(l.close)
+	if v := l.view(time.Now()); v.State != "unavailable" {
+		t.Fatalf("corrupt file: %+v", v)
+	}
+	if !strings.Contains(buf.String(), "anthropic limits: "+path) {
+		t.Fatalf("corrupt file not reported: %q", buf.String())
+	}
+	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
+	if err := l.save(); err != nil {
+		t.Fatal(err)
+	}
+	if v := newAnthropicLimits(path, anthropicLimitsMaxAge).view(time.Now()); v.State != "unverified" {
+		t.Fatalf("corrupt file not replaced: %+v", v)
+	}
+
+	// A hand-edited file cannot smuggle other headers or unbounded names in.
+	edited := filepath.Join(dir, "edited.json")
+	os.WriteFile(edited, []byte(`{"with_headers":{"at":"`+time.Now().Format(time.RFC3339Nano)+`","headers":{"authorization":"x","anthropic-ratelimit-ok":"1","anthropic-ratelimit-`+strings.Repeat("n", 500)+`":"1"}}}`), 0o600)
+	if v := newAnthropicLimits(edited, anthropicLimitsMaxAge).view(time.Now()); strings.Join(v.Headers, ",") != "anthropic-ratelimit-ok" {
+		t.Fatalf("file headers not filtered: %+v", v)
+	}
+}
+
+func TestAnthropicLimitsSaveErrorKeepsMemory(t *testing.T) {
+	buf := captureLog(t)
+	notDir := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(notDir, nil, 0o600)
+	l := newAnthropicLimits(filepath.Join(notDir, "limits.json"), anthropicLimitsMaxAge)
+	t.Cleanup(l.close)
+	l.observe(limitsHeader("Anthropic-Ratelimit-A", "secret-value"), time.Now())
+	if err := l.save(); err == nil {
+		t.Fatal("save into a file path succeeded")
+	}
+	if v := l.view(time.Now()); v.State != "unverified" {
+		t.Fatalf("failed save lost the snapshot: %+v", v)
+	}
+	l.observe(limitsHeader("Anthropic-Ratelimit-A", "secret-value"), time.Now().Add(time.Second))
+	l.close()
+	out := buf.String()
+	if strings.Count(out, "anthropic limits: save") != 1 || strings.Contains(out, "secret-value") {
+		t.Fatalf("save failure must be logged once, without values: %q", out)
+	}
+}
+
+// The proxy never waits for the disk: observe only schedules a save, and
+// close flushes whatever is pending.
+func TestAnthropicLimitsBackgroundSave(t *testing.T) {
+	captureLog(t)
+	path := filepath.Join(t.TempDir(), "limits.json")
+	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("observation never saved")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	l.observe(limitsHeader("Anthropic-Ratelimit-B", "1"), time.Now().Add(time.Second))
+	l.close()
+	l.close()
+	if v := newAnthropicLimits(path, anthropicLimitsMaxAge).view(time.Now().Add(time.Second)); strings.Join(v.Headers, ",") != "anthropic-ratelimit-b" {
+		t.Fatalf("close did not flush the last observation: %+v", v)
+	}
+	l.observe(http.Header{}, time.Now().Add(2*time.Second)) // after close: memory only
+	var nilStore *anthropicLimits
+	nilStore.close()
+	if err := nilStore.save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnthropicLimitsConcurrentUse(t *testing.T) {
+	captureLog(t)
+	l := newAnthropicLimits(filepath.Join(t.TempDir(), "limits.json"), anthropicLimitsMaxAge)
+	t.Cleanup(l.close)
+	start := time.Now()
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				at := start.Add(time.Duration(i*8+g) * time.Millisecond)
+				if i%2 == 0 {
+					l.observe(limitsHeader(fmt.Sprintf("Anthropic-Ratelimit-G%d", g), "1"), at)
+				} else {
+					l.observe(http.Header{}, at)
+				}
+				l.view(at)
+				if i%50 == 0 {
+					l.save()
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
+	last := start.Add(time.Duration(199*8+7) * time.Millisecond)
+	if v := l.view(last); v.State != "unverified" || !v.ObservedAt.Equal(start.Add(time.Duration(198*8+7)*time.Millisecond)) {
+		t.Fatalf("after concurrent use: %+v", v)
+	}
+}
+
+// The documented API rate-limit headers describe organisation limits, not the
+// subscription: they are named, never turned into numbers.
+func TestAnthropicLimitsGenericHeadersStayUnverified(t *testing.T) {
+	captureLog(t)
+	l := newAnthropicLimits("", anthropicLimitsMaxAge)
+	now := time.Now()
+	l.observe(limitsHeader(
+		"Anthropic-Ratelimit-Requests-Limit", "50",
+		"Anthropic-Ratelimit-Requests-Remaining", "41",
+		"Anthropic-Ratelimit-Requests-Reset", "2026-09-25T10:00:00Z",
+		"Anthropic-Ratelimit-Tokens-Remaining", "39999",
+	), now)
+	v := l.view(now)
+	if v.State != "unverified" {
+		t.Fatalf("generic headers: %+v", v)
+	}
+	data, _ := json.Marshal(v)
+	var keys map[string]json.RawMessage
+	json.Unmarshal(data, &keys)
+	for k := range keys {
+		switch k {
+		case "state", "observed_at", "age_seconds", "max_age_seconds", "headers":
+		default:
+			t.Fatalf("unexpected field %q in %s", k, data)
+		}
+	}
+	for _, value := range []string{"50", "41", "39999", "2026-09-25T10:00:00Z"} {
+		if strings.Contains(string(keys["headers"]), value) || strings.Contains(string(data), `"`+value+`"`) {
+			t.Fatalf("header value %s leaked: %s", value, data)
+		}
+	}
+}
+
+func TestLimitsPath(t *testing.T) {
+	t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", "/x/limits.json")
+	if p := limitsPath(); p != "/x/limits.json" {
+		t.Fatal(p)
+	}
+	t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", "")
+	if p := limitsPath(); p != "" {
+		t.Fatalf("empty override must disable persistence: %q", p)
+	}
+	os.Unsetenv("ROUTER_ANTHROPIC_LIMITS_FILE")
+	exe, _ := os.Executable()
+	if p := limitsPath(); p != filepath.Join(filepath.Dir(exe), "limits.json") {
+		t.Fatal(p)
 	}
 }

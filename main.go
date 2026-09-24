@@ -182,6 +182,7 @@ func main() {
 	cs.watch(2 * time.Second)
 	startChecker(cs, hl)
 	u := newUIServer(st, cs, hl)
+	u.limits = newAnthropicLimits(limitsPath(), anthropicLimitsMaxAge)
 	u.startCatalogUpdates(context.Background())
 	mux := newMainHandler(cfg, cs, st, hl, u)
 	log.Printf("listening on %s", cfg.listen)
