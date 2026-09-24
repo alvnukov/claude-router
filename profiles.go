@@ -291,12 +291,18 @@ func (s *configStore) persistLocalLocked(l localSetup) error {
 
 // A hand edit can still be loaded through the existing mtime watcher.
 func (s *configStore) reloadProfiles(h *health) error {
-	l, err := readProviders(s.provPath)
+	return s.reloadProfilesFrom(h, readProviders)
+}
+
+func (s *configStore) reloadProfilesFrom(h *health, read func(string) (localSetup, error)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, err := read(s.provPath)
 	if err != nil {
 		return err
 	}
-	before := s.get().local.ActiveProfile
-	if err := s.applyLocal(l, false); err != nil {
+	before := s.c.local.ActiveProfile
+	if err := s.applyLocalLocked(l, false); err != nil {
 		return err
 	}
 	if h != nil && before != l.ActiveProfile {

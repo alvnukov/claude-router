@@ -222,6 +222,12 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 func (s *configStore) applyLocal(l localSetup, write bool, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.applyLocalLocked(l, write, expectedProfile...)
+}
+
+// applyLocalLocked requires s.mu; reload uses it while holding the lock from
+// disk read through installation so activation cannot interleave.
+func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile ...string) error {
 	next := s.c
 	if write && l.Profiles != nil && (l.ActiveProfile != next.local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.local.ActiveProfile) {
 		return fmt.Errorf("активный профиль изменился; обновите страницу")

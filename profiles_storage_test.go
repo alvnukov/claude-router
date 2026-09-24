@@ -389,3 +389,48 @@ func TestInterruptedProfileMigrationDoesNotReplaceSavedRoutes(t *testing.T) {
 		t.Fatalf("old route lost: %v %+v", err, profile)
 	}
 }
+
+// Reload must finish applying the snapshot it read before activation can write
+// a new pointer. Otherwise an older reload can undo the activation in memory.
+func TestReloadReadBeforeActivationKeepsNewProfile(t *testing.T) {
+	cs, h, path := profileFixture(t)
+	if err := cs.ensureProfiles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.createProfile("cloud", false); err != nil {
+		t.Fatal(err)
+	}
+	h.bindCandidates("session", []candidate{{Key: "p/a"}})
+	readOld, release := make(chan struct{}), make(chan struct{})
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- cs.reloadProfilesFrom(h, func(path string) (localSetup, error) {
+			l, err := readProviders(path)
+			close(readOld)
+			<-release
+			return l, err
+		})
+	}()
+	<-readOld
+	activated := make(chan error, 1)
+	activationStarted := make(chan struct{})
+	go func() {
+		close(activationStarted)
+		activated <- cs.activateProfile("cloud", h)
+	}()
+	<-activationStarted
+	close(release)
+	if err := <-reloadDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-activated; err != nil {
+		t.Fatal(err)
+	}
+	disk, err := readProviders(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disk.ActiveProfile != "cloud" || cs.get().local.ActiveProfile != "cloud" || cs.get().routeFor("claude-opus-5", "high").Mode != "disabled" || len(h.sessions) != 0 {
+		t.Fatalf("activation lost: disk=%s memory=%s route=%+v sessions=%d", disk.ActiveProfile, cs.get().local.ActiveProfile, cs.get().routeFor("claude-opus-5", "high"), len(h.sessions))
+	}
+}
