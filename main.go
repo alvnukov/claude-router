@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -74,6 +73,9 @@ func loadConfig() config {
 	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
+	if os.Getenv("ROUTER_STANDBY") == "1" {
+		return c // standby reads config but never runs a migration that writes it
+	}
 	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
 		if err := savePoolMigration(providersPath(), migrated); err != nil {
 			log.Fatalf("pool migration: %v", err)
@@ -156,18 +158,7 @@ func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error)
 	return probe.Model, route, nil
 }
 
-func main() {
-	loadEnvFile()
-	codexAuth = newCodexAuthStore()
-	cfg := loadConfig()
-	cs := newConfigStore(cfg, providersPath())
-	cs.watch(2 * time.Second)
-	st := newStore(cfg.uiHistory, historyPath())
-	hl := newHealth(healthPath())
-	startChecker(cs, hl)
-	u := newUIServer(st, cs, hl)
-	u.startCatalogUpdates(context.Background())
-
+func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, life *lifecycle) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
@@ -254,23 +245,24 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4})
 	})
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		pass(w, r, nil)
 	})
+	admin := newRuntimeAdmin(life, hl, statePath())
+	api := http.NewServeMux()
+	api.HandleFunc("/healthz", life.healthz)
+	api.Handle("/admin/", admin)
+	api.Handle("/", life.guard(mux))
+	return api
+}
 
-	log.Printf("listening on %s", cfg.listen)
-	log.Printf("  upstream     %s", cfg.upstream)
-	log.Printf("  local        %s", cfg.local.summary())
-
-	if cfg.uiListen != "" {
-		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
-		startUI(cfg.uiListen, u)
-	}
-	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
+func main() {
+	loadEnvFile()
+	codexAuth = newCodexAuthStore()
+	cfg := loadConfig()
+	life := newLifecycle(os.Getenv("ROUTER_STANDBY") == "1")
+	server := newRouterServer(cfg, life, statePath())
+	if err := server.run(); err != nil {
 		log.Fatal(err)
 	}
 }

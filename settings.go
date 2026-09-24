@@ -71,6 +71,20 @@ func mtime(p string) time.Time {
 	return time.Time{}
 }
 
+func (s *configStore) reloadProviders() error {
+	if s.provPath == "" {
+		return nil
+	}
+	setup, err := readProviders(s.provPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.applyLocal(setup, false)
+}
+
 func (s *configStore) get() config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
