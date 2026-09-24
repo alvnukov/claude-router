@@ -144,7 +144,7 @@
 {{if and (not $route.IsFamily) $route.Family}}<option value="inherit" {{if eq .Destination "inherit"}}selected{{end}}>Наследовать: {{.Inherited}}</option>{{end}}
 <option value="disabled" {{if eq .Destination "disabled"}}selected{{end}}>Не настроено</option><option value="anthropic" {{if eq .Destination "anthropic"}}selected{{end}}>Anthropic</option>
 {{range $route.Pools}}<option value="pool:{{.Name}}" {{if eq $choice.Destination (printf "pool:%s" .Name)}}selected{{end}}>Пул: {{.Name}} · {{len .Keys}} мод.</option>{{end}}
-{{range $route.Targets}}{{$target:=.}}<option value="model:{{.Key}}:" {{if eq $choice.Destination (printf "model:%s:" .Key)}}selected{{end}}>Модель: {{.Key}} · по умолчанию</option>{{range .Efforts}}<option value="model:{{$target.Key}}:{{.}}" {{if eq $choice.Destination (printf "model:%s:%s" $target.Key .)}}selected{{end}}>Модель: {{$target.Key}} · effort {{.}}</option>{{end}}{{end}}
+{{range $route.Targets}}{{$target:=.}}<option value="model:{{.Key}}:" {{if eq $choice.Destination (printf "model:%s:" .Key)}}selected{{end}}>{{.Key}}</option>{{range .Efforts}}<option value="model:{{$target.Key}}:{{.}}" {{if eq $choice.Destination (printf "model:%s:%s" $target.Key .)}}selected{{end}}>{{$target.Key}}/{{.}}</option>{{end}}{{end}}
 </select></label>{{end}}
 <button class="btn primary" type="submit">Сохранить маршруты</button></form></details>
 {{end}}

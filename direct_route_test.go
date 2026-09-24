@@ -137,8 +137,11 @@ func TestSettingsSaveDirectRouteAndReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
 	u.cs.provPath = path
 	body := get(t, h, "GET", "/settings", nil).Body.String()
-	if !strings.Contains(body, `value="model:p/m1:high"`) {
-		t.Fatal("settings do not offer a direct model with effort")
+	if !strings.Contains(body, `value="model:p/m1:high"`) ||
+		!strings.Contains(body, `>p/m1/high</option>`) ||
+		!strings.Contains(body, `value="model:p/m1:"`) ||
+		!strings.Contains(body, `>p/m1</option>`) {
+		t.Fatal("settings do not offer compact model/effort assignments")
 	}
 	w := get(t, h, "POST", "/settings/route", url.Values{
 		"scope": {"family"}, "model": {"opus"}, "high": {"model:p/m1:high"},
