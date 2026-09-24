@@ -219,11 +219,11 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 
 // applyLocal validates and installs a providers/models setup; with write set
 // it also rewrites providers.json.
-func (s *configStore) applyLocal(l localSetup, write bool) error {
+func (s *configStore) applyLocal(l localSetup, write bool, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.c
-	if write && l.Profiles != nil && l.ActiveProfile != next.local.ActiveProfile {
+	if write && l.Profiles != nil && (l.ActiveProfile != next.local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.local.ActiveProfile) {
 		return fmt.Errorf("активный профиль изменился; обновите страницу")
 	}
 	if err := l.syncActiveProfile(); err != nil {

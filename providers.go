@@ -307,6 +307,10 @@ func readProviders(path string) (localSetup, error) {
 		}
 	} else if !os.IsNotExist(err) {
 		return l, err
+	} else if _, dirErr := os.Stat(path + ".profiles"); dirErr == nil {
+		return l, fmt.Errorf("%s: profile files exist without active pointer; migration interrupted", path)
+	} else if !os.IsNotExist(dirErr) {
+		return l, dirErr
 	}
 	if l.Profiles != nil {
 		if err := l.useProfile(l.ActiveProfile); err != nil {

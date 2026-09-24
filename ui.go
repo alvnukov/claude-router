@@ -746,7 +746,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	} else {
 		l.Routes[model] = choices
 	}
-	u.renderSettingsResult(w, u.cs.applyLocal(l, true), "Маршруты сохранены: "+model)
+	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), "Маршруты сохранены: "+model)
 }
 
 func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {
@@ -1068,7 +1068,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		err = u.validateTargetEffort(l, key, r.FormValue("effort"))
 	}
 	if err == nil {
-		err = u.cs.applyLocal(l, true)
+		err = u.cs.applyLocal(l, true, r.FormValue("profile"))
 	}
 	u.renderSettingsResult(w, err, "Пул сохранён")
 }

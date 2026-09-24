@@ -337,3 +337,55 @@ func TestMissingProfileDirectoryDoesNotFallbackToEnv(t *testing.T) {
 		t.Fatal("damaged profile layout overwrote globals")
 	}
 }
+
+func TestFormProfileGuardUsesSubmittedNameUnderLock(t *testing.T) {
+	cs, h, _ := profileFixture(t)
+	if err := cs.ensureProfiles(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.createProfile("cloud", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.activateProfile("cloud", h); err != nil {
+		t.Fatal(err)
+	}
+	// Simulates activation between the handler's initial check and its snapshot.
+	current := cs.get().local.clone()
+	current.FamilyRoutes["opus"] = map[string]modelRoute{"high": {Mode: "anthropic"}}
+	if err := cs.applyLocal(current, true, "default"); err == nil {
+		t.Fatal("form from default edited cloud after activation")
+	}
+	if cs.get().local.FamilyRoutes["opus"]["high"].Mode == "anthropic" {
+		t.Fatal("stale form changed active route")
+	}
+}
+
+func TestInterruptedProfileMigrationDoesNotReplaceSavedRoutes(t *testing.T) {
+	cs, _, path := profileFixture(t)
+	original := cs.get().local.FamilyRoutes["opus"]["high"]
+	if err := os.Mkdir(path+".active-profile.tmp", 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.ensureProfiles(); err == nil {
+		t.Fatal("expected pointer write failure")
+	}
+	saved, err := os.ReadFile(path + ".profiles/default.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadLocalSetupChecked(path); err == nil {
+		t.Fatal("interrupted migration loaded as legacy configuration")
+	}
+	t.Setenv("ROUTER_PROVIDERS_FILE", path)
+	if _, err := loadConfigChecked(); err == nil {
+		t.Fatal("interrupted migration started")
+	}
+	after, err := os.ReadFile(path + ".profiles/default.json")
+	if err != nil || !bytes.Equal(saved, after) {
+		t.Fatal("interrupted migration overwrote saved profile")
+	}
+	var profile routingProfile
+	if err := json.Unmarshal(after, &profile); err != nil || profile.FamilyRoutes["opus"]["high"] != original {
+		t.Fatalf("old route lost: %v %+v", err, profile)
+	}
+}
