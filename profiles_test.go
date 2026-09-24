@@ -41,15 +41,23 @@ func TestProfilesMigrateOldProvidersWithoutChangingRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var disk struct {
-		Active   string                     `json:"active_profile"`
-		Profiles map[string]json.RawMessage `json:"profiles"`
-	}
+	var disk map[string]json.RawMessage
 	if err := json.Unmarshal(data, &disk); err != nil {
 		t.Fatal(err)
 	}
-	if disk.Active != "default" || len(disk.Profiles) != 1 {
-		t.Fatalf("profile migration not persisted: %+v", disk)
+	if _, ok := disk["profiles"]; ok {
+		t.Fatal("profile definitions stored in global file")
+	}
+	pointer, err := os.ReadFile(path + ".active-profile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active string
+	if err := json.Unmarshal(pointer, &active); err != nil || active != "default" {
+		t.Fatalf("active profile: %q %v", active, err)
+	}
+	if _, err := os.Stat(path + ".profiles/default.json"); err != nil {
+		t.Fatal(err)
 	}
 	reloaded, err := readProviders(path)
 	if err != nil {

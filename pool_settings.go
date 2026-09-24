@@ -82,12 +82,15 @@ func migratePoolSettings(c config) (localSetup, bool) {
 
 // Merge into the latest snapshot so a simultaneous catalog refresh or another
 // pool's settings update cannot be overwritten by this form.
-func (s *configStore) savePoolSettings(name string, settings poolSettings) error {
+func (s *configStore) savePoolSettings(name string, settings poolSettings, expectedProfile ...string) error {
 	if err := settings.validate(); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != s.c.local.ActiveProfile {
+		return fmt.Errorf("активный профиль изменился; обновите страницу")
+	}
 	if _, ok := s.c.local.ModelPools[name]; !ok {
 		return fmt.Errorf("пул %q не найден", name)
 	}
@@ -103,6 +106,7 @@ func (s *configStore) savePoolSettings(name string, settings poolSettings) error
 		return err
 	}
 	s.provMtime = mtime(s.provPath)
+	s.profileMtime = profilesMtime(s.provPath)
 	s.c.local = l
 	return nil
 }

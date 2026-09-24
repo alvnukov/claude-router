@@ -2,7 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // A profile owns routing decisions, never credentials or the global model catalog.
@@ -142,10 +145,39 @@ func (l *localSetup) renameInactiveProvider(oldName, newName string) {
 	}
 }
 
+func profileFile(path, name string) string { return filepath.Join(path+".profiles", name+".json") }
+
+// Track the pointer and profile definitions independently of providers.json.
+func profilesMtime(path string) time.Time {
+	latest := mtime(path + ".active-profile")
+	entries, err := os.ReadDir(path + ".profiles")
+	if err != nil {
+		return latest
+	}
+	for _, entry := range entries {
+		if info, err := entry.Info(); err == nil && info.ModTime().After(latest) {
+			latest = info.ModTime()
+		}
+	}
+	return latest
+}
+
 func (s *configStore) ensureProfiles() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.c.local.Profiles != nil {
+		if s.provPath == "" {
+			return nil
+		}
+		if _, err := os.Stat(s.provPath + ".active-profile"); err == nil {
+			return nil
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := saveConfigurationMigration(s.provPath, s.c.local, ".before-profiles"); err != nil {
+			return err
+		}
+		s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
 		return nil
 	}
 	l := s.c.local.clone()
@@ -159,6 +191,7 @@ func (s *configStore) ensureProfiles() error {
 			return err
 		}
 		s.provMtime = mtime(s.provPath)
+		s.profileMtime = profilesMtime(s.provPath)
 	}
 	s.c.local = l
 	return nil
@@ -208,9 +241,13 @@ func (s *configStore) activateProfile(name string, h *health) error {
 	if err := l.validateProfiles(); err != nil {
 		return err
 	}
-	if err := s.persistLocalLocked(l); err != nil {
+	if s.provPath == "" {
+		return fmt.Errorf("файл провайдеров отключён")
+	}
+	if err := writeActiveProfile(s.provPath, name); err != nil {
 		return err
 	}
+	s.profileMtime = profilesMtime(s.provPath)
 	s.c.local = l
 	if h != nil {
 		h.clearSessions()
@@ -232,10 +269,11 @@ func (s *configStore) deleteProfile(name string) error {
 		return fmt.Errorf("сначала переключите активный профиль")
 	}
 	delete(l.Profiles, name)
-	if err := s.persistLocalLocked(l); err != nil {
+	if err := os.Remove(profileFile(s.provPath, name)); err != nil {
 		return err
 	}
 	s.c.local = l
+	s.profileMtime = profilesMtime(s.provPath)
 	return nil
 }
 
@@ -247,6 +285,7 @@ func (s *configStore) persistLocalLocked(l localSetup) error {
 		return err
 	}
 	s.provMtime = mtime(s.provPath)
+	s.profileMtime = profilesMtime(s.provPath)
 	return nil
 }
 

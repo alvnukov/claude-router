@@ -277,6 +277,37 @@ func readProviders(path string) (localSetup, error) {
 	if err := json.Unmarshal(data, &l); err != nil {
 		return l, fmt.Errorf("%s: %w", path, err)
 	}
+	pointer, err := os.ReadFile(path + ".active-profile")
+	if err == nil {
+		if l.Profiles != nil {
+			return l, fmt.Errorf("%s: mixed inline and separate profiles", path)
+		}
+		if err := json.Unmarshal(pointer, &l.ActiveProfile); err != nil {
+			return l, fmt.Errorf("active profile: %w", err)
+		}
+		entries, err := os.ReadDir(path + ".profiles")
+		if err != nil {
+			return l, err
+		}
+		l.Profiles = make(map[string]routingProfile, len(entries))
+		for _, entry := range entries {
+			name := strings.TrimSuffix(entry.Name(), ".json")
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || !profileNameOK(name) {
+				return l, fmt.Errorf("invalid profile file %q", entry.Name())
+			}
+			body, err := os.ReadFile(filepath.Join(path+".profiles", entry.Name()))
+			if err != nil {
+				return l, err
+			}
+			var profile routingProfile
+			if err := json.Unmarshal(body, &profile); err != nil {
+				return l, fmt.Errorf("profile %q: %w", name, err)
+			}
+			l.Profiles[name] = profile
+		}
+	} else if !os.IsNotExist(err) {
+		return l, err
+	}
 	if l.Profiles != nil {
 		if err := l.useProfile(l.ActiveProfile); err != nil {
 			return l, fmt.Errorf("%s: %w", path, err)
@@ -288,8 +319,32 @@ func readProviders(path string) (localSetup, error) {
 	return l, nil
 }
 
+func writeAtomicIfChanged(path string, data []byte) error {
+	if old, err := os.ReadFile(path); err == nil {
+		if string(old) == string(data) {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func writeActiveProfile(path, name string) error {
+	data, err := json.Marshal(name)
+	if err != nil {
+		return err
+	}
+	return writeAtomicIfChanged(path+".active-profile", append(data, '\n'))
+}
+
 func writeProviders(path string, l localSetup) error {
 	l = l.clone()
+	active := l.ActiveProfile
 	l.Preferred = "" // priority belongs to each pool, never the model catalog
 	for i := range l.Models {
 		l.Models[i].Efforts = nil
@@ -299,20 +354,42 @@ func writeProviders(path string, l localSetup) error {
 		if err := l.syncActiveProfile(); err != nil {
 			return err
 		}
+		dir := path + ".profiles"
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		for name, profile := range l.Profiles {
+			if !profileNameOK(name) {
+				return fmt.Errorf("invalid profile name %q", name)
+			}
+			data, err := json.MarshalIndent(profile, "", "  ")
+			if err != nil {
+				return err
+			}
+			if err := writeAtomicIfChanged(filepath.Join(dir, name+".json"), append(data, '\n')); err != nil {
+				return err
+			}
+		}
 		l.FamilyRoutes, l.Routes, l.ModelPools, l.PoolSettings = nil, nil, nil, nil
+		l.Profiles, l.ActiveProfile = nil, ""
 	}
-	if l.Profiles == nil && l.Routes == nil {
-		l.Routes = map[string]map[string]modelRoute{}
+	if l.Profiles == nil && l.Routes == nil && l.ActiveProfile == "" {
+		// Legacy configurations still need an explicit routes map for migration.
+		if _, err := os.Stat(path + ".active-profile"); os.IsNotExist(err) {
+			l.Routes = map[string]map[string]modelRoute{}
+		}
 	}
 	data, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+	if err := writeAtomicIfChanged(path, append(data, '\n')); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if active != "" {
+		return writeActiveProfile(path, active)
+	}
+	return nil
 }
 
 // seedFromEnv builds the initial setup from ROUTER_LOCAL_* for a router that
@@ -338,18 +415,24 @@ func seedFromEnv() localSetup {
 	return l
 }
 
-// loadLocalSetup prefers the file and falls back to env.
-func loadLocalSetup(path string) localSetup {
+// Only a missing file may be seeded from the environment. Existing-file errors
+// must stop startup before any migration can write to disk.
+func loadLocalSetupChecked(path string) (localSetup, error) {
 	if path != "" {
 		l, err := readProviders(path)
-		switch {
-		case err == nil:
-			return l
-		case !os.IsNotExist(err):
-			log.Printf("providers: %v; using ROUTER_LOCAL_* from env", err)
+		if err == nil {
+			return l, nil
+		}
+		if !os.IsNotExist(err) {
+			return localSetup{}, err
+		}
+		if _, statErr := os.Stat(path); statErr == nil {
+			return localSetup{}, err
+		} else if !os.IsNotExist(statErr) {
+			return localSetup{}, statErr
 		}
 	}
-	return seedFromEnv()
+	return seedFromEnv(), nil
 }
 
 // clone copies the slices so an edit never touches the snapshot readers hold.

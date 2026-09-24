@@ -72,16 +72,7 @@ family route can be stored as `"high": {"mode": "model", "model":
 ```json
 {
   "providers": [{"name": "codex", "type": "codex", "base_url": "https://chatgpt.com/backend-api/codex"}],
-  "models": [{"provider": "codex", "model": "gpt-6-sol"}],
-  "model_pools": {
-    "Deep work": [{"model": "codex/gpt-6-sol", "effort": "xhigh"}]
-  },
-  "family_routes": {
-    "opus": {
-      "high": {"mode": "pool", "pool": "Deep work"},
-      "low": {"mode": "anthropic"}
-    }
-  }
+  "models": [{"provider": "codex", "model": "gpt-6-sol"}]
 }
 ```
 
@@ -105,12 +96,31 @@ which can disable routes or empty pools in every profile. Active and final
 profiles cannot be deleted. Automatic switching by remaining quota is not
 implemented.
 
-The on-disk schema keeps `providers`, `models` and `catalog` at the top level,
-and places `family_routes`, `routes`, `model_pools` and `pool_settings` under
-`profiles.<name>`. `active_profile` selects exactly one profile. The example
-above is the pre-migration shape, accepted on upgrade.
+The on-disk schema keeps `providers`, `models` and `catalog` in
+`providers.json`. Each profile has its own `providers.json.profiles/<name>.json`
+with `family_routes`, `routes`, `model_pools` and `pool_settings`.
+`providers.json.active-profile` contains the active profile name as a JSON
+string. The previous combined format is accepted on upgrade. Activation writes
+only the pointer file; a stale settings form must be refreshed before saving.
 
-The example enables the two listed effort combinations for all Opus versions.
+For example, `providers.json.profiles/default.json` can contain:
+
+```json
+{
+  "family_routes": {
+    "opus": {
+      "high": {"mode": "pool", "pool": "Deep work"},
+      "low": {"mode": "anthropic"}
+    }
+  },
+  "routes": {},
+  "model_pools": {
+    "Deep work": [{"model": "codex/gpt-6-sol", "effort": "xhigh"}]
+  }
+}
+```
+
+This enables the two listed effort combinations for all Opus versions.
 Use `routes` with exact model IDs for individual exceptions; absent entries
 inherit the family. Add further
 members in **Пулы моделей** and assignments in **Маршруты**. Removing a

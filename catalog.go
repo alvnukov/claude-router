@@ -183,6 +183,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 			return err
 		}
 		u.cs.provMtime = mtime(u.cs.provPath)
+		u.cs.profileMtime = profilesMtime(u.cs.provPath)
 	}
 	u.cs.c.local = next
 	log.Printf("model catalogs refreshed: anthropic=%d providers=%d notes=%d", len(next.Catalog.Anthropic), len(results), len(next.Catalog.Notes))
@@ -252,6 +253,45 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 				continue
 			}
 			l.ModelPools[name] = append(l.ModelPools[name], poolTarget{Model: key, Effort: template.Effort})
+		}
+		for profileName, profile := range original.Profiles {
+			if profileName == original.ActiveProfile {
+				continue
+			}
+			current := l.Profiles[profileName]
+			for poolName, pool := range profile.ModelPools {
+				present := false
+				for _, member := range current.ModelPools[poolName] {
+					if member.Model == key {
+						present = true
+						break
+					}
+				}
+				if present {
+					continue
+				}
+				var template poolTarget
+				var templateID string
+				for _, member := range pool {
+					prefix := providerName + "/"
+					if !strings.HasPrefix(member.Model, prefix) {
+						continue
+					}
+					id := strings.TrimPrefix(member.Model, prefix)
+					if codexFamily(id) == family && newerModel(m.ID, id) && (templateID == "" || newerModel(id, templateID)) {
+						template, templateID = member, id
+					}
+				}
+				if templateID == "" {
+					continue
+				}
+				if template.Effort != "" && !slices.Contains(m.Efforts, template.Effort) {
+					notes = append(notes, fmt.Sprintf("%s/%s: %s не добавлена в пул — effort %s не подтверждён каталогом.", profileName, poolName, key, template.Effort))
+					continue
+				}
+				current.ModelPools[poolName] = append(current.ModelPools[poolName], poolTarget{Model: key, Effort: template.Effort})
+			}
+			l.Profiles[profileName] = current
 		}
 	}
 	ids := make([]string, 0, len(seen))
