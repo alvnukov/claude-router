@@ -33,6 +33,7 @@ func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	cs := newConfigStore(cfg, providersPath())
 	st := newStore(cfg.uiHistory, historyPath())
 	h := newHealth(healthPath())
+	h.life = life
 	if life.mode() != modeStandby {
 		if err := h.loadSnapshot(slotStatePath(state)); err != nil {
 			log.Printf("slot snapshot: %v", err)
@@ -41,6 +42,7 @@ func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &routerServer{cfg: cfg, life: life, health: h, state: state, cs: cs, st: st, background: ctx, cancel: cancel}
 	r.ui = newUIServer(st, cs, h)
+	r.ui.life = life
 	return r
 }
 

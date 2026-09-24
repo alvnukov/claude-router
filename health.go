@@ -50,6 +50,7 @@ type health struct {
 	m        map[string]*modelStat
 	inflight map[string]int // requests being served right now, by model key
 	path     string
+	life     *lifecycle
 }
 
 func healthPath() string {
@@ -176,7 +177,7 @@ func (h *health) reset(model string) {
 }
 
 func (h *health) save() {
-	if h.path == "" {
+	if h.path == "" || (h.life != nil && !h.life.writesSharedState()) {
 		return
 	}
 	h.mu.Lock()
