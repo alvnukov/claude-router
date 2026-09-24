@@ -161,13 +161,30 @@ func main() {
 	codexAuth = newCodexAuthStore()
 	cfg := loadConfig()
 	cs := newConfigStore(cfg, providersPath())
-	cs.watch(2 * time.Second)
+	if err := cs.ensureProfiles(); err != nil {
+		log.Fatalf("profile migration: %v", err)
+	}
 	st := newStore(cfg.uiHistory, historyPath())
 	hl := newHealth(healthPath())
+	cs.health = hl
+	cs.watch(2 * time.Second)
 	startChecker(cs, hl)
 	u := newUIServer(st, cs, hl)
 	u.startCatalogUpdates(context.Background())
+	mux := newMainHandler(cfg, cs, st, hl, u)
+	log.Printf("listening on %s", cfg.listen)
+	log.Printf("  upstream     %s", cfg.upstream)
+	log.Printf("  local        %s", cfg.local.summary())
+	if cfg.uiListen != "" {
+		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
+		startUI(cfg.uiListen, u)
+	}
+	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
+		log.Fatal(err)
+	}
+}
 
+func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
@@ -186,6 +203,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/profiles/{name}/activate", func(w http.ResponseWriter, r *http.Request) {
+		if !sameOriginPost(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		u.profileActivateAPI(w, r)
+	})
 
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.get()
@@ -262,15 +286,5 @@ func main() {
 		pass(w, r, nil)
 	})
 
-	log.Printf("listening on %s", cfg.listen)
-	log.Printf("  upstream     %s", cfg.upstream)
-	log.Printf("  local        %s", cfg.local.summary())
-
-	if cfg.uiListen != "" {
-		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
-		startUI(cfg.uiListen, u)
-	}
-	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
-		log.Fatal(err)
-	}
+	return mux
 }

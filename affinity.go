@@ -24,7 +24,7 @@ func affinityKey(cfg config, body []byte, req anthropicRequest) string {
 	if effort == "" {
 		effort = "default"
 	}
-	definition, _ := json.Marshal([]string{session, req.Model, effort, cfg.routeFor(req.Model, effort).Pool})
+	definition, _ := json.Marshal([]string{session, req.Model, effort, cfg.local.ActiveProfile, cfg.routeFor(req.Model, effort).Pool})
 	digest := sha256.Sum256(definition)
 	return hex.EncodeToString(digest[:])
 }
@@ -89,4 +89,10 @@ func candidateSelection(c candidate) string {
 	}{c.Key, c.Provider, c.Efforts})
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
+}
+
+func (h *health) clearSessions() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.sessions = nil
 }

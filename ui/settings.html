@@ -3,6 +3,11 @@
 <div class="settings-heading"><div><h1>Настройки роутера</h1><p class="help">Семейство модели → входной effort → Anthropic, модель или пул</p></div><a class="btn" href="/">История запросов</a></div>
 {{with .Flash}}<div class="note ok" role="status">{{.}}</div>{{end}}
 {{with .Err}}<div class="note err" role="alert">{{.}}</div>{{end}}
+<section class="settings-section" id="profiles"><h2>Профили маршрутизации</h2><p class="help">Активный профиль: <strong>{{.ActiveProfile}}</strong>. Провайдеры и каталог моделей общие для всех профилей; маршруты и пулы принадлежат выбранному профилю. Переключение применяется к следующему запросу.</p>
+<div class="inline-form">{{range .ProfileNames}}<form hx-post="/settings/profiles/activate" hx-target="#detail"><input type="hidden" name="name" value="{{.}}"><button class="btn" type="submit" {{if eq . $.ActiveProfile}}disabled{{end}}>{{.}}</button></form>{{end}}</div>
+<form class="inline-form" hx-post="/settings/profiles" hx-target="#detail"><input name="name" placeholder="Имя профиля" aria-label="Имя нового профиля" required><button class="btn" type="submit" name="mode" value="clone">Клонировать активный</button><button class="btn" type="submit" name="mode" value="empty">Создать пустой</button></form>
+{{if gt (len .ProfileNames) 1}}<details class="settings-extra"><summary>Удалить неактивный профиль</summary><p class="help">Последний и активный профили удалить нельзя.</p><form class="inline-form" hx-post="/settings/profiles/delete" hx-target="#detail" hx-confirm="Удалить профиль? Сохранённые маршруты и пулы будут потеряны."><select name="name" aria-label="Удаляемый профиль">{{range .ProfileNames}}{{if ne . $.ActiveProfile}}<option value="{{.}}">{{.}}</option>{{end}}{{end}}</select><button class="link err" type="submit">Удалить</button></form></details>{{end}}</section>
+
 {{template "claude-proxy" .ClaudeProxy}}
 <div class="catalog-status"><form hx-post="/settings/refresh-models" hx-target="#detail" hx-disabled-elt="find button"><button class="btn" type="submit">Обновить модели</button></form><span class="help">Автоматически раз в час{{if not .Catalog.CheckedAt.IsZero}} · проверено {{ago .Catalog.CheckedAt}}{{end}}</span></div>
 {{range .Catalog.Notes}}<div class="note warn">{{.}}</div>{{end}}
@@ -128,7 +133,7 @@
       {{end}}
     </table>
     <p><button type="submit" class="btn primary">Сохранить провайдера</button>
-       <button type="button" class="link err" hx-post="/settings/providers" hx-vals='{"op":"remove","name":"{{.P.Name}}"}' hx-confirm="Удалить провайдера {{.P.Name}} вместе с его моделями ({{.NModels}})?" hx-target="#detail" hx-swap="innerHTML">удалить провайдера</button></p>
+       <button type="button" class="link err" hx-post="/settings/providers" hx-vals='{"op":"remove","name":"{{.P.Name}}"}' hx-confirm="Удалить провайдера {{.P.Name}} вместе с его моделями ({{.NModels}})? Это изменит все профили: прямые маршруты будут отключены, модели удалены из пулов." hx-target="#detail" hx-swap="innerHTML">удалить провайдера</button></p>
   </form>
   </details>
 </div>

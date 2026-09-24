@@ -24,6 +24,7 @@ type configStore struct {
 	provPath  string
 	envMtime  time.Time
 	provMtime time.Time
+	health    *health
 }
 
 // envFilePath is ROUTER_ENV_FILE or the env file beside the binary.
@@ -99,15 +100,10 @@ func (s *configStore) watch(every time.Duration) {
 			}
 			if m := mtime(s.provPath); !m.Equal(s.provMtime) {
 				s.provMtime = m
-				l, err := readProviders(s.provPath)
-				if err != nil {
+				if err := s.reloadProfiles(s.health); err != nil {
 					if !os.IsNotExist(err) {
 						log.Printf("providers reload: %v", err)
 					}
-					continue
-				}
-				if err := s.applyLocal(l, false); err != nil {
-					log.Printf("providers reload: %v", err)
 				} else {
 					log.Printf("providers reloaded: %s", s.get().local.summary())
 				}
@@ -222,16 +218,26 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 // applyLocal validates and installs a providers/models setup; with write set
 // it also rewrites providers.json.
 func (s *configStore) applyLocal(l localSetup, write bool) error {
-	if err := l.validate(); err != nil {
-		return err
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.c
+	if err := l.syncActiveProfile(); err != nil {
+		return err
+	}
+	l.repairInactiveProfiles()
+	if err := l.validateProfiles(); err != nil {
+		return err
+	}
 	next.local = l
 	if migrated, changed := migratePoolSettings(next); changed {
 		l = migrated
 		next.local = l
+	}
+	if err := l.syncActiveProfile(); err != nil {
+		return err
+	}
+	if err := l.validateProfiles(); err != nil {
+		return err
 	}
 	if write {
 		if s.provPath == "" {

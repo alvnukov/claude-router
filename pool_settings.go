@@ -96,6 +96,9 @@ func (s *configStore) savePoolSettings(name string, settings poolSettings) error
 	if s.provPath == "" {
 		return fmt.Errorf("файл настроек провайдеров отключён")
 	}
+	if err := l.syncActiveProfile(); err != nil {
+		return err
+	}
 	if err := writeProviders(s.provPath, l); err != nil {
 		return err
 	}

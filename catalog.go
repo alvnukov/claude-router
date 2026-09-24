@@ -174,7 +174,8 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 		}
 		next.Catalog.Providers[p.Name] = cached
 	}
-	if err := next.validate(); err != nil {
+	next.repairInactiveProfiles()
+	if err := next.validateProfiles(); err != nil {
 		return err
 	}
 	if u.cs.provPath != "" {

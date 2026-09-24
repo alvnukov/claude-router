@@ -114,6 +114,10 @@ func (u *uiServer) handler() http.Handler {
 	mux.HandleFunc("GET /requests/{id}/sent.json", u.rawSent)
 	mux.HandleFunc("GET /requests/{id}/response.txt", u.rawResponse)
 	mux.HandleFunc("GET /settings", u.settings)
+	mux.HandleFunc("POST /api/profiles/{name}/activate", u.profileActivateAPI)
+	mux.HandleFunc("POST /settings/profiles", u.profileCreate)
+	mux.HandleFunc("POST /settings/profiles/activate", u.profileActivate)
+	mux.HandleFunc("POST /settings/profiles/delete", u.profileDelete)
 	mux.HandleFunc("POST /settings/pool-settings", u.settingsPoolSave)
 	mux.HandleFunc("POST /settings/claude-proxy", u.settingsClaudeProxy)
 	mux.HandleFunc("POST /settings/probe", u.settingsProbe)
@@ -426,19 +430,21 @@ func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*r
 // ---- settings ----
 
 type settingsView struct {
-	ClaudeProxy claudeProxyView
-	C           config
-	Flash, Err  string
-	Models      []candidate
-	Providers   []providerRow
-	Pick        *providerRow
-	Login       codexLoginView
-	Pools       []poolRow
-	Routes      []routeRow
-	Families    []routeRow
-	Catalog     modelCatalog
-	AllModels   []localModel
-	Efforts     []string
+	ActiveProfile string
+	ProfileNames  []string
+	ClaudeProxy   claudeProxyView
+	C             config
+	Flash, Err    string
+	Models        []candidate
+	Providers     []providerRow
+	Pick          *providerRow
+	Login         codexLoginView
+	Pools         []poolRow
+	Routes        []routeRow
+	Families      []routeRow
+	Catalog       modelCatalog
+	AllModels     []localModel
+	Efforts       []string
 }
 
 type routeRow struct {
@@ -508,7 +514,11 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts}
+	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts}
+	for name := range c.local.Profiles {
+		v.ProfileNames = append(v.ProfileNames, name)
+	}
+	sort.Strings(v.ProfileNames)
 	info := map[string]probeModel{}
 	for _, p := range c.local.Providers {
 		row := u.providerRow(c, p, false, modelFilter{})
@@ -834,6 +844,9 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		}
+		if name != orig {
+			l.renameInactiveProvider(orig, name)
 		}
 		if name != orig {
 			if entry, ok := l.Catalog.Providers[orig]; ok {

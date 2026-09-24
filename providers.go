@@ -46,15 +46,17 @@ type modelRoute struct {
 var anthropicModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"}
 
 type localSetup struct {
-	PoolSettings map[string]poolSettings          `json:"pool_settings,omitempty"`
-	FamilyRoutes map[string]map[string]modelRoute `json:"family_routes"`
-	Catalog      modelCatalog                     `json:"catalog,omitempty"`
-	Providers    []provider                       `json:"providers"`
-	Models       []localModel                     `json:"models"`
-	Preferred    string                           `json:"preferred,omitempty"` // legacy input / request-scoped first pool member
-	Pools        map[string][]string              `json:"pools,omitempty"`     // legacy, read only
-	Routes       map[string]map[string]modelRoute `json:"routes"`
-	ModelPools   map[string][]poolTarget          `json:"model_pools"`
+	ActiveProfile string                           `json:"active_profile,omitempty"`
+	Profiles      map[string]routingProfile        `json:"profiles,omitempty"`
+	PoolSettings  map[string]poolSettings          `json:"pool_settings,omitempty"`
+	FamilyRoutes  map[string]map[string]modelRoute `json:"family_routes"`
+	Catalog       modelCatalog                     `json:"catalog,omitempty"`
+	Providers     []provider                       `json:"providers"`
+	Models        []localModel                     `json:"models"`
+	Preferred     string                           `json:"preferred,omitempty"` // legacy input / request-scoped first pool member
+	Pools         map[string][]string              `json:"pools,omitempty"`     // legacy, read only
+	Routes        map[string]map[string]modelRoute `json:"routes"`
+	ModelPools    map[string][]poolTarget          `json:"model_pools"`
 }
 
 func providersPath() string {
@@ -275,7 +277,12 @@ func readProviders(path string) (localSetup, error) {
 	if err := json.Unmarshal(data, &l); err != nil {
 		return l, fmt.Errorf("%s: %w", path, err)
 	}
-	if err := l.validate(); err != nil {
+	if l.Profiles != nil {
+		if err := l.useProfile(l.ActiveProfile); err != nil {
+			return l, fmt.Errorf("%s: %w", path, err)
+		}
+	}
+	if err := l.validateProfiles(); err != nil {
 		return l, fmt.Errorf("%s: %w", path, err)
 	}
 	return l, nil
@@ -288,7 +295,13 @@ func writeProviders(path string, l localSetup) error {
 		l.Models[i].Efforts = nil
 	}
 	l.Pools = nil
-	if l.Routes == nil {
+	if l.Profiles != nil {
+		if err := l.syncActiveProfile(); err != nil {
+			return err
+		}
+		l.FamilyRoutes, l.Routes, l.ModelPools, l.PoolSettings = nil, nil, nil, nil
+	}
+	if l.Profiles == nil && l.Routes == nil {
 		l.Routes = map[string]map[string]modelRoute{}
 	}
 	data, err := json.MarshalIndent(l, "", "  ")
@@ -341,6 +354,14 @@ func loadLocalSetup(path string) localSetup {
 
 // clone copies the slices so an edit never touches the snapshot readers hold.
 func (l localSetup) clone() localSetup {
+	if l.Profiles != nil {
+		profiles := make(map[string]routingProfile, len(l.Profiles))
+		for name, p := range l.Profiles {
+			c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
+			profiles[name] = routingProfile{c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings}
+		}
+		l.Profiles = profiles
+	}
 	if l.PoolSettings != nil {
 		settings := make(map[string]poolSettings, len(l.PoolSettings))
 		for name, value := range l.PoolSettings {
