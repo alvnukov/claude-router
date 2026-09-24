@@ -29,6 +29,7 @@ var uiFS embed.FS
 // no auth: everything it shows is the traffic of the user running it.
 type uiServer struct {
 	codexUsage     codexUsageCache
+	limits         *anthropicLimits
 	claudeProxy    *claudeProxy
 	catalogMu      sync.Mutex
 	fetchAnthropic func(context.Context) ([]string, error)
@@ -98,7 +99,7 @@ func startUI(addr string, u *uiServer) {
 }
 
 func newUIServer(st *store, cs *configStore, hl *health) *uiServer {
-	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl}
+	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: newAnthropicLimits("", anthropicLimitsMaxAge)}
 }
 
 func (u *uiServer) handler() http.Handler {

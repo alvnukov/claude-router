@@ -204,6 +204,9 @@ func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiSer
 	}
 	// FlushInterval -1 streams SSE through without buffering.
 	proxy.FlushInterval = -1
+	if u != nil {
+		proxy.ModifyResponse = u.limits.observeResponse
+	}
 
 	pass := func(w http.ResponseWriter, r *http.Request, body []byte) {
 		if body != nil {
