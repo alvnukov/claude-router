@@ -1,0 +1,110 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"sync"
+)
+
+type lifecycleMode string
+
+const (
+	modeStandby  lifecycleMode = "standby"
+	modeActive   lifecycleMode = "active"
+	modeQuiesced lifecycleMode = "quiesced"
+	modeDraining lifecycleMode = "draining"
+)
+
+type lifecycle struct {
+	mu       sync.Mutex
+	state    lifecycleMode
+	inflight sync.WaitGroup
+}
+
+func newLifecycle(standby bool) *lifecycle {
+	state := modeActive
+	if standby {
+		state = modeStandby
+	}
+	return &lifecycle{state: state}
+}
+
+func (l *lifecycle) mode() lifecycleMode {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.state
+}
+
+func (l *lifecycle) acceptsTraffic() bool {
+	state := l.mode()
+	return state == modeActive || state == modeQuiesced
+}
+
+func (l *lifecycle) writesSharedState() bool { return l.mode() == modeActive }
+
+func (l *lifecycle) activate() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state == modeDraining {
+		return fmt.Errorf("cannot activate draining instance")
+	}
+	l.state = modeActive
+	return nil
+}
+
+func (l *lifecycle) quiesce() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state != modeActive && l.state != modeQuiesced {
+		return fmt.Errorf("cannot quiesce %s instance", l.state)
+	}
+	l.state = modeQuiesced
+	return nil
+}
+
+func (l *lifecycle) drain() {
+	l.mu.Lock()
+	l.state = modeDraining
+	l.mu.Unlock()
+}
+
+func (l *lifecycle) wait(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() { l.inflight.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (l *lifecycle) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		l.mu.Lock()
+		if l.state != modeActive && l.state != modeQuiesced {
+			l.mu.Unlock()
+			http.Error(w, "router not active", http.StatusServiceUnavailable)
+			return
+		}
+		l.inflight.Add(1)
+		l.mu.Unlock()
+		defer l.inflight.Done()
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (l *lifecycle) healthz(w http.ResponseWriter, r *http.Request) {
+	state := l.mode()
+	w.Header().Set("Content-Type", "application/json")
+	if state == modeDraining {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+	json.NewEncoder(w).Encode(struct {
+		PID  int           `json:"pid"`
+		Mode lifecycleMode `json:"mode"`
+	}{os.Getpid(), state})
+}
