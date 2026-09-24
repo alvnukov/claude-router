@@ -58,14 +58,26 @@ func atoiOr(s string, def int) int {
 }
 
 func loadConfig() config {
+	c, err := loadConfigChecked()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	return c
+}
+
+func loadConfigChecked() (config, error) {
 	up, err := url.Parse(env("ROUTER_UPSTREAM_URL", "https://api.anthropic.com"))
 	if err != nil {
-		log.Fatalf("bad ROUTER_UPSTREAM_URL: %v", err)
+		return config{}, fmt.Errorf("bad ROUTER_UPSTREAM_URL: %w", err)
+	}
+	local, err := loadLocalSetupChecked(providersPath())
+	if err != nil {
+		return config{}, err
 	}
 	c := config{
 		listen:   env("ROUTER_LISTEN", "127.0.0.1:8787"),
 		upstream: up,
-		local:    loadLocalSetup(providersPath()),
+		local:    local,
 	}
 	c.maxInputChars = atoiOr(env("ROUTER_LOCAL_MAX_INPUT_CHARS", "0"), 0)
 	c.failover = env("ROUTER_LOCAL_FAILOVER", "1") != "0"
@@ -76,23 +88,23 @@ func loadConfig() config {
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
 	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
 		if err := savePoolMigration(providersPath(), migrated); err != nil {
-			log.Fatalf("pool migration: %v", err)
+			return config{}, fmt.Errorf("pool migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migrateFamilyRoutes(c.local); changed {
 		if err := saveConfigurationMigration(providersPath(), migrated, ".before-families"); err != nil {
-			log.Fatalf("family migration: %v", err)
+			return config{}, fmt.Errorf("family migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migratePoolSettings(c); changed {
 		if err := saveConfigurationMigration(providersPath(), migrated, ".before-pool-settings"); err != nil {
-			log.Fatalf("pool settings migration: %v", err)
+			return config{}, fmt.Errorf("pool settings migration: %w", err)
 		}
 		c.local = migrated
 	}
-	return c
+	return c, nil
 }
 
 // Only explicit routes can serve a model. Unknown and disabled models never
@@ -161,13 +173,30 @@ func main() {
 	codexAuth = newCodexAuthStore()
 	cfg := loadConfig()
 	cs := newConfigStore(cfg, providersPath())
-	cs.watch(2 * time.Second)
+	if err := cs.ensureProfiles(); err != nil {
+		log.Fatalf("profile migration: %v", err)
+	}
 	st := newStore(cfg.uiHistory, historyPath())
 	hl := newHealth(healthPath())
+	cs.health = hl
+	cs.watch(2 * time.Second)
 	startChecker(cs, hl)
 	u := newUIServer(st, cs, hl)
 	u.startCatalogUpdates(context.Background())
+	mux := newMainHandler(cfg, cs, st, hl, u)
+	log.Printf("listening on %s", cfg.listen)
+	log.Printf("  upstream     %s", cfg.upstream)
+	log.Printf("  local        %s", cfg.local.summary())
+	if cfg.uiListen != "" {
+		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
+		startUI(cfg.uiListen, u)
+	}
+	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
+		log.Fatal(err)
+	}
+}
 
+func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
@@ -186,6 +215,13 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/profiles/{name}/activate", func(w http.ResponseWriter, r *http.Request) {
+		if !sameOriginPost(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		u.profileActivateAPI(w, r)
+	})
 
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.get()
@@ -262,15 +298,5 @@ func main() {
 		pass(w, r, nil)
 	})
 
-	log.Printf("listening on %s", cfg.listen)
-	log.Printf("  upstream     %s", cfg.upstream)
-	log.Printf("  local        %s", cfg.local.summary())
-
-	if cfg.uiListen != "" {
-		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
-		startUI(cfg.uiListen, u)
-	}
-	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
-		log.Fatal(err)
-	}
+	return mux
 }

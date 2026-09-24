@@ -18,12 +18,14 @@ import (
 // failover) and providers.json for local providers and models. Both are
 // rewritten in place by the UI and re-read on a hand edit.
 type configStore struct {
-	mu        sync.RWMutex
-	c         config
-	envPath   string
-	provPath  string
-	envMtime  time.Time
-	provMtime time.Time
+	mu           sync.RWMutex
+	c            config
+	envPath      string
+	provPath     string
+	envMtime     time.Time
+	provMtime    time.Time
+	profileMtime time.Time
+	health       *health
 }
 
 // envFilePath is ROUTER_ENV_FILE or the env file beside the binary.
@@ -61,6 +63,7 @@ func newConfigStore(c config, provPath string) *configStore {
 	s := &configStore{c: c, envPath: p, provPath: provPath}
 	s.envMtime = mtime(p)
 	s.provMtime = mtime(provPath)
+	s.profileMtime = profilesMtime(provPath)
 	return s
 }
 
@@ -97,18 +100,13 @@ func (s *configStore) watch(every time.Duration) {
 			if s.provPath == "" {
 				continue
 			}
-			if m := mtime(s.provPath); !m.Equal(s.provMtime) {
-				s.provMtime = m
-				l, err := readProviders(s.provPath)
-				if err != nil {
+			if m, p := mtime(s.provPath), profilesMtime(s.provPath); !m.Equal(s.provMtime) || !p.Equal(s.profileMtime) {
+				if err := s.reloadProfiles(s.health); err != nil {
 					if !os.IsNotExist(err) {
 						log.Printf("providers reload: %v", err)
 					}
-					continue
-				}
-				if err := s.applyLocal(l, false); err != nil {
-					log.Printf("providers reload: %v", err)
 				} else {
+					s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
 					log.Printf("providers reloaded: %s", s.get().local.summary())
 				}
 			}
@@ -221,17 +219,36 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 
 // applyLocal validates and installs a providers/models setup; with write set
 // it also rewrites providers.json.
-func (s *configStore) applyLocal(l localSetup, write bool) error {
-	if err := l.validate(); err != nil {
-		return err
-	}
+func (s *configStore) applyLocal(l localSetup, write bool, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.applyLocalLocked(l, write, expectedProfile...)
+}
+
+// applyLocalLocked requires s.mu; reload uses it while holding the lock from
+// disk read through installation so activation cannot interleave.
+func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile ...string) error {
 	next := s.c
+	if write && l.Profiles != nil && (l.ActiveProfile != next.local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.local.ActiveProfile) {
+		return fmt.Errorf("активный профиль изменился; обновите страницу")
+	}
+	if err := l.syncActiveProfile(); err != nil {
+		return err
+	}
+	l.repairInactiveProfiles()
+	if err := l.validateProfiles(); err != nil {
+		return err
+	}
 	next.local = l
 	if migrated, changed := migratePoolSettings(next); changed {
 		l = migrated
 		next.local = l
+	}
+	if err := l.syncActiveProfile(); err != nil {
+		return err
+	}
+	if err := l.validateProfiles(); err != nil {
+		return err
 	}
 	if write {
 		if s.provPath == "" {
@@ -241,6 +258,7 @@ func (s *configStore) applyLocal(l localSetup, write bool) error {
 			return fmt.Errorf("запись %s: %w", s.provPath, err)
 		}
 		s.provMtime = mtime(s.provPath)
+		s.profileMtime = profilesMtime(s.provPath)
 	}
 	s.c = next
 	return nil

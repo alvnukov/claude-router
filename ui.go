@@ -114,6 +114,10 @@ func (u *uiServer) handler() http.Handler {
 	mux.HandleFunc("GET /requests/{id}/sent.json", u.rawSent)
 	mux.HandleFunc("GET /requests/{id}/response.txt", u.rawResponse)
 	mux.HandleFunc("GET /settings", u.settings)
+	mux.HandleFunc("POST /api/profiles/{name}/activate", u.profileActivateAPI)
+	mux.HandleFunc("POST /settings/profiles", u.profileCreate)
+	mux.HandleFunc("POST /settings/profiles/activate", u.profileActivate)
+	mux.HandleFunc("POST /settings/profiles/delete", u.profileDelete)
 	mux.HandleFunc("POST /settings/pool-settings", u.settingsPoolSave)
 	mux.HandleFunc("POST /settings/claude-proxy", u.settingsClaudeProxy)
 	mux.HandleFunc("POST /settings/probe", u.settingsProbe)
@@ -426,22 +430,25 @@ func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*r
 // ---- settings ----
 
 type settingsView struct {
-	ClaudeProxy claudeProxyView
-	C           config
-	Flash, Err  string
-	Models      []candidate
-	Providers   []providerRow
-	Pick        *providerRow
-	Login       codexLoginView
-	Pools       []poolRow
-	Routes      []routeRow
-	Families    []routeRow
-	Catalog     modelCatalog
-	AllModels   []localModel
-	Efforts     []string
+	ActiveProfile string
+	ProfileNames  []string
+	ClaudeProxy   claudeProxyView
+	C             config
+	Flash, Err    string
+	Models        []candidate
+	Providers     []providerRow
+	Pick          *providerRow
+	Login         codexLoginView
+	Pools         []poolRow
+	Routes        []routeRow
+	Families      []routeRow
+	Catalog       modelCatalog
+	AllModels     []localModel
+	Efforts       []string
 }
 
 type routeRow struct {
+	Profile              string
 	Model, Label, Family string
 	IsFamily             bool
 	Choices              []routeChoice
@@ -462,6 +469,7 @@ var claudeEfforts = []string{"default", "low", "medium", "high", "xhigh", "max"}
 var providerEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
 type poolRow struct {
+	Profile   string
 	Settings  poolSettings
 	Name      string
 	Keys      []poolKeyRow
@@ -508,7 +516,11 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts}
+	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts}
+	for name := range c.local.Profiles {
+		v.ProfileNames = append(v.ProfileNames, name)
+	}
+	sort.Strings(v.ProfileNames)
 	info := map[string]probeModel{}
 	for _, p := range c.local.Providers {
 		row := u.providerRow(c, p, false, modelFilter{})
@@ -524,7 +536,7 @@ func (u *uiServer) settingsView() settingsView {
 	sort.Strings(names)
 	for _, name := range names {
 		targets := c.local.ModelPools[name]
-		row := poolRow{Name: name, Settings: c.poolSettings(name)}
+		row := poolRow{Profile: c.local.ActiveProfile, Name: name, Settings: c.poolSettings(name)}
 		present := map[string]bool{}
 		for i, target := range targets {
 			options := modelEffortOptions(c.local, target.Model, info)
@@ -581,7 +593,7 @@ func (u *uiServer) settingsView() settingsView {
 	}
 	sort.Strings(familyNames)
 	for _, family := range familyNames {
-		row := routeRow{Model: family, Label: strings.ToUpper(family[:1]) + family[1:], IsFamily: true, Pools: v.Pools, Targets: directTargets}
+		row := routeRow{Profile: c.local.ActiveProfile, Model: family, Label: strings.ToUpper(family[:1]) + family[1:], IsFamily: true, Pools: v.Pools, Targets: directTargets}
 		for _, effort := range claudeEfforts {
 			route, ok := c.local.FamilyRoutes[family][effort]
 			if !ok {
@@ -598,7 +610,7 @@ func (u *uiServer) settingsView() settingsView {
 	sort.Strings(ids)
 	for _, model := range ids {
 		family := claudeFamily(model)
-		row := routeRow{Model: model, Label: model, Family: family, Pools: v.Pools, Targets: directTargets}
+		row := routeRow{Profile: c.local.ActiveProfile, Model: model, Label: model, Family: family, Pools: v.Pools, Targets: directTargets}
 		for _, effort := range claudeEfforts {
 			route, explicit := c.local.Routes[model][effort]
 			choice := routeChoice{Effort: effort, Destination: "disabled"}
@@ -638,6 +650,10 @@ func (u *uiServer) settings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
+		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
+		return
+	}
 	if !sameOriginPost(r) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -651,7 +667,7 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		ProbeEvery:    r.FormValue("probe_every"),
 	})
 	if err == nil {
-		err = u.cs.savePoolSettings(r.FormValue("name"), settings)
+		err = u.cs.savePoolSettings(r.FormValue("name"), settings, r.FormValue("profile"))
 	}
 	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены")
 }
@@ -682,6 +698,10 @@ func routeDestination(route modelRoute) string {
 
 // settingsRoute saves family defaults or explicit version overrides.
 func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
+		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
+		return
+	}
 	r.ParseForm()
 	l := u.cs.get().local.clone()
 	if l.Routes == nil {
@@ -726,7 +746,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	} else {
 		l.Routes[model] = choices
 	}
-	u.renderSettingsResult(w, u.cs.applyLocal(l, true), "Маршруты сохранены: "+model)
+	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), "Маршруты сохранены: "+model)
 }
 
 func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {
@@ -834,6 +854,9 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+		}
+		if name != orig {
+			l.renameInactiveProvider(orig, name)
 		}
 		if name != orig {
 			if entry, ok := l.Catalog.Providers[orig]; ok {
@@ -975,6 +998,10 @@ func (u *uiServer) settingsCodexStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
+	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
+		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
+		return
+	}
 	r.ParseForm()
 	l := u.cs.get().local.clone()
 	if l.ModelPools == nil {
@@ -1041,7 +1068,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		err = u.validateTargetEffort(l, key, r.FormValue("effort"))
 	}
 	if err == nil {
-		err = u.cs.applyLocal(l, true)
+		err = u.cs.applyLocal(l, true, r.FormValue("profile"))
 	}
 	u.renderSettingsResult(w, err, "Пул сохранён")
 }
@@ -1097,13 +1124,14 @@ func modelEffortOptions(l localSetup, key string, info map[string]probeModel) []
 }
 
 type poolAddView struct {
+	Profile   string
 	Name, Key string
 	Models    []localModel
 	Options   []string
 }
 
 func (u *uiServer) poolAddView(l localSetup, name, key string, info map[string]probeModel) poolAddView {
-	v := poolAddView{Name: name}
+	v := poolAddView{Profile: l.ActiveProfile, Name: name}
 	present := map[string]bool{}
 	for _, m := range l.ModelPools[name] {
 		present[m.Model] = true

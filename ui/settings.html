@@ -3,6 +3,11 @@
 <div class="settings-heading"><div><h1>Настройки роутера</h1><p class="help">Семейство модели → входной effort → Anthropic, модель или пул</p></div><a class="btn" href="/">История запросов</a></div>
 {{with .Flash}}<div class="note ok" role="status">{{.}}</div>{{end}}
 {{with .Err}}<div class="note err" role="alert">{{.}}</div>{{end}}
+<section class="settings-section" id="profiles"><h2>Профили маршрутизации</h2><p class="help">Активный профиль: <strong>{{.ActiveProfile}}</strong>. Провайдеры и каталог моделей общие для всех профилей; маршруты и пулы принадлежат выбранному профилю. Переключение применяется к следующему запросу.</p>
+<div class="inline-form">{{range .ProfileNames}}<form hx-post="/settings/profiles/activate" hx-target="#detail"><input type="hidden" name="name" value="{{.}}"><button class="btn" type="submit" {{if eq . $.ActiveProfile}}disabled{{end}}>{{.}}</button></form>{{end}}</div>
+<form class="inline-form" hx-post="/settings/profiles" hx-target="#detail"><input name="name" placeholder="Имя профиля" aria-label="Имя нового профиля" required><button class="btn" type="submit" name="mode" value="clone">Клонировать активный</button><button class="btn" type="submit" name="mode" value="empty">Создать пустой</button></form>
+{{if gt (len .ProfileNames) 1}}<details class="settings-extra"><summary>Удалить неактивный профиль</summary><p class="help">Последний и активный профили удалить нельзя.</p><form class="inline-form" hx-post="/settings/profiles/delete" hx-target="#detail" hx-confirm="Удалить профиль? Сохранённые маршруты и пулы будут потеряны."><select name="name" aria-label="Удаляемый профиль">{{range .ProfileNames}}{{if ne . $.ActiveProfile}}<option value="{{.}}">{{.}}</option>{{end}}{{end}}</select><button class="link err" type="submit">Удалить</button></form></details>{{end}}</section>
+
 {{template "claude-proxy" .ClaudeProxy}}
 <div class="catalog-status"><form hx-post="/settings/refresh-models" hx-target="#detail" hx-disabled-elt="find button"><button class="btn" type="submit">Обновить модели</button></form><span class="help">Автоматически раз в час{{if not .Catalog.CheckedAt.IsZero}} · проверено {{ago .Catalog.CheckedAt}}{{end}}</span></div>
 {{range .Catalog.Notes}}<div class="note warn">{{.}}</div>{{end}}
@@ -13,14 +18,14 @@
 <details class="settings-extra"><summary>Версии моделей и индивидуальные настройки · {{len .Routes}}</summary>
 <p class="help">«Наследовать» следует настройкам семейства. Явное назначение или запрет здесь имеет приоритет только для этой версии.</p>
 <div class="route-grid">{{range .Routes}}{{template "route-card" .}}{{end}}</div>
-<details class="settings-extra"><summary>Добавить другую модель Anthropic</summary><form class="inline-form" hx-post="/settings/route" hx-target="#detail"><input name="model" placeholder="Точный ID модели" aria-label="ID модели Anthropic" required><button class="btn" type="submit">Добавить</button></form><p class="help">Версия наследует настройки по имени семейства.</p></details>
+<details class="settings-extra"><summary>Добавить другую модель Anthropic</summary><form class="inline-form" hx-post="/settings/route" hx-target="#detail"><input type="hidden" name="profile" value="{{$.ActiveProfile}}"><input name="model" placeholder="Точный ID модели" aria-label="ID модели Anthropic" required><button class="btn" type="submit">Добавить</button></form><p class="help">Версия наследует настройки по имени семейства.</p></details>
 </details>
 </section>
 <section class="settings-section" id="pools"><h2>Пулы моделей</h2><p class="help">Пул содержит несколько моделей со своим effort у каждой. Один пул можно назначить нескольким маршрутам. Порядок задаёт приоритет выбора; здоровые модели имеют преимущество перед моделями после сбоя.</p>
 {{range .Pools}}{{$pool:=.}}
 <div class="pool-card" data-pool="{{.Name}}"><div class="pool-heading"><h3>{{.Name}}</h3><span class="muted">Маршрутов: {{.Uses}}</span>
-<form hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="name" value="{{.Name}}"><button class="link err" name="op" value="delete" type="submit">Удалить пул</button></form></div>
-{{range .Keys}}<div class="pool-member"><code>{{.Key}}</code><form class="inline-form" hx-post="/settings/pools" hx-target="#detail">
+<form hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="name" value="{{.Name}}"><button class="link err" name="op" value="delete" type="submit">Удалить пул</button></form></div>
+{{range .Keys}}<div class="pool-member"><code>{{.Key}}</code><form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{$pool.Profile}}">
 <input type="hidden" name="name" value="{{$pool.Name}}"><input type="hidden" name="key" value="{{.Key}}">
 {{$member:=.}}<label>Effort <select name="effort" aria-label="Effort {{.Key}} в {{$pool.Name}}"><option value="" {{if eq .Effort ""}}selected{{end}}>По умолчанию модели</option>{{if .Unconfirmed}}<option value="{{.Effort}}" selected>{{.Effort}} — не подтверждён каталогом</option>{{end}}{{range .Options}}<option value="{{.}}" {{if eq . $member.Effort}}selected{{end}}>{{.}}</option>{{end}}</select></label>
 <button class="btn" name="op" value="effort" type="submit">Сохранить</button>
@@ -30,7 +35,7 @@
 {{else}}<p class="note warn">В пуле нет моделей — назначенные ему запросы не выполняются.</p>{{end}}
 {{if .Available}}{{template "pool-add" .Add}}{{else}}<p class="help">Другие модели можно добавить в разделе «Подключения».</p>{{end}}
 <details class="settings-extra pool-behavior"><summary>Сессии и таймауты</summary><p class="help">Внутри сессии каждый маршрут закрепляется за выбранной моделью. При сбое до начала ответа роутер пробует следующую модель этого пула и запоминает новый выбор. Начавшийся ответ передаётся потоком; переключение посреди ответа не выполняется.</p>
-<form hx-post="/settings/pool-settings" hx-target="#detail" class="behavior-form" aria-label="Сессии и таймауты пула {{.Name}}">
+<form hx-post="/settings/pool-settings" hx-target="#detail" class="behavior-form" aria-label="Сессии и таймауты пула {{.Name}}"><input type="hidden" name="profile" value="{{.Profile}}">
 <input type="hidden" name="name" value="{{.Name}}">
 <label><input type="checkbox" name="failover" value="1" {{if .Settings.Failover}}checked{{end}}> Переключать модель при сбое</label>
 <label>Ожидание начала ответа, сек.<input type="number" name="first_byte" min="0" value="{{.Settings.FirstByteSec}}"><small>0 — без ограничения</small></label>
@@ -40,7 +45,7 @@
 <button class="btn primary" type="submit">Сохранить настройки пула</button>
 </form></details>
 </div>{{else}}<p class="empty small">Пулы пока не созданы.</p>{{end}}
-<form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="op" value="create"><input name="name" aria-label="Название пула" placeholder="Название: быстрый, сложные задачи…" required><button class="btn primary" type="submit">Создать пул</button></form>
+<form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.ActiveProfile}}"><input type="hidden" name="op" value="create"><input name="name" aria-label="Название пула" placeholder="Название: быстрый, сложные задачи…" required><button class="btn primary" type="submit">Создать пул</button></form>
 </section>
 <section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
 {{template "codex-login" .Login}}
@@ -128,7 +133,7 @@
       {{end}}
     </table>
     <p><button type="submit" class="btn primary">Сохранить провайдера</button>
-       <button type="button" class="link err" hx-post="/settings/providers" hx-vals='{"op":"remove","name":"{{.P.Name}}"}' hx-confirm="Удалить провайдера {{.P.Name}} вместе с его моделями ({{.NModels}})?" hx-target="#detail" hx-swap="innerHTML">удалить провайдера</button></p>
+       <button type="button" class="link err" hx-post="/settings/providers" hx-vals='{"op":"remove","name":"{{.P.Name}}"}' hx-confirm="Удалить провайдера {{.P.Name}} вместе с его моделями ({{.NModels}})? Это изменит все профили: прямые маршруты будут отключены, модели удалены из пулов." hx-target="#detail" hx-swap="innerHTML">удалить провайдера</button></p>
   </form>
   </details>
 </div>
@@ -139,7 +144,7 @@
 {{$route:=.}}
 <details class="route-card" data-model="{{.Model}}" {{if .IsFamily}}open{{end}}><summary><b>{{.Label}}</b>{{if .IsFamily}} <span class="muted">· все версии</span>{{else if .Family}} <span class="muted">· семейство {{.Family}}</span>{{end}}</summary>
 <form hx-post="/settings/route" hx-target="#detail" hx-swap="innerHTML">
-<input type="hidden" name="model" value="{{.Model}}">{{if .IsFamily}}<input type="hidden" name="scope" value="family">{{end}}
+<input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="model" value="{{.Model}}">{{if .IsFamily}}<input type="hidden" name="scope" value="family">{{end}}
 {{range .Choices}}{{$choice:=.}}<label class="route-line"><span>{{if eq .Effort "default"}}Не указан{{else}}{{.Effort}}{{end}}</span><select name="{{.Effort}}" aria-label="{{$route.Model}} / {{.Effort}}">
 {{if and (not $route.IsFamily) $route.Family}}<option value="inherit" {{if eq .Destination "inherit"}}selected{{end}}>Наследовать: {{.Inherited}}</option>{{end}}
 <option value="disabled" {{if eq .Destination "disabled"}}selected{{end}}>Не настроено</option><option value="anthropic" {{if eq .Destination "anthropic"}}selected{{end}}>Anthropic</option>
@@ -150,7 +155,7 @@
 {{end}}
 
 {{define "pool-add"}}
-<form class="inline-form pool-add" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="op" value="add"><input type="hidden" name="name" value="{{.Name}}">
+<form class="inline-form pool-add" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="op" value="add"><input type="hidden" name="name" value="{{.Name}}">
 {{$add:=.}}<select name="key" aria-label="Добавить модель в {{.Name}}" hx-get="/settings/pool-add" hx-trigger="change" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML">{{range .Models}}<option value="{{.Key}}" {{if eq .Key $add.Key}}selected{{end}}>{{.Key}}</option>{{end}}</select>
 <label>Effort <select name="effort" aria-label="Effort новой модели в {{.Name}}"><option value="">По умолчанию модели</option>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label><button class="btn" type="submit">Добавить в пул</button></form>
 {{end}}
