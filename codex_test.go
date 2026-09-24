@@ -36,6 +36,29 @@ func TestCodexRequestOmitsOutputLimit(t *testing.T) {
 	}
 }
 
+// Codex CLI's ResponsesApiRequest (codex-rs/codex-api/src/common.rs) has no
+// sampling fields; the subscription endpoint is only known to accept its shape.
+func TestCodexRequestOmitsSamplingFields(t *testing.T) {
+	temp, topP := 0.5, 0.9
+	out, err := toCodex(openaiRequest{Model: "gpt-test", Temperature: &temp, TopP: &topP, Messages: []openaiMsg{{Role: "user", Content: "hello"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"temperature", "top_p"} {
+		if _, ok := request[field]; ok {
+			t.Fatalf("Codex request carries %s: %s", field, body)
+		}
+	}
+}
+
 func TestCodexRequestAndResponse(t *testing.T) {
 	in := openaiRequest{Model: "gpt-test", Messages: []openaiMsg{
 		{Role: "system", Content: "system"},

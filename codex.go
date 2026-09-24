@@ -22,22 +22,22 @@ type codexRequest struct {
 	Reasoning    *struct {
 		Effort string `json:"effort"`
 	} `json:"reasoning,omitempty"`
-	Temperature *float64 `json:"temperature,omitempty"`
-	TopP        *float64 `json:"top_p,omitempty"`
 }
 
 // Same stateless Responses mapping used by CozyPhi. Tool call IDs survive the
 // round trip so Claude Code can send their outputs on the following turn.
+// Only fields Codex CLI itself sends are used (ResponsesApiRequest in
+// codex-rs/codex-api/src/common.rs): the subscription endpoint answers 400
+// to others such as max_output_tokens, so output limits and sampling
+// parameters from the caller are dropped.
 func toCodex(req openaiRequest) (codexRequest, error) {
 	out := codexRequest{Model: req.Model, Store: false, Stream: true,
-		Include:     []string{"reasoning.encrypted_content"},
-		Temperature: req.Temperature, TopP: req.TopP,
-		Input: make([]any, 0, len(req.Messages))}
+		Include: []string{"reasoning.encrypted_content"},
+		Input:   make([]any, 0, len(req.Messages))}
 	if req.ReasoningEffort != "" {
 		out.Reasoning = &struct {
 			Effort string `json:"effort"`
 		}{Effort: req.ReasoningEffort}
-		out.Temperature, out.TopP = nil, nil
 	}
 	if choice, ok := req.ToolChoice.(map[string]any); ok {
 		if fn, ok := choice["function"].(map[string]any); ok {
