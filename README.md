@@ -72,20 +72,55 @@ family route can be stored as `"high": {"mode": "model", "model":
 ```json
 {
   "providers": [{"name": "codex", "type": "codex", "base_url": "https://chatgpt.com/backend-api/codex"}],
-  "models": [{"provider": "codex", "model": "gpt-6-sol"}],
-  "model_pools": {
-    "Deep work": [{"model": "codex/gpt-6-sol", "effort": "xhigh"}]
-  },
+  "models": [{"provider": "codex", "model": "gpt-6-sol"}]
+}
+```
+
+Profiles group routes, pools, their member order and target efforts, and per-pool
+settings. Providers and the model catalog remain global. On first startup the
+current configuration becomes the active `default` profile and the old file is
+backed up as `providers.json.before-profiles`. A profile is a live saved
+snapshot: edits to routes or pools immediately persist to the active profile.
+Clone the active profile to experiment, or create a clean profile with all
+routes disabled. Switch in the dashboard or via the API port:
+
+```sh
+curl -X POST http://127.0.0.1:8787/api/profiles/my-profile/activate
+```
+
+The response reports `active_profile`; an unknown name returns HTTP 400.
+The new profile applies to the next request; requests already in flight keep
+their original configuration. Session bindings reset when profiles switch.
+Connections and model-catalog edits are shared, including provider removal,
+which can disable routes or empty pools in every profile. Active and final
+profiles cannot be deleted. Automatic switching by remaining quota is not
+implemented.
+
+The on-disk schema keeps `providers`, `models` and `catalog` in
+`providers.json`. Each profile has its own `providers.json.profiles/<name>.json`
+with `family_routes`, `routes`, `model_pools` and `pool_settings`.
+`providers.json.active-profile` contains the active profile name as a JSON
+string. The previous combined format is accepted on upgrade. Activation writes
+only the pointer file; a stale settings form must be refreshed before saving.
+
+For example, `providers.json.profiles/default.json` can contain:
+
+```json
+{
   "family_routes": {
     "opus": {
       "high": {"mode": "pool", "pool": "Deep work"},
       "low": {"mode": "anthropic"}
     }
+  },
+  "routes": {},
+  "model_pools": {
+    "Deep work": [{"model": "codex/gpt-6-sol", "effort": "xhigh"}]
   }
 }
 ```
 
-The example enables the two listed effort combinations for all Opus versions.
+This enables the two listed effort combinations for all Opus versions.
 Use `routes` with exact model IDs for individual exceptions; absent entries
 inherit the family. Add further
 members in **Пулы моделей** and assignments in **Маршруты**. Removing a

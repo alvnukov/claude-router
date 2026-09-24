@@ -181,3 +181,21 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 		t.Fatalf("refresh: %d", w.Code)
 	}
 }
+
+func TestCodexInheritanceIncludesInactiveProfilesOnce(t *testing.T) {
+	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{"work": {{Model: "codex/gpt-6-sol", Effort: "high"}}}}
+	l.Profiles = map[string]routingProfile{"default": l.routing(), "cloud": l.routing()}
+	l.ActiveProfile = "default"
+	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high"}}, {ID: "gpt-6.1-sol", Efforts: []string{"high"}}}
+	inheritCodexModels(&l, "codex", models)
+	if len(l.ModelPools["work"]) != 2 || len(l.Profiles["cloud"].ModelPools["work"]) != 2 {
+		t.Fatalf("new version missed profile: %+v", l.Profiles)
+	}
+	cloud := l.Profiles["cloud"]
+	cloud.ModelPools["work"] = cloud.ModelPools["work"][:1]
+	l.Profiles["cloud"] = cloud
+	inheritCodexModels(&l, "codex", models)
+	if len(l.Profiles["cloud"].ModelPools["work"]) != 1 {
+		t.Fatal("manually removed version re-added")
+	}
+}

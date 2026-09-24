@@ -57,14 +57,26 @@ func atoiOr(s string, def int) int {
 }
 
 func loadConfig() config {
+	c, err := loadConfigChecked()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	return c
+}
+
+func loadConfigChecked() (config, error) {
 	up, err := url.Parse(env("ROUTER_UPSTREAM_URL", "https://api.anthropic.com"))
 	if err != nil {
-		log.Fatalf("bad ROUTER_UPSTREAM_URL: %v", err)
+		return config{}, fmt.Errorf("bad ROUTER_UPSTREAM_URL: %w", err)
+	}
+	local, err := loadLocalSetupChecked(providersPath())
+	if err != nil {
+		return config{}, err
 	}
 	c := config{
 		listen:   env("ROUTER_LISTEN", "127.0.0.1:8787"),
 		upstream: up,
-		local:    loadLocalSetup(providersPath()),
+		local:    local,
 	}
 	c.maxInputChars = atoiOr(env("ROUTER_LOCAL_MAX_INPUT_CHARS", "0"), 0)
 	c.failover = env("ROUTER_LOCAL_FAILOVER", "1") != "0"
@@ -74,27 +86,27 @@ func loadConfig() config {
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
 	if os.Getenv("ROUTER_STANDBY") == "1" {
-		return c // standby reads config but never runs a migration that writes it
+		return c, nil // standby reads config but never runs a migration that writes it
 	}
 	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
 		if err := savePoolMigration(providersPath(), migrated); err != nil {
-			log.Fatalf("pool migration: %v", err)
+			return config{}, fmt.Errorf("pool migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migrateFamilyRoutes(c.local); changed {
 		if err := saveConfigurationMigration(providersPath(), migrated, ".before-families"); err != nil {
-			log.Fatalf("family migration: %v", err)
+			return config{}, fmt.Errorf("family migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migratePoolSettings(c); changed {
 		if err := saveConfigurationMigration(providersPath(), migrated, ".before-pool-settings"); err != nil {
-			log.Fatalf("pool settings migration: %v", err)
+			return config{}, fmt.Errorf("pool settings migration: %w", err)
 		}
 		c.local = migrated
 	}
-	return c
+	return c, nil
 }
 
 // Only explicit routes can serve a model. Unknown and disabled models never
@@ -158,7 +170,11 @@ func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error)
 	return probe.Model, route, nil
 }
 
-func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, life *lifecycle) http.Handler {
+func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer) http.Handler {
+	return newRouterHandler(cfg, cs, st, hl, u, nil)
+}
+
+func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer, life *lifecycle) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
@@ -177,6 +193,13 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, life *
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/profiles/{name}/activate", func(w http.ResponseWriter, r *http.Request) {
+		if !sameOriginPost(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		u.profileActivateAPI(w, r)
+	})
 
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.get()
@@ -248,10 +271,11 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, life *
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		pass(w, r, nil)
 	})
-	admin := newRuntimeAdmin(life, hl, statePath())
+	if life == nil {
+		return mux
+	}
 	api := http.NewServeMux()
 	api.HandleFunc("/healthz", life.healthz)
-	api.Handle("/admin/", admin)
 	api.Handle("/", life.guard(mux))
 	return api
 }
@@ -262,6 +286,11 @@ func main() {
 	cfg := loadConfig()
 	life := newLifecycle(os.Getenv("ROUTER_STANDBY") == "1")
 	server := newRouterServer(cfg, life, statePath())
+	if life.mode() != modeStandby {
+		if err := server.cs.ensureProfiles(); err != nil {
+			log.Fatalf("profile migration: %v", err)
+		}
+	}
 	if err := server.run(); err != nil {
 		log.Fatal(err)
 	}

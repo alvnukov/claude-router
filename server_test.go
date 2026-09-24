@@ -21,6 +21,11 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	path := filepath.Join(dir, "providers.json")
+	if err := writeProviders(path, oneProvider("http://example.test/v1", "a", "b")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ROUTER_PROVIDERS_FILE", path)
 	cfg := config{listen: api.Addr().String(), uiListen: ui.Addr().String(), uiHistory: 10}
 	life := newLifecycle(true)
 	server := newRouterServer(cfg, life, filepath.Join(dir, "state.json"))

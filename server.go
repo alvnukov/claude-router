@@ -35,6 +35,7 @@ func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	st.life = life
 	codexAuth.life = life
 	h := newHealth(healthPath())
+	cs.health = h
 	h.life = life
 	if life.mode() != modeStandby {
 		if err := h.loadSnapshot(slotStatePath(state)); err != nil {
@@ -63,21 +64,28 @@ func (r *routerServer) startBackground() {
 	})
 }
 
+func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
+	admin := newRuntimeAdmin(r.life, r.health, state)
+	admin.activate = func() error {
+		if r.life.mode() == modeStandby {
+			if err := r.cs.reloadProfiles(r.health); err != nil {
+				return err
+			}
+		}
+		if r.background != nil {
+			r.startBackground()
+		}
+		return nil
+	}
+	return admin
+}
+
 func (r *routerServer) serve(api, ui net.Listener) error {
 	if r.life.mode() == modeActive {
 		r.startBackground()
 	}
-	apiHandler := newRouterHandler(r.cfg, r.cs, r.st, r.health, r.life)
-	admin := newRuntimeAdmin(r.life, r.health, r.state)
-	admin.activate = func() error {
-		if r.life.mode() == modeStandby {
-			if err := r.cs.reloadProviders(); err != nil {
-				return err
-			}
-		}
-		r.startBackground()
-		return nil
-	}
+	apiHandler := newRouterHandler(r.cfg, r.cs, r.st, r.health, r.ui, r.life)
+	admin := r.runtimeAdmin(r.state)
 	mux := http.NewServeMux()
 	mux.Handle("/admin/", admin)
 	mux.Handle("/", apiHandler)
