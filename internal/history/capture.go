@@ -1,9 +1,13 @@
-package main
+// Package history captures /v1/messages calls and keeps the newest of them in
+// a ring backed by history.jsonl.
+package history
 
 import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -12,11 +16,11 @@ import (
 	"time"
 )
 
-// A record is one /v1/messages call as the router saw it: the Anthropic-shaped
+// A Record is one /v1/messages call as the router saw it: the Anthropic-shaped
 // request that came in, what was sent on (translated, for the local path), and
 // the Anthropic-shaped response that went back. Both paths answer in the
 // Anthropic wire format, so one parser covers cloud and local alike.
-type record struct {
+type Record struct {
 	ID      string
 	Seq     int64
 	Start   time.Time
@@ -35,21 +39,21 @@ type record struct {
 	TrimAfter  int
 	TrimNotes  []string
 	Served     string
-	Attempts   []attempt
+	Attempts   []Attempt
 
 	Status        int
 	RespCT        string
 	RespBytes     []byte
 	RespTruncated bool
-	Resp          *parsedResponse
+	Resp          *Response
 }
 
-func (r *record) Done() bool { return !r.End.IsZero() }
+func (r *Record) Done() bool { return !r.End.IsZero() }
 
-// sessionOf pulls the Claude Code session id out of a request. The CLI sends
+// SessionOf pulls the Claude Code session id out of a request. The CLI sends
 // metadata.user_id as a JSON string holding device_id, account_uuid and
 // session_id; other clients leave it out and the record stays unsessioned.
-func sessionOf(body []byte) string {
+func SessionOf(body []byte) string {
 	var req struct {
 		Metadata struct {
 			UserID string `json:"user_id"`
@@ -65,36 +69,36 @@ func sessionOf(body []byte) string {
 	return uid.SessionID
 }
 
-func (r *record) Duration() time.Duration {
+func (r *Record) Duration() time.Duration {
 	if r.End.IsZero() {
 		return time.Since(r.Start)
 	}
 	return r.End.Sub(r.Start)
 }
 
-func (r *record) Failed() bool {
+func (r *Record) Failed() bool {
 	return r.Done() && (r.Status >= 400 || (r.Resp != nil && r.Resp.Error != ""))
 }
 
-// localTrace is what handleLocal reports back about the translated request. It
+// Trace is what handleLocal reports back about the translated request. It
 // is written before the response starts and read only after the handler
 // returns, so it needs no lock.
-type localTrace struct {
+type Trace struct {
 	OpenAIBody []byte
 	TrimBefore int
 	TrimAfter  int
 	TrimNotes  []string
 	Served     string    // model that produced the response
-	Attempts   []attempt // every model tried, in order
+	Attempts   []Attempt // every model tried, in order
 }
 
-type attempt struct {
+type Attempt struct {
 	Model string
 	Err   string // empty on success
 	Dur   time.Duration
 }
 
-type respBlock struct {
+type Block struct {
 	Type  string
 	Text  string
 	ID    string
@@ -102,8 +106,8 @@ type respBlock struct {
 	Input string
 }
 
-type parsedResponse struct {
-	Blocks     []respBlock
+type Response struct {
+	Blocks     []Block
 	StopReason string
 	Usage      map[string]int
 	Model      string
@@ -112,7 +116,7 @@ type parsedResponse struct {
 	Events     int
 }
 
-func (p *parsedResponse) Text() string {
+func (p *Response) Text() string {
 	var b strings.Builder
 	for _, blk := range p.Blocks {
 		if blk.Type == "text" {
@@ -122,30 +126,37 @@ func (p *parsedResponse) Text() string {
 	return b.String()
 }
 
-// store is a fixed-size ring of records, newest last. Reads hand out shallow
+// Store is a fixed-size ring of records, newest last. Reads hand out shallow
 // copies: byte slices are never mutated once attached, so sharing them is safe.
-type store struct {
+type Store struct {
 	mu   sync.RWMutex
 	max  int
 	seq  int64
-	recs []*record
+	recs []*Record
 
 	path  string // history file; "" keeps history in memory only
-	life  *lifecycle
+	gate  Gate
 	fmu   sync.Mutex // serialises file writes
 	lines int        // lines currently in the file, for compaction
 }
 
-func newStore(max int, path string) *store {
+// New keeps the newest max records and loads them from path.
+func New(max int, path string) *Store {
 	if max < 1 {
 		max = 1
 	}
-	s := &store{max: max, path: path}
+	s := &Store{max: max, path: path}
 	s.load()
 	return s
 }
 
-func (s *store) add(r *record) {
+func newID(prefix string) string {
+	b := make([]byte, 12)
+	rand.Read(b)
+	return prefix + hex.EncodeToString(b)
+}
+
+func (s *Store) Add(r *Record) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq++
@@ -162,7 +173,7 @@ func (s *store) add(r *record) {
 	}
 }
 
-func (s *store) update(id string, fn func(*record)) {
+func (s *Store) update(id string, fn func(*Record)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, r := range s.recs {
@@ -173,7 +184,7 @@ func (s *store) update(id string, fn func(*record)) {
 	}
 }
 
-func (s *store) get(id string) *record {
+func (s *Store) Get(id string) *Record {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, r := range s.recs {
@@ -185,11 +196,11 @@ func (s *store) get(id string) *record {
 	return nil
 }
 
-// list returns copies, newest first.
-func (s *store) list() []*record {
+// List returns copies, newest first.
+func (s *Store) List() []*Record {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*record, 0, len(s.recs))
+	out := make([]*Record, 0, len(s.recs))
 	for i := len(s.recs) - 1; i >= 0; i-- {
 		c := *s.recs[i]
 		out = append(out, &c)
@@ -197,23 +208,23 @@ func (s *store) list() []*record {
 	return out
 }
 
-func (s *store) clear() {
+func (s *Store) Clear() {
 	s.mu.Lock()
 	s.recs = nil
 	s.mu.Unlock()
 	s.truncate()
 }
 
-func (s *store) size() (int, int) {
+func (s *Store) Size() (int, int) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.recs), s.max
 }
 
-// recorder tees the response into a bounded buffer. Flush and Unwrap keep both
+// Recorder tees the response into a bounded buffer. Flush and Unwrap keep both
 // streaming paths working: the local SSE writer type-asserts http.Flusher, the
 // reverse proxy reaches the real writer through Unwrap.
-type recorder struct {
+type Recorder struct {
 	http.ResponseWriter
 	status    int
 	buf       bytes.Buffer
@@ -221,18 +232,21 @@ type recorder struct {
 	truncated bool
 }
 
-func newRecorder(w http.ResponseWriter, limit int) *recorder {
-	return &recorder{ResponseWriter: w, limit: limit}
+func NewRecorder(w http.ResponseWriter, limit int) *Recorder {
+	return &Recorder{ResponseWriter: w, limit: limit}
 }
 
-func (r *recorder) WriteHeader(code int) {
+// Status is the status sent to the client, 0 before anything was sent.
+func (r *Recorder) Status() int { return r.status }
+
+func (r *Recorder) WriteHeader(code int) {
 	if r.status == 0 {
 		r.status = code
 	}
 	r.ResponseWriter.WriteHeader(code)
 }
 
-func (r *recorder) Write(b []byte) (int, error) {
+func (r *Recorder) Write(b []byte) (int, error) {
 	if r.status == 0 {
 		r.status = http.StatusOK
 	}
@@ -249,20 +263,20 @@ func (r *recorder) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-func (r *recorder) Flush() {
+func (r *Recorder) Flush() {
 	if f, ok := r.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
 }
 
-func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+func (r *Recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
-// finish attaches the response and the local trace to the record.
-func (s *store) finish(id string, rw *recorder, tr *localTrace) {
+// Finish attaches the response and the local trace to the record.
+func (s *Store) Finish(id string, rw *Recorder, tr *Trace) {
 	ct := rw.Header().Get("Content-Type")
 	body := rw.buf.Bytes()
-	parsed := parseResponse(ct, rw.Header().Get("Content-Encoding"), body, rw.truncated)
-	s.update(id, func(r *record) {
+	parsed := ParseResponse(ct, rw.Header().Get("Content-Encoding"), body, rw.truncated)
+	s.update(id, func(r *Record) {
 		r.End = time.Now()
 		r.Status = rw.status
 		r.RespCT = ct
@@ -278,12 +292,12 @@ func (s *store) finish(id string, rw *recorder, tr *localTrace) {
 			r.Attempts = tr.Attempts
 		}
 	})
-	if r := s.get(id); r != nil {
-		s.persist(r)
+	if r := s.Get(id); r != nil {
+		s.Persist(r)
 	}
 }
 
-func pickHeaders(h http.Header) map[string]string {
+func PickHeaders(h http.Header) map[string]string {
 	out := map[string]string{}
 	for _, k := range []string{"User-Agent", "Anthropic-Beta", "Anthropic-Version", "X-App", "Content-Length"} {
 		if v := h.Get(k); v != "" {
@@ -295,9 +309,9 @@ func pickHeaders(h http.Header) map[string]string {
 
 // ---- Anthropic response parsing ----
 
-func parseResponse(ct, enc string, body []byte, truncated bool) *parsedResponse {
+func ParseResponse(ct, enc string, body []byte, truncated bool) *Response {
 	body, note := decodeBody(enc, body)
-	var p *parsedResponse
+	var p *Response
 	if strings.Contains(ct, "text/event-stream") {
 		p = parseSSE(body)
 	} else {
@@ -333,8 +347,8 @@ func decodeBody(enc string, body []byte) ([]byte, string) {
 	return body, ""
 }
 
-func parseJSONResponse(body []byte, truncated bool) *parsedResponse {
-	p := &parsedResponse{Usage: map[string]int{}}
+func parseJSONResponse(body []byte, truncated bool) *Response {
+	p := &Response{Usage: map[string]int{}}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return p
 	}
@@ -347,7 +361,7 @@ func parseJSONResponse(body []byte, truncated bool) *parsedResponse {
 		}
 		return p
 	}
-	if kind, _ := jsonString(m["type"]); kind == "error" {
+	if kind, _ := JSONString(m["type"]); kind == "error" {
 		var e struct {
 			Type    string `json:"type"`
 			Message string `json:"message"`
@@ -356,35 +370,35 @@ func parseJSONResponse(body []byte, truncated bool) *parsedResponse {
 		p.Error = strings.TrimSpace(e.Type + ": " + e.Message)
 		return p
 	}
-	p.Model, _ = jsonString(m["model"])
-	p.StopReason, _ = jsonString(m["stop_reason"])
+	p.Model, _ = JSONString(m["model"])
+	p.StopReason, _ = JSONString(m["stop_reason"])
 	p.Usage = usageMap(m["usage"])
 	var blocks []map[string]json.RawMessage
 	_ = json.Unmarshal(m["content"], &blocks) // best effort: the log shows what parses
 	for _, b := range blocks {
-		rb := respBlock{}
-		rb.Type, _ = jsonString(b["type"])
-		rb.ID, _ = jsonString(b["id"])
-		rb.Name, _ = jsonString(b["name"])
+		rb := Block{}
+		rb.Type, _ = JSONString(b["type"])
+		rb.ID, _ = JSONString(b["id"])
+		rb.Name, _ = JSONString(b["name"])
 		switch rb.Type {
 		case "text":
-			rb.Text, _ = jsonString(b["text"])
+			rb.Text, _ = JSONString(b["text"])
 		case "thinking":
-			rb.Text, _ = jsonString(b["thinking"])
+			rb.Text, _ = JSONString(b["thinking"])
 		case "tool_use":
-			rb.Input = prettyJSON(b["input"])
+			rb.Input = PrettyJSON(b["input"])
 		default:
-			rb.Text = prettyJSON(mustMarshal(b))
+			rb.Text = PrettyJSON(MustMarshal(b))
 		}
 		p.Blocks = append(p.Blocks, rb)
 	}
 	return p
 }
 
-func parseSSE(body []byte) *parsedResponse {
-	p := &parsedResponse{Usage: map[string]int{}}
+func parseSSE(body []byte) *Response {
+	p := &Response{Usage: map[string]int{}}
 	type open struct {
-		blk   respBlock
+		blk   Block
 		input strings.Builder
 	}
 	blocks := map[int]*open{}
@@ -404,12 +418,12 @@ func parseSSE(body []byte) *parsedResponse {
 			return
 		}
 		p.Events++
-		kind, _ := jsonString(ev["type"])
+		kind, _ := JSONString(ev["type"])
 		switch kind {
 		case "message_start":
 			var msg map[string]json.RawMessage
 			_ = json.Unmarshal(ev["message"], &msg) // best effort: the log shows what parses
-			p.Model, _ = jsonString(msg["model"])
+			p.Model, _ = JSONString(msg["model"])
 			for k, v := range usageMap(msg["usage"]) {
 				p.Usage[k] = v
 			}
@@ -418,12 +432,12 @@ func parseSSE(body []byte) *parsedResponse {
 			var cb map[string]json.RawMessage
 			_ = json.Unmarshal(ev["content_block"], &cb) // best effort: the log shows what parses
 			o := &open{}
-			o.blk.Type, _ = jsonString(cb["type"])
-			o.blk.ID, _ = jsonString(cb["id"])
-			o.blk.Name, _ = jsonString(cb["name"])
-			o.blk.Text, _ = jsonString(cb["text"])
+			o.blk.Type, _ = JSONString(cb["type"])
+			o.blk.ID, _ = JSONString(cb["id"])
+			o.blk.Name, _ = JSONString(cb["name"])
+			o.blk.Text, _ = JSONString(cb["text"])
 			if o.blk.Type == "thinking" {
-				o.blk.Text, _ = jsonString(cb["thinking"])
+				o.blk.Text, _ = JSONString(cb["thinking"])
 			}
 			if _, seen := blocks[idx]; !seen {
 				order = append(order, idx)
@@ -433,28 +447,28 @@ func parseSSE(body []byte) *parsedResponse {
 			idx := jsonInt(ev["index"])
 			o, ok := blocks[idx]
 			if !ok {
-				o = &open{blk: respBlock{Type: "text"}}
+				o = &open{blk: Block{Type: "text"}}
 				blocks[idx] = o
 				order = append(order, idx)
 			}
 			var d map[string]json.RawMessage
 			_ = json.Unmarshal(ev["delta"], &d) // best effort: the log shows what parses
-			dt, _ := jsonString(d["type"])
+			dt, _ := JSONString(d["type"])
 			switch dt {
 			case "text_delta":
-				s, _ := jsonString(d["text"])
+				s, _ := JSONString(d["text"])
 				o.blk.Text += s
 			case "thinking_delta":
-				s, _ := jsonString(d["thinking"])
+				s, _ := JSONString(d["thinking"])
 				o.blk.Text += s
 			case "input_json_delta":
-				s, _ := jsonString(d["partial_json"])
+				s, _ := JSONString(d["partial_json"])
 				o.input.WriteString(s)
 			}
 		case "message_delta":
 			var d map[string]json.RawMessage
 			_ = json.Unmarshal(ev["delta"], &d) // best effort: the log shows what parses
-			if sr, ok := jsonString(d["stop_reason"]); ok && sr != "" {
+			if sr, ok := JSONString(d["stop_reason"]); ok && sr != "" {
 				p.StopReason = sr
 			}
 			for k, v := range usageMap(ev["usage"]) {
@@ -483,14 +497,14 @@ func parseSSE(body []byte) *parsedResponse {
 	for _, idx := range order {
 		o := blocks[idx]
 		if o.input.Len() > 0 {
-			o.blk.Input = prettyJSON(json.RawMessage(o.input.String()))
+			o.blk.Input = PrettyJSON(json.RawMessage(o.input.String()))
 		}
 		p.Blocks = append(p.Blocks, o.blk)
 	}
 	return p
 }
 
-func jsonString(raw json.RawMessage) (string, bool) {
+func JSONString(raw json.RawMessage) (string, bool) {
 	var s string
 	if len(raw) == 0 || json.Unmarshal(raw, &s) != nil {
 		return "", false
@@ -518,13 +532,13 @@ func usageMap(raw json.RawMessage) map[string]int {
 	return out
 }
 
-func mustMarshal(v any) json.RawMessage {
+func MustMarshal(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b
 }
 
-// prettyJSON re-indents valid JSON and passes anything else through untouched.
-func prettyJSON(raw json.RawMessage) string {
+// PrettyJSON re-indents valid JSON and passes anything else through untouched.
+func PrettyJSON(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}

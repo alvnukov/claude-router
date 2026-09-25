@@ -79,6 +79,9 @@ func (l *lifecycle) compactsHistory() bool {
 	return l.state == modeActive && l.alone
 }
 
+// CompactsHistory gates internal/history; a nil lifecycle is the only writer.
+func (l *lifecycle) CompactsHistory() bool { return l == nil || l.compactsHistory() }
+
 func (l *lifecycle) activate() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

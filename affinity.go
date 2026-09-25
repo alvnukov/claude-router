@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 // Affinity is scoped to a session, incoming model/effort and the current pool
@@ -65,7 +67,7 @@ func (h *health) balanceFirst(pool string, candidates []candidate) []candidate {
 }
 
 func affinityKey(cfg config, body []byte, req anthropicRequest) string {
-	session := sessionOf(body)
+	session := history.SessionOf(body)
 	if session == "" {
 		return ""
 	}

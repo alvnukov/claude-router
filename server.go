@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/history"
 	"localrouter/internal/platform"
 )
 
@@ -20,7 +21,7 @@ type routerServer struct {
 	health     *health
 	state      string
 	cs         *configStore
-	st         *store
+	st         *history.Store
 	ui         *uiServer
 	apiHTTP    *http.Server
 	uiHTTP     *http.Server
@@ -31,8 +32,8 @@ type routerServer struct {
 
 func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	cs := newConfigStore(cfg, providersPath())
-	st := newStore(cfg.uiHistory, historyPath())
-	st.life = life
+	st := history.New(cfg.uiHistory, historyPath())
+	st.SetGate(life)
 	codexAuth.life = life
 	h := newHealth(healthPath())
 	cs.health = h
@@ -94,7 +95,7 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	if r.background != nil {
 		admin.started = r.startBackground
 	}
-	admin.compact = r.st.compactAfterDrain
+	admin.compact = r.st.CompactAfterDrain
 	return admin
 }
 

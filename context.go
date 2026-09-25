@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"localrouter/internal/history"
 )
 
 // The structure view. A request is shown as what it is made of -- system
@@ -153,7 +155,7 @@ func buildContext(body []byte, re *regexp.Regexp) *ctxView {
 			var blocks []map[string]json.RawMessage
 			if json.Unmarshal(raw, &blocks) == nil {
 				for i, blk := range blocks {
-					t, _ := jsonString(blk["text"])
+					t, _ := history.JSONString(blk["text"])
 					bv := b.text("system", fmt.Sprintf("system[%d]", i), t, fmt.Sprintf("sys-%d", i))
 					bv.Cache = cacheMark(blk["cache_control"])
 					if bv.Cache != "" {
@@ -172,9 +174,9 @@ func buildContext(body []byte, re *regexp.Regexp) *ctxView {
 		var tools []map[string]json.RawMessage
 		_ = json.Unmarshal(raw, &tools) // best effort: what does not parse counts as empty
 		for i, t := range tools {
-			name, _ := jsonString(t["name"])
-			desc, _ := jsonString(t["description"])
-			schema := prettyJSON(t["input_schema"])
+			name, _ := history.JSONString(t["name"])
+			desc, _ := history.JSONString(t["description"])
+			schema := history.PrettyJSON(t["input_schema"])
 			n := len(name) + len(desc) + len(t["input_schema"])
 			tv := toolView{Name: name, Desc: highlight(desc, re), Schema: highlight(schema, re), Chars: n,
 				Anchor: fmt.Sprintf("tool-%d", i), Matches: countMatches(name+"\n"+desc+"\n"+schema, re)}
@@ -220,26 +222,26 @@ func buildContext(body []byte, re *regexp.Regexp) *ctxView {
 }
 
 func (b *ctxBuilder) block(role string, blk map[string]json.RawMessage, anchor string) blockView {
-	kind, _ := jsonString(blk["type"])
+	kind, _ := history.JSONString(blk["type"])
 	var bv blockView
 	switch kind {
 	case "text":
-		t, _ := jsonString(blk["text"])
+		t, _ := history.JSONString(blk["text"])
 		bv = b.text(role, "text", t, anchor)
 	case "thinking", "redacted_thinking":
-		t, _ := jsonString(blk["thinking"])
+		t, _ := history.JSONString(blk["thinking"])
 		if kind == "redacted_thinking" {
 			t = fmt.Sprintf("[redacted_thinking, %d байт]", len(blk["data"]))
 		}
 		bv = b.text("thinking", kind, t, anchor)
 	case "tool_use":
-		in := prettyJSON(blk["input"])
+		in := history.PrettyJSON(blk["input"])
 		bv = b.text("tool_use", "tool_use", in, anchor)
-		bv.Name, _ = jsonString(blk["name"])
-		bv.ID, _ = jsonString(blk["id"])
+		bv.Name, _ = history.JSONString(blk["name"])
+		bv.ID, _ = history.JSONString(blk["id"])
 	case "tool_result":
 		bv = blockView{Kind: "tool_result", Label: "tool_result", Anchor: anchor}
-		bv.ToolUseID, _ = jsonString(blk["tool_use_id"])
+		bv.ToolUseID, _ = history.JSONString(blk["tool_use_id"])
 		var isErr bool
 		_ = json.Unmarshal(blk["is_error"], &isErr) // best effort: what does not parse counts as empty
 		bv.IsError = isErr
@@ -251,10 +253,10 @@ func (b *ctxBuilder) block(role string, blk map[string]json.RawMessage, anchor s
 			var inner []map[string]json.RawMessage
 			_ = json.Unmarshal(blk["content"], &inner) // best effort: what does not parse counts as empty
 			for j, ib := range inner {
-				ik, _ := jsonString(ib["type"])
+				ik, _ := history.JSONString(ib["type"])
 				var c blockView
 				if ik == "text" {
-					t, _ := jsonString(ib["text"])
+					t, _ := history.JSONString(ib["text"])
 					c = b.text("tool_result", "text", t, fmt.Sprintf("%s-%d", anchor, j))
 				} else {
 					c = b.media(ik, ib, fmt.Sprintf("%s-%d", anchor, j))
@@ -269,7 +271,7 @@ func (b *ctxBuilder) block(role string, blk map[string]json.RawMessage, anchor s
 	case "image", "document":
 		bv = b.media(kind, blk, anchor)
 	default:
-		raw := prettyJSON(mustMarshal(blk))
+		raw := history.PrettyJSON(history.MustMarshal(blk))
 		bv = b.text("other", kind, raw, anchor)
 	}
 	bv.Cache = cacheMark(blk["cache_control"])
@@ -343,7 +345,7 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 	var tools []openaiTool
 	_ = json.Unmarshal(top["tools"], &tools) // best effort: what does not parse counts as empty
 	for i, t := range tools {
-		schema := prettyJSON(t.Function.Parameters)
+		schema := history.PrettyJSON(t.Function.Parameters)
 		n := len(t.Function.Name) + len(t.Function.Description) + len(t.Function.Parameters)
 		tv := toolView{Name: t.Function.Name, Desc: highlight(t.Function.Description, re),
 			Schema: highlight(schema, re), Chars: n, Anchor: fmt.Sprintf("tool-%d", i),
@@ -364,7 +366,7 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 	for i, m := range msgs {
 		anchor := fmt.Sprintf("m-%d", i)
 		if m.Role == "system" {
-			s, _ := jsonString(m.Content)
+			s, _ := history.JSONString(m.Content)
 			bv := b.text("system", "system", s, "sys-"+fmt.Sprint(i))
 			b.v.System = append(b.v.System, bv)
 			b.v.SystemN += bv.Chars
@@ -386,12 +388,12 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 			var parts []map[string]json.RawMessage
 			_ = json.Unmarshal(m.Content, &parts) // best effort: what does not parse counts as empty
 			for j, p := range parts {
-				pt, _ := jsonString(p["type"])
+				pt, _ := history.JSONString(p["type"])
 				if pt == "text" {
-					t, _ := jsonString(p["text"])
+					t, _ := history.JSONString(p["text"])
 					mv.Blocks = append(mv.Blocks, b.text(kind, "text", t, fmt.Sprintf("%s-%d", anchor, j)))
 				} else {
-					raw := prettyJSON(mustMarshal(p))
+					raw := history.PrettyJSON(history.MustMarshal(p))
 					bv := blockView{Kind: "image", Label: pt, Anchor: fmt.Sprintf("%s-%d", anchor, j), Chars: len(raw),
 						Note: fmt.Sprintf("[%s, %s]", pt, fmtChars(len(raw)))}
 					b.count("image", len(raw))
@@ -400,7 +402,7 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 			}
 		}
 		for j, tc := range m.ToolCalls {
-			bv := b.text("tool_use", "tool_call", prettyJSON(json.RawMessage(tc.Function.Arguments)), fmt.Sprintf("%s-tc%d", anchor, j))
+			bv := b.text("tool_use", "tool_call", history.PrettyJSON(json.RawMessage(tc.Function.Arguments)), fmt.Sprintf("%s-tc%d", anchor, j))
 			bv.Name = tc.Function.Name
 			bv.ID = tc.ID
 			mv.Blocks = append(mv.Blocks, bv)

@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"localrouter/internal/history"
 	"localrouter/internal/platform"
 )
 
@@ -175,10 +176,10 @@ func countOutbound(t *testing.T) *countingTransport {
 // and opus/high to the local provider at local.
 func limitsRouter(t *testing.T, upstream, local string) (*uiServer, http.Handler) {
 	t.Helper()
-	return limitsRouterStore(t, upstream, local, newStore(10, ""))
+	return limitsRouterStore(t, upstream, local, history.New(10, ""))
 }
 
-func limitsRouterStore(t *testing.T, upstream, local string, st *store) (*uiServer, http.Handler) {
+func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store) (*uiServer, http.Handler) {
 	t.Helper()
 	cs, h, _ := profileFixture(t)
 	up, _ := url.Parse(upstream)
@@ -890,8 +891,8 @@ func TestAnthropicLimitsValuesStayOutOfHistoryAndLog(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
 	}))
 	defer upstream.Close()
-	history := filepath.Join(t.TempDir(), "history.jsonl")
-	u, handler := limitsRouterStore(t, upstream.URL, "", newStore(10, history))
+	histPath := filepath.Join(t.TempDir(), "history.jsonl")
+	u, handler := limitsRouterStore(t, upstream.URL, "", history.New(10, histPath))
 
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}]}`)))
@@ -901,7 +902,7 @@ func TestAnthropicLimitsValuesStayOutOfHistoryAndLog(t *testing.T) {
 	if v := u.limits.view(time.Now()); v.State != "fresh" || limitKeys(v) != "anthropic-ratelimit-unified-representative-claim,unified-5h" {
 		t.Fatalf("snapshot %+v", v)
 	}
-	data, err := os.ReadFile(history)
+	data, err := os.ReadFile(histPath)
 	if err != nil || len(data) == 0 {
 		t.Fatalf("history not written: %v", err)
 	}
@@ -1094,7 +1095,7 @@ func TestCodexLimitsPerConnection(t *testing.T) {
 	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
 	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
 	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
-	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	u := newUIServer(history.New(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
 	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
 	used := map[string]string{"acct-a": "20", "acct-b": "70"}
 	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {

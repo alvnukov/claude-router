@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func profileFixture(t *testing.T) (*configStore, *health, string) {
@@ -158,7 +160,7 @@ func TestProfileHTTPActivation(t *testing.T) {
 	if err := cs.createProfile("clean", false); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	server := u.handler()
 	req := httptest.NewRequest("POST", "/api/profiles/clean/activate", strings.NewReader(""))
 	w := httptest.NewRecorder()
@@ -202,7 +204,7 @@ func TestProfilesHTTPRejectsCrossOriginAndMissingName(t *testing.T) {
 	if err := cs.ensureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	req := httptest.NewRequest("POST", "http://localhost:8788/api/profiles/default/activate", nil)
 	req.Header.Set("Origin", "https://attacker.example")
 	w := httptest.NewRecorder()
@@ -234,7 +236,7 @@ func TestProfilesCatalogRefreshPreservesBothProfilesOnDisk(t *testing.T) {
 	if err := cs.applyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return []string{"claude-opus-5"}, nil }
 	if err := u.refreshModels(context.Background()); err != nil {
 		t.Fatal(err)
@@ -312,7 +314,7 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 	if err := cs.activateProfile("default", h); err != nil {
 		t.Fatal(err)
 	}
-	st := newStore(10, "")
+	st := history.New(10, "")
 	u := newUIServer(st, cs, h)
 	handler := newMainHandler(cs.get(), cs, st, h, u)
 	body := `{"model":"claude-opus-5","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
@@ -343,7 +345,7 @@ func TestProfilesProviderRenameUpdatesInactiveRoutes(t *testing.T) {
 	if err := cs.createProfile("copy", true); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	values := url.Values{"op": {"update"}, "orig": {"p"}, "name": {"renamed"}, "base_url": {"http://example.test/v1"}}
 	req := httptest.NewRequest("POST", "/settings/providers", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -485,7 +487,7 @@ func TestProfileUICloneAndEmpty(t *testing.T) {
 	if err := cs.ensureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	post := func(values url.Values) string {
 		t.Helper()
 		req := httptest.NewRequest("POST", "/settings/profiles", strings.NewReader(values.Encode()))

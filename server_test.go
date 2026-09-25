@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 // Both slots share limits.json during a deploy; only the active one writes it.
@@ -64,7 +66,7 @@ func TestRouterServerCompactsHistoryOnlyWhenNoOtherSlotAppends(t *testing.T) {
 				return strings.Count(string(data), "\n")
 			}
 			for i := range 5 {
-				server.st.persist(&record{ID: fmt.Sprintf("r-%d", i), End: time.Now()})
+				server.st.Persist(&history.Record{ID: fmt.Sprintf("r-%d", i), End: time.Now()})
 			}
 			if slot == "" {
 				if got := lines(); got != 2 {
@@ -83,12 +85,27 @@ func TestRouterServerCompactsHistoryOnlyWhenNoOtherSlotAppends(t *testing.T) {
 				t.Fatalf("compact: HTTP %d, %d lines", response.Code, lines())
 			}
 			for i := range 3 {
-				server.st.persist(&record{ID: fmt.Sprintf("s-%d", i), End: time.Now()})
+				server.st.Persist(&history.Record{ID: fmt.Sprintf("s-%d", i), End: time.Now()})
 			}
 			if got := lines(); got != 2 {
 				t.Fatalf("slot alone on the file did not keep compacting: %d lines", got)
 			}
 		})
+	}
+}
+
+// A nil lifecycle gates the stores as no gate did before they moved out of
+// main: the store is the only writer and compacts as it writes.
+func TestNilLifecycleGatesWriteAndCompact(t *testing.T) {
+	var life *lifecycle
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	st := history.New(2, path)
+	st.SetGate(life)
+	for i := range 5 {
+		st.Persist(&history.Record{ID: fmt.Sprintf("r-%d", i), End: time.Now()})
+	}
+	if data, _ := os.ReadFile(path); strings.Count(string(data), "\n") != 2 {
+		t.Fatalf("store gated by a nil lifecycle did not compact: %q", data)
 	}
 }
 

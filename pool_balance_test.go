@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 var twoProviders = []provider{{Name: "p", BaseURL: "http://p.test/v1"}, {Name: "q", BaseURL: "http://q.test/v1"}}
@@ -170,7 +172,7 @@ func TestPoolSettingsFormSetsType(t *testing.T) {
 	if err := writeProviders(path, cfg.local); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), newConfigStore(cfg, path), newHealth(""))
+	u := newUIServer(history.New(10, ""), newConfigStore(cfg, path), newHealth(""))
 	post := func(typ string) string {
 		values := url.Values{"name": {"pair"}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
 		if typ != "" {

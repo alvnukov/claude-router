@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
@@ -50,7 +52,7 @@ func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
 		uid, _ := json.Marshal(map[string]string{"session_id": session})
 		body := []byte(fmt.Sprintf(`{"model":%q,"output_config":{"effort":%q},"stream":true,"metadata":{"user_id":%q},"messages":[{"role":"user","content":"hello"}]}`, model, effort, string(uid)))
 		w := httptest.NewRecorder()
-		tr := &localTrace{}
+		tr := &history.Trace{}
 		handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.forModel(model, effort), body, tr, hl)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"text":"`+want+`"`) || len(tr.Attempts) != attempts {
 			t.Fatalf("%s/%s/%s: %d attempts=%+v body=%s", session, model, effort, w.Code, tr.Attempts, w.Body.String())

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func twoMemberPool(settings map[string]poolSettings) config {
@@ -80,7 +82,7 @@ func TestPoolSaveKeepsType(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs := newConfigStore(cfg, path)
-	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	// The form has neither a type (until Task 12) nor the numeric balance.
 	values := url.Values{"name": {"pair"}, "failover": {"1"}, "first_byte": {"7"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
 	r := httptest.NewRequest("POST", "/settings/pool-settings", strings.NewReader(values.Encode()))

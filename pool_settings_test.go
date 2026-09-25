@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
@@ -47,7 +49,7 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	up, _ := url.Parse("https://api.anthropic.com")
 	cs := newConfigStore(config{upstream: up, firstByte: 45 * time.Second, local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, filepath.Join(t.TempDir(), "providers.json"))
-	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	post := func(values url.Values) string {
 		t.Helper()
 		r := httptest.NewRequest("POST", "/settings/pool-settings", strings.NewReader(values.Encode()))

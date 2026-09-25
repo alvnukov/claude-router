@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func newID(prefix string) string {
@@ -55,7 +57,7 @@ func withoutSignedOut(cands []candidate) []candidate {
 // handleLocal serves one /v1/messages call from the OpenAI-compatible endpoint.
 // The caller's Anthropic credentials are deliberately not forwarded: the local
 // endpoint gets ROUTER_LOCAL_API_KEY and nothing else.
-func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte, tr *localTrace, hl *health, history ...*store) {
+func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte, tr *history.Trace, hl *health, hist ...*history.Store) {
 	var req anthropicRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
@@ -108,8 +110,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		var payload []byte
 		if cand.Provider.Type == "codex" {
 			codexInput := oreq
-			if len(history) > 0 {
-				codexInput, err = restoreCodexCalls(oreq, sessionOf(body), history[0])
+			if len(hist) > 0 {
+				codexInput, err = restoreCodexCalls(oreq, history.SessionOf(body), hist[0])
 				if err != nil {
 					writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 					return
@@ -150,7 +152,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		}
 
 		if tr != nil {
-			tr.Attempts = append(tr.Attempts, attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
+			tr.Attempts = append(tr.Attempts, history.Attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
 		}
 		if res.err != nil {
 			hl.release(cand.Key)
