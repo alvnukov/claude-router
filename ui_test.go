@@ -154,7 +154,7 @@ func TestListCountsAndSessions(t *testing.T) {
 	}
 }
 
-func TestSettingsPoolShowsMemberStats(t *testing.T) {
+func TestSettingsShowsModelStats(t *testing.T) {
 	u, h := testUI(t)
 	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"create"}, "name": {"work"}})
@@ -166,17 +166,21 @@ func TestSettingsPoolShowsMemberStats(t *testing.T) {
 	s := u.hl.snapshot("p/m1")
 
 	body := get(t, h, "GET", "/settings", nil).Body.String()
-	// The model catalog further down shows answers and failures too, so
-	// look only at this member's row inside the pool card.
-	card := between(t, body, `data-pool="work"`, "pool-behavior")
-	member := between(t, card, "<code>p/m1</code>", "</div>")
-	for _, want := range []string{
-		"1 ответов", "1 сбоев", "подряд 1",
-		fmt.Sprintf("рейтинг %d%%", s.ScorePct()),
-		"пауза ещё", "ушла дальше 1", "проверки 1/0", "boom",
-	} {
-		if !strings.Contains(member, want) {
-			t.Errorf("pool member stats missing %q", want)
+	// The pool card and the model catalog both show the model's stats, so
+	// look only at the model's row in each: the other must not stand in.
+	rows := map[string]string{
+		"pool member":   between(t, between(t, body, `data-pool="work"`, "pool-behavior"), "<code>p/m1</code>", "</div>"),
+		"catalog model": between(t, between(t, body, "Каталог добавленных моделей", "</details>"), "<code>p/m1</code>", "</div>"),
+	}
+	for name, row := range rows {
+		for _, want := range []string{
+			"1 ответов", "1 сбоев", "подряд 1",
+			fmt.Sprintf("рейтинг %d%%", s.ScorePct()),
+			"пауза ещё", "ушла дальше 1", "проверки 1/0", "boom",
+		} {
+			if !strings.Contains(row, want) {
+				t.Errorf("%s stats missing %q", name, want)
+			}
 		}
 	}
 }

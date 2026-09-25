@@ -32,7 +32,7 @@
 {{if not .First}}<button class="btn" name="op" value="up" aria-label="Поднять {{.Key}}" type="submit">↑</button>{{end}}
 {{if not .Last}}<button class="btn" name="op" value="down" aria-label="Опустить {{.Key}}" type="submit">↓</button>{{end}}
 <button class="link" name="op" value="remove" type="submit">Убрать</button></form>
-{{with .Stat}}<span class="help pool-stats">{{.OK}} ответов · {{if .Fail}}<span class="err">{{.Fail}} сбоев</span>{{else}}0 сбоев{{end}} · {{if .Consecutive}}<span class="err">подряд {{.Consecutive}}</span>{{else}}подряд 0{{end}} · рейтинг {{.ScorePct}}% · первый байт {{if .TTFBMs}}{{dur .TTFB}}{{else}}—{{end}} · {{if .Cooling}}<span class="warn">пауза ещё {{dur .CoolLeft}}</span>{{else}}доступна{{end}} · ушла дальше {{.Failovers}} · подхватила {{.ServedAfter}} · проверки {{.ProbeOK}}/{{.ProbeFail}}{{if not .LastOKAt.IsZero}} · успех {{ago .LastOKAt}}{{end}}{{with .LastErr}}<br><span class="err last-err" title="{{.}}">{{.}}</span>{{end}}</span>{{end}}</div>
+{{template "model-stats" .Stat}}</div>
 {{else}}<p class="note warn">В пуле нет моделей — назначенные ему запросы не выполняются.</p>{{end}}
 {{if .Available}}{{template "pool-add" .Add}}{{else}}<p class="help">Другие модели можно добавить в разделе «Подключения».</p>{{end}}
 <details class="settings-extra pool-behavior"><summary>Сессии и таймауты</summary><p class="help">Внутри сессии каждый маршрут закрепляется за выбранной моделью. При сбое до начала ответа роутер пробует следующую модель этого пула и запоминает новый выбор. Начавшийся ответ передаётся потоком; переключение посреди ответа не выполняется.</p>
@@ -67,7 +67,7 @@
 <p><button class="btn" hx-get="/settings/provider" hx-target="#provider-pane">Добавить подключение</button></p>
 <div id="provider-pane">{{with .Pick}}{{template "provider" .}}{{end}}</div>
 <details class="settings-extra"><summary>Каталог добавленных моделей · {{len .Models}}</summary>
-{{range .Models}}<div class="pool-member"><code>{{.Key}}</code><span class="help">{{.Stat.OK}} ответов · {{.Stat.Fail}} сбоев · {{if .Stat.Cooling}}пауза после сбоя{{else}}доступна для выбора{{end}}</span><form hx-post="/settings/models" hx-target="#detail"><input type="hidden" name="key" value="{{.Key}}"><button class="link" name="op" value="remove">Убрать из каталога и пулов</button></form></div>{{end}}</details>
+{{range .Models}}<div class="pool-member"><code>{{.Key}}</code><form hx-post="/settings/models" hx-target="#detail"><input type="hidden" name="key" value="{{.Key}}"><button class="link" name="op" value="remove">Убрать из каталога и пулов</button></form>{{template "model-stats" .Stat}}</div>{{end}}</details>
 </section>
 </div>
 {{end}}
@@ -168,6 +168,10 @@
 <form class="inline-form pool-add" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="op" value="add"><input type="hidden" name="name" value="{{.Name}}">
 {{$add:=.}}<select name="key" aria-label="Добавить модель в {{.Name}}" hx-get="/settings/pool-add" hx-trigger="change" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML">{{range .Models}}<option value="{{.Key}}" {{if eq .Key $add.Key}}selected{{end}}>{{.Key}}</option>{{end}}</select>
 <label>Effort <select name="effort" aria-label="Effort новой модели в {{.Name}}"><option value="">По умолчанию модели</option>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label><button class="btn" type="submit">Добавить в пул</button></form>
+{{end}}
+
+{{define "model-stats"}}
+<span class="help model-stats">{{.OK}} ответов · {{if .Fail}}<span class="err">{{.Fail}} сбоев</span>{{else}}0 сбоев{{end}} · {{if .Consecutive}}<span class="err">подряд {{.Consecutive}}</span>{{else}}подряд 0{{end}} · рейтинг {{.ScorePct}}% · первый байт {{if .TTFBMs}}{{dur .TTFB}}{{else}}—{{end}} · {{if .Cooling}}<span class="warn">пауза ещё {{dur .CoolLeft}}</span>{{else}}доступна{{end}} · ушла дальше {{.Failovers}} · подхватила {{.ServedAfter}} · проверки {{.ProbeOK}}/{{.ProbeFail}}{{if not .LastOKAt.IsZero}} · успех {{ago .LastOKAt}}{{end}}{{with .LastErr}}<br><span class="err last-err" title="{{.}}">{{.}}</span>{{end}}</span>
 {{end}}
 
 {{define "claude-proxy"}}

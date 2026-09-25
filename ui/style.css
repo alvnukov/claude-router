@@ -128,8 +128,8 @@ pre{margin:4px 0;white-space:pre-wrap;word-break:break-word;max-height:70vh;over
 .pool-heading { margin-bottom:12px; }
 .pool-member { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px 0; border-bottom:1px solid var(--line,#343a46); }
 .pool-member>code { flex:1 1 240px; overflow-wrap:anywhere; }
-.pool-stats { flex-basis:100%; margin:0; }
-.pool-stats .last-err { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.model-stats { flex-basis:100%; margin:0; }
+.model-stats .last-err { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
 .inline-form { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
 .pool-add { margin-top:16px; }
 .settings-extra { margin-top:20px; }
