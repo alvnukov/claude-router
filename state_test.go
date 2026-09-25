@@ -16,10 +16,7 @@ func TestStateSnapshotRestoresBindingsAndRatings(t *testing.T) {
 	if err := old.saveSnapshot(path); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("private snapshot: %v %v", info, err)
-	}
+	requirePrivateFile(t, path)
 	fresh := newHealth("")
 	if err := fresh.loadSnapshot(path); err != nil {
 		t.Fatal(err)

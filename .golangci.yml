@@ -1,0 +1,108 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - depguard
+  exclusions:
+    # Unchecked Close, Flush, os.Remove and fmt printing: the router ignores
+    # those errors on purpose, as idiomatic Go does.
+    presets:
+      - std-error-handling
+    rules:
+      # File locking is moving to a platform package, and these files'
+      # unchecked errors go with it.
+      - path: (^|/)(filelock|limits)\.go$
+        linters:
+          - errcheck
+  settings:
+    staticcheck:
+      checks:
+        - all
+        # The defaults golangci-lint turns off.
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # Error strings here are messages for the user: the UI and the CLI
+        # show them as written, capitalized and punctuated as sentences.
+        - -ST1005
+    depguard:
+      # Dependencies point inward: cmd/router → server, ui, deploy,
+      # claudecode → providers, routing, history, limits → config → platform.
+      # The rules bind packages under internal/; the root package main is
+      # outside them until its code moves there.
+      rules:
+        platform:
+          files: ["**/internal/platform/**"]
+          deny:
+            - pkg: localrouter/internal
+              desc: platform is the innermost layer and imports nothing from internal
+        config:
+          files: ["**/internal/config/**"]
+          deny:
+            - pkg: localrouter/internal/history
+              desc: config depends only on platform
+            - pkg: localrouter/internal/limits
+              desc: config depends only on platform
+            - pkg: localrouter/internal/routing
+              desc: config depends only on platform
+            - pkg: localrouter/internal/providers
+              desc: config depends only on platform
+            - pkg: localrouter/internal/server
+              desc: config depends only on platform
+            - pkg: localrouter/internal/ui
+              desc: config depends only on platform
+            - pkg: localrouter/internal/claudecode
+              desc: config depends only on platform
+            - pkg: localrouter/internal/deploy
+              desc: config depends only on platform
+        core:
+          files:
+            - "**/internal/history/**"
+            - "**/internal/limits/**"
+            - "**/internal/routing/**"
+            - "**/internal/providers/**"
+          deny:
+            - pkg: localrouter/internal/server
+              desc: dependencies point inward; server is an outer layer
+            - pkg: localrouter/internal/ui
+              desc: dependencies point inward; ui is an outer layer
+            - pkg: localrouter/internal/claudecode
+              desc: dependencies point inward; claudecode is an outer layer
+            - pkg: localrouter/internal/deploy
+              desc: dependencies point inward; deploy is an outer layer
+        limits:
+          files: ["**/internal/limits/**"]
+          deny:
+            - pkg: localrouter/internal/providers/codex
+              desc: limits knows Anthropic windows only; ui assembles /api/limits
+        server:
+          files: ["**/internal/server/**"]
+          deny:
+            - pkg: localrouter/internal/ui
+              desc: server and ui do not import each other
+        ui:
+          files: ["**/internal/ui/**"]
+          deny:
+            - pkg: localrouter/internal/server
+              desc: server and ui do not import each other
+        cmd:
+          files: ["**/internal/**"]
+          deny:
+            - pkg: localrouter/cmd
+              desc: cmd wires the packages together; nothing imports it
+        os:
+          files:
+            - "**/internal/**"
+            - "!**/internal/platform/**"
+            - "!**/internal/deploy/**"
+          deny:
+            - pkg: syscall
+              desc: operating system calls live in internal/platform
+            - pkg: os/exec
+              desc: processes are started by internal/platform or internal/deploy
+            - pkg: os/signal
+              desc: signals are handled by internal/platform

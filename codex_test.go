@@ -197,10 +197,7 @@ func TestCodexCredentialRefreshAndPin(t *testing.T) {
 	if got.Tokens.RefreshToken != "new-refresh" {
 		t.Fatal("refresh token not rotated")
 	}
-	st, err := os.Stat(s.path)
-	if err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("credential permissions: %v %v", st, err)
-	}
+	requirePrivateFile(t, s.path)
 	req := httptest.NewRequest("POST", codexBaseURL+"/responses", nil)
 	if err := s.authorize(t.Context(), req); err != nil {
 		t.Fatal(err)

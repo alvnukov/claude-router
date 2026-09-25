@@ -61,7 +61,7 @@ func sessionOf(body []byte) string {
 	var uid struct {
 		SessionID string `json:"session_id"`
 	}
-	json.Unmarshal([]byte(req.Metadata.UserID), &uid)
+	_ = json.Unmarshal([]byte(req.Metadata.UserID), &uid) // not JSON: no session
 	return uid.SessionID
 }
 
@@ -352,7 +352,7 @@ func parseJSONResponse(body []byte, truncated bool) *parsedResponse {
 			Type    string `json:"type"`
 			Message string `json:"message"`
 		}
-		json.Unmarshal(m["error"], &e)
+		_ = json.Unmarshal(m["error"], &e) // best effort: the log shows what parses
 		p.Error = strings.TrimSpace(e.Type + ": " + e.Message)
 		return p
 	}
@@ -360,7 +360,7 @@ func parseJSONResponse(body []byte, truncated bool) *parsedResponse {
 	p.StopReason, _ = jsonString(m["stop_reason"])
 	p.Usage = usageMap(m["usage"])
 	var blocks []map[string]json.RawMessage
-	json.Unmarshal(m["content"], &blocks)
+	_ = json.Unmarshal(m["content"], &blocks) // best effort: the log shows what parses
 	for _, b := range blocks {
 		rb := respBlock{}
 		rb.Type, _ = jsonString(b["type"])
@@ -408,7 +408,7 @@ func parseSSE(body []byte) *parsedResponse {
 		switch kind {
 		case "message_start":
 			var msg map[string]json.RawMessage
-			json.Unmarshal(ev["message"], &msg)
+			_ = json.Unmarshal(ev["message"], &msg) // best effort: the log shows what parses
 			p.Model, _ = jsonString(msg["model"])
 			for k, v := range usageMap(msg["usage"]) {
 				p.Usage[k] = v
@@ -416,7 +416,7 @@ func parseSSE(body []byte) *parsedResponse {
 		case "content_block_start":
 			idx := jsonInt(ev["index"])
 			var cb map[string]json.RawMessage
-			json.Unmarshal(ev["content_block"], &cb)
+			_ = json.Unmarshal(ev["content_block"], &cb) // best effort: the log shows what parses
 			o := &open{}
 			o.blk.Type, _ = jsonString(cb["type"])
 			o.blk.ID, _ = jsonString(cb["id"])
@@ -438,7 +438,7 @@ func parseSSE(body []byte) *parsedResponse {
 				order = append(order, idx)
 			}
 			var d map[string]json.RawMessage
-			json.Unmarshal(ev["delta"], &d)
+			_ = json.Unmarshal(ev["delta"], &d) // best effort: the log shows what parses
 			dt, _ := jsonString(d["type"])
 			switch dt {
 			case "text_delta":
@@ -453,7 +453,7 @@ func parseSSE(body []byte) *parsedResponse {
 			}
 		case "message_delta":
 			var d map[string]json.RawMessage
-			json.Unmarshal(ev["delta"], &d)
+			_ = json.Unmarshal(ev["delta"], &d) // best effort: the log shows what parses
 			if sr, ok := jsonString(d["stop_reason"]); ok && sr != "" {
 				p.StopReason = sr
 			}
@@ -465,7 +465,7 @@ func parseSSE(body []byte) *parsedResponse {
 				Type    string `json:"type"`
 				Message string `json:"message"`
 			}
-			json.Unmarshal(ev["error"], &e)
+			_ = json.Unmarshal(ev["error"], &e) // best effort: the log shows what parses
 			p.Error = strings.TrimSpace(e.Type + ": " + e.Message)
 		}
 	}
@@ -500,7 +500,7 @@ func jsonString(raw json.RawMessage) (string, bool) {
 
 func jsonInt(raw json.RawMessage) int {
 	var n int
-	json.Unmarshal(raw, &n)
+	_ = json.Unmarshal(raw, &n) // anything but a number reads as 0
 	return n
 }
 

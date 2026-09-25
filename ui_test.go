@@ -87,7 +87,7 @@ func testUI(t *testing.T, sessions ...string) (*uiServer, http.Handler) {
 			rw := newRecorder(httptest.NewRecorder(), 1<<20)
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(200)
-			rw.Write([]byte(`{"type":"message","content":[{"type":"text","text":"hi there"}],"stop_reason":"end_turn"}`))
+			_, _ = rw.Write([]byte(`{"type":"message","content":[{"type":"text","text":"hi there"}],"stop_reason":"end_turn"}`))
 			st.finish(r.ID, rw, nil)
 		}
 	}
@@ -227,7 +227,9 @@ func TestReloadErrorBanner(t *testing.T) {
 	bad := withBadProvider(t, good)
 	writeRaw(t, path, bad)
 	future := time.Now().Add(2 * time.Second)
-	os.Chtimes(path, future, future)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
 	cs.pollOnce()
 	v := u.settingsView()
 	if len(v.ReloadErrors) != 1 || !strings.Contains(v.ReloadErrors[0].Err, "auth_id") || v.ReloadErrors[0].Snapshot.IsZero() {
@@ -245,7 +247,9 @@ func TestReloadErrorBanner(t *testing.T) {
 	}
 	writeRaw(t, path, string(good))
 	later := future.Add(2 * time.Second)
-	os.Chtimes(path, later, later)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
 	cs.pollOnce()
 	if left := u.settingsView().ReloadErrors; len(left) != 0 {
 		t.Fatalf("banner not cleared: %+v", left)
@@ -332,7 +336,9 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	good, _ := os.ReadFile(path)
 	writeRaw(t, path, withBadProvider(t, good))
 	future := time.Now().Add(2 * time.Second)
-	os.Chtimes(path, future, future)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
 	cs.pollOnce()
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad providers file not reported")
@@ -346,7 +352,9 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	}
 
 	writeRaw(t, cs.envPath, "ROUTER_LOCAL_BALANCE=many\n")
-	os.Chtimes(cs.envPath, future, future)
+	if err := os.Chtimes(cs.envPath, future, future); err != nil {
+		t.Fatal(err)
+	}
 	cs.pollOnce()
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad env file not reported")
@@ -365,8 +373,12 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	}
 	writeRaw(t, stray, "{")
 	later := future.Add(2 * time.Second)
-	os.Chtimes(stray, later, later)
-	os.Chtimes(path+".profiles", later, later)
+	if err := os.Chtimes(stray, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path+".profiles", later, later); err != nil {
+		t.Fatal(err)
+	}
 	cs.pollOnce()
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad profile file not reported")

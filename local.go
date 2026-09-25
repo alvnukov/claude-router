@@ -26,7 +26,8 @@ func newID(prefix string) string {
 func writeAnthropicError(w http.ResponseWriter, status int, kind, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
+	// A failed write means the client is gone; there is no one to tell.
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"type":  "error",
 		"error": map[string]string{"type": kind, "message": msg},
 	})
@@ -114,9 +115,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 					return
 				}
 			}
-			creq, err := toCodex(codexInput)
-			if err != nil {
-				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			creq, cerr := toCodex(codexInput)
+			if cerr != nil {
+				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", cerr.Error())
 				return
 			}
 			payload, err = json.Marshal(creq)
@@ -314,7 +315,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		return res
 	}
 	original := resp.Body
-	var body io.ReadCloser = original
+	body := original
 	if stream && cand.Provider.Type == "codex" {
 		body = codexChatStream(original)
 	}
@@ -436,7 +437,8 @@ func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	// A failed write means the client is gone; there is no one to tell.
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"id":            newID("msg_"),
 		"type":          "message",
 		"role":          "assistant",
@@ -640,7 +642,6 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	if nextIndex == 0 {
 		text := fmt.Sprintf("(модель не вернула содержимого; finish_reason=%q)", finish)
 		openIndex = 0
-		nextIndex = 1
 		textOpen = true
 		s.event("content_block_start", map[string]any{
 			"type": "content_block_start", "index": 0,

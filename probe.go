@@ -37,7 +37,7 @@ func parseModels(body []byte) []probeModel {
 	var ml struct {
 		Data []map[string]any `json:"data"`
 	}
-	json.Unmarshal(body, &ml)
+	_ = json.Unmarshal(body, &ml) // not a model list: no models
 	var out []probeModel
 	for _, raw := range ml.Data {
 		id, _ := raw["id"].(string)

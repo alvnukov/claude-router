@@ -37,7 +37,7 @@ func fakeEndpoint(t *testing.T, calls *testCalls) *httptest.Server {
 			Model string `json:"model"`
 		}
 		b, _ := io.ReadAll(r.Body)
-		json.Unmarshal(b, &req)
+		_ = json.Unmarshal(b, &req) // a bad body routes as model ""
 		calls.add(req.Model)
 		switch req.Model {
 		case "bad":
@@ -49,7 +49,7 @@ func fakeEndpoint(t *testing.T, calls *testCalls) *httptest.Server {
 			fallthrough
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok from `+req.Model+`"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"ok from `+req.Model+`"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 		}
 	}))
 }

@@ -147,7 +147,8 @@ func (l *lifecycle) healthz(w http.ResponseWriter, r *http.Request) {
 	if state == modeDraining {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
-	json.NewEncoder(w).Encode(struct {
+	// A failed write means the client is gone; there is no one to tell.
+	_ = json.NewEncoder(w).Encode(struct {
 		PID     int           `json:"pid"`
 		Slot    string        `json:"slot"`
 		Mode    lifecycleMode `json:"mode"`

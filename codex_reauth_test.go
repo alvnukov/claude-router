@@ -53,7 +53,10 @@ func TestCodexFailedRefreshDoesNotStormOrExposeSecrets(t *testing.T) {
 	oldAuth, oldTransport := codexAuth, http.DefaultTransport
 	defer func() { codexAuth = oldAuth; http.DefaultTransport = oldTransport }()
 	var refreshes atomic.Int32
-	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { refreshes.Add(1); http.Error(w, "private-secret", 401) }))
+	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		http.Error(w, "private-secret", http.StatusUnauthorized)
+	}))
 	defer oauth.Close()
 	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("account"), path: filepath.Join(t.TempDir(), "auth.json"), issuer: oauth.URL, client: oauth.Client()}
 	http.DefaultTransport = usageTransport(func(*http.Request) (*http.Response, error) {

@@ -26,7 +26,6 @@ type cutoverFixture struct {
 	marker    string
 	committed bool
 	file      deployFile
-	stops     []func()
 	legacy    []func()
 	caddy     []func()
 }
@@ -45,7 +44,7 @@ func serveOn(t *testing.T, address string, handler http.Handler) func() {
 		t.Fatal(err)
 	}
 	server := &http.Server{Handler: handler}
-	go server.Serve(listener)
+	go func() { _ = server.Serve(listener) }() // ErrServerClosed once the test ends
 	return func() { server.Close() }
 }
 
@@ -64,7 +63,7 @@ func newCutoverFixture(t *testing.T, pending ...int) *cutoverFixture {
 }
 
 func (f *cutoverFixture) startLegacyServers() {
-	status := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "legacy") })
+	status := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "legacy") })
 	f.legacy = []func(){serveOn(f.t, f.controller.config.PublicAPI, status), serveOn(f.t, f.controller.config.PublicUI, status)}
 }
 
@@ -145,7 +144,7 @@ func (f *cutoverFixture) run(answer string, extra ...string) (string, error) {
 	home := f.t.TempDir()
 	binary := deployBinary(f.t, home)
 	cfg := f.controller.config
-	args := []string{"-home", home, "-binary", binary, "-caddy", "/nonexistent/caddy", "-caddy-admin", "127.0.0.1:1",
+	args := []string{"-home", home, "-binary", binary, "-caddy", filepath.Join(home, "nonexistent-caddy"), "-caddy-admin", "127.0.0.1:1",
 		"-public-api", cfg.PublicAPI, "-public-ui", cfg.PublicUI, "-blue-api", cfg.BlueAPI, "-blue-ui", cfg.BlueUI,
 		"-green-api", cfg.GreenAPI, "-green-ui", cfg.GreenUI, "-wait", "2s", "-ready-timeout", "2s"}
 	var out bytes.Buffer
@@ -225,9 +224,11 @@ func TestCutoverGivesUpWhileLegacyIsBusy(t *testing.T) {
 
 func TestCutoverRefusesWhenSlotsAlreadyServe(t *testing.T) {
 	f := newCutoverFixture(t, 0)
-	f.stopLegacy(t.Context())
+	if err := f.stopLegacy(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	f.caddy = []func(){serveOn(t, f.controller.config.PublicAPI, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"slot":"blue","pid":7,"mode":"active"}`)
+		_, _ = io.WriteString(w, `{"slot":"blue","pid":7,"mode":"active"}`)
 	}))}
 	f.calls = nil
 	if _, err := f.run("yes\n"); err == nil {
@@ -242,9 +243,13 @@ func TestCutoverRefusesWhenSlotsAlreadyServe(t *testing.T) {
 // recorded; deploy then sends the user back to cutover, which finishes it.
 func TestCutoverRecordsASwitchItFailedToRecord(t *testing.T) {
 	f := newCutoverFixture(t, 0)
-	f.stopLegacy(t.Context())
+	if err := f.stopLegacy(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	f.slots["blue"] = &deploySlotState{Mode: modeActive, PID: 7}
-	f.startCaddy(t.Context())
+	if err := f.startCaddy(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	admin := httptest.NewServer(http.NotFoundHandler()) // Caddy's own admin API
 	defer admin.Close()
 	f.calls = nil
@@ -304,7 +309,7 @@ func TestLegacyPendingReadsStatusStrip(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		io.WriteString(w, pages[path])
+		_, _ = io.WriteString(w, pages[path])
 	}))
 	defer server.Close()
 	cfg := testDeployConfig(t)
@@ -342,6 +347,7 @@ func TestSystemCutoverUsesConfiguredScratchLabels(t *testing.T) {
 }
 
 func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	agents := filepath.Join(home, "agents")

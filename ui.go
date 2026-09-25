@@ -99,14 +99,6 @@ func uiTemplates() (*template.Template, error) {
 	return template.New("").Funcs(funcs).ParseFS(uiFS, "ui/*.html")
 }
 
-func startUI(addr string, u *uiServer) {
-	go func() {
-		if err := http.ListenAndServe(addr, u.handler()); err != nil {
-			log.Printf("ui: %v", err)
-		}
-	}()
-}
-
 func newUIServer(st *store, cs *configStore, hl *health) *uiServer {
 	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: newAnthropicLimits("", anthropicLimitsMaxAge)}
 }
@@ -167,7 +159,7 @@ func (u *uiServer) render(w http.ResponseWriter, name string, data any) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(buf.Bytes())
+	_, _ = w.Write(buf.Bytes()) // the client may be gone
 }
 
 // ---- pages and partials ----
@@ -439,7 +431,7 @@ func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*r
 	}
 	body, ct := pick(rec)
 	w.Header().Set("Content-Type", ct)
-	w.Write(body)
+	_, _ = w.Write(body) // the client may be gone
 }
 
 // ---- settings ----
@@ -703,7 +695,7 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	settings, err := parsePoolSettings(settingsInput{
 		MaxInputChars: r.FormValue("max_input_chars"),
 		Failover:      r.FormValue("failover"),
@@ -747,7 +739,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
 		return
 	}
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	l := u.cs.get().local.clone()
 	if l.Routes == nil {
 		l.Routes = map[string]map[string]modelRoute{}
@@ -806,7 +798,7 @@ func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, messag
 
 // settingsProbe re-probes one provider and re-renders its pane.
 func (u *uiServer) settingsProbe(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	c := u.cs.get()
 	p, ok := c.local.provider(strings.TrimSpace(r.FormValue("provider")))
 	if !ok {
@@ -832,7 +824,7 @@ func (u *uiServer) settingsProvider(w http.ResponseWriter, r *http.Request) {
 // settingsProviders adds, edits or removes a provider. Removing one drops its
 // models too; affected pools remain empty and reject requests until configured.
 func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	c := u.cs.get()
 	l := c.local.clone()
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -1073,7 +1065,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
 		return
 	}
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	l := u.cs.get().local.clone()
 	if l.ModelPools == nil {
 		l.ModelPools = map[string][]poolTarget{}
@@ -1509,7 +1501,7 @@ func (u *uiServer) ranked(c config) []candidate {
 // settingsModels handles the one-click actions on the local models table.
 // Models are addressed by key (provider/model); add takes provider + model.
 func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	c := u.cs.get()
 	l := c.local.clone()
 	key := strings.TrimSpace(r.FormValue("key"))

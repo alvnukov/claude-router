@@ -121,7 +121,7 @@ func checkModels(c config, hl *health) {
 				hl.recordProbe(cand.Key, false, 0, "проверка: "+res.err.Error())
 				return
 			}
-			io.Copy(io.Discard, io.LimitReader(res.resp.Body, 1<<16))
+			_, _ = io.Copy(io.Discard, io.LimitReader(res.resp.Body, 1<<16)) // drain for reuse; the probe has its answer
 			res.resp.Body.Close()
 			res.cancel()
 			hl.recordProbe(cand.Key, true, res.ttfb, "")

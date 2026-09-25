@@ -228,7 +228,7 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 func (d *deployController) retire(ctx context.Context, slot string) error {
 	state, err := d.ops.state(ctx, slot)
 	if err != nil || state.PID == 0 {
-		d.ops.stop(ctx, slot)
+		_ = d.ops.stop(ctx, slot) // nothing may be loaded
 		return nil
 	}
 	if state.Mode == modeActive || state.Mode == modeQuiesced {

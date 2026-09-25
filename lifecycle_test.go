@@ -59,9 +59,13 @@ func TestLifecycleHealthAndTraffic(t *testing.T) {
 	} {
 		switch tc.mode {
 		case modeActive:
-			life.activate()
+			if err := life.activate(); err != nil {
+				t.Fatal(err)
+			}
 		case modeQuiesced:
-			life.quiesce()
+			if err := life.quiesce(); err != nil {
+				t.Fatal(err)
+			}
 		case modeDraining:
 			life.drain()
 		}
@@ -89,7 +93,7 @@ func TestLifecycleDrainWaitsForOpenStreamAndTimesOut(t *testing.T) {
 	h := life.guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(entered)
 		<-finish
-		w.Write([]byte("last event"))
+		_, _ = w.Write([]byte("last event"))
 	}))
 	done := make(chan struct{})
 	go func() {

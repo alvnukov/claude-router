@@ -13,7 +13,7 @@ func (u *uiServer) profileActivateAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"active_profile": name})
+	_ = json.NewEncoder(w).Encode(map[string]string{"active_profile": name}) // the client may be gone
 }
 
 func (u *uiServer) profileActivate(w http.ResponseWriter, r *http.Request) {
