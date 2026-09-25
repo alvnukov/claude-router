@@ -11,7 +11,7 @@
 {{template "claude-proxy" .ClaudeProxy}}
 <div class="catalog-status"><form hx-post="/settings/refresh-models" hx-target="#detail" hx-disabled-elt="find button"><button class="btn" type="submit">Обновить модели</button></form><span class="help">Автоматически раз в час{{if not .Catalog.CheckedAt.IsZero}} · проверено {{ago .Catalog.CheckedAt}}{{end}}</span></div>
 {{range .Catalog.Notes}}<div class="note warn">{{.}}</div>{{end}}
-<nav class="settings-nav"><a href="#routes">Маршруты</a><a href="#pools">Пулы</a><a href="#codex-subscription">Подписка Codex</a><a href="#connections">Подключения</a></nav>
+<nav class="settings-nav"><a href="#routes">Маршруты</a><a href="#pools">Пулы</a><a href="#codex-subscription">Подписка Codex</a><a href="#anthropic-limits">Лимиты Anthropic</a><a href="#connections">Подключения</a></nav>
 <section class="settings-section" id="routes">
 <h2>Маршруты по семействам</h2><p class="help">Новые версии Opus, Sonnet, Haiku и Fable наследуют назначения своего семейства для каждого effort. Прямая модель не переключается при сбое; для переключений выберите пул. «Не настроено» запрещает запрос. «Не указан» применяется, когда клиент не передал effort.</p>
 <div class="route-grid">{{range .Families}}{{template "route-card" .}}{{end}}</div>
@@ -50,6 +50,15 @@
 <section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
 {{template "codex-login" .Login}}
 <div id="codex-usage" hx-get="/settings/codex/usage" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>
+</section>
+<section class="settings-section" id="anthropic-limits"><h2>Лимиты Anthropic</h2>
+{{with .Limits}}{{if eq .State "unverified"}}<p><b>Не подтверждено.</b> Anthropic присылает заголовки лимитов, но что они значат для подписки, ещё не проверено, поэтому значения не показываются.</p>
+<p class="help">Заголовки в ответе {{ago .ObservedAt}} · {{tfull .ObservedAt}}:</p>
+<ul>{{range .Headers}}<li><code>{{.}}</code></li>{{end}}</ul>
+{{else if eq .State "no_headers"}}<p class="note warn">Anthropic не присылает лимиты в ответах.</p>
+<p class="help">Ответ {{ago .ObservedAt}} · {{tfull .ObservedAt}} пришёл без заголовков anthropic-ratelimit-*.</p>
+{{else}}<p><b>Недоступно.</b> {{if .ObservedAt.IsZero}}Роутер ещё не видел ответов Anthropic.{{else}}Последний ответ Anthropic {{ago .ObservedAt}} · {{tfull .ObservedAt}}, это старше {{.MaxAgeMinutes}} мин.{{end}}</p>
+{{end}}<p class="help">Данные берутся только из ответов Anthropic на запросы Claude Code через роутер. Сам роутер к Anthropic не обращается: без свежего трафика лимиты недоступны.</p>{{end}}
 </section>
 <section class="settings-section" id="connections"><h2>Подключения</h2><p class="help">Подключите провайдера и добавьте его модели в каталог. Затем их можно назначить напрямую или включить в пул.</p>
 

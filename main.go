@@ -182,6 +182,7 @@ func main() {
 	cs.watch(2 * time.Second)
 	startChecker(cs, hl)
 	u := newUIServer(st, cs, hl)
+	u.limits = newAnthropicLimits(limitsPath(), anthropicLimitsMaxAge)
 	u.startCatalogUpdates(context.Background())
 	mux := newMainHandler(cfg, cs, st, hl, u)
 	log.Printf("listening on %s", cfg.listen)
@@ -204,6 +205,9 @@ func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiSer
 	}
 	// FlushInterval -1 streams SSE through without buffering.
 	proxy.FlushInterval = -1
+	if u != nil {
+		proxy.ModifyResponse = u.limits.observeResponse
+	}
 
 	pass := func(w http.ResponseWriter, r *http.Request, body []byte) {
 		if body != nil {
