@@ -98,7 +98,7 @@ func TestPoolSaveKeepsType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), `"balance"`) {
+	if strings.Contains(string(raw), `"balance":`) {
 		t.Fatalf("saved file still has the numeric balance: %s", raw)
 	}
 	l, err := readProviders(path)

@@ -52,6 +52,9 @@ type health struct {
 	m        map[string]*modelStat
 	inflight map[string]int // requests being served right now, by model key
 	path     string
+	// balanceBy scores connections for new sessions of a balance pool; nil
+	// means sessionsOnConnection.
+	balanceBy balanceCriterion
 }
 
 func healthPath() string {

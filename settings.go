@@ -150,6 +150,7 @@ type settingsInput struct {
 	FirstByte     string // seconds
 	Balance       string // models to spread over
 	ProbeEvery    string // seconds, 0 off
+	Type          string // pool type; "" keeps the stored one
 }
 
 func inputFromConfig(c config) settingsInput {

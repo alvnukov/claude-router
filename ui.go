@@ -699,6 +699,7 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		Failover:      r.FormValue("failover"),
 		FirstByte:     r.FormValue("first_byte"),
 		ProbeEvery:    r.FormValue("probe_every"),
+		Type:          r.FormValue("type"),
 	})
 	if err == nil {
 		err = u.cs.updatePoolSettings(r.FormValue("name"), func(old poolSettings) poolSettings {

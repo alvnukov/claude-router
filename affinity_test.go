@@ -93,7 +93,7 @@ func TestConcurrentSessionFirstChoice(t *testing.T) {
 			if i%2 == 0 {
 				c[0], c[1] = c[1], c[0]
 			}
-			results <- hl.bindCandidates("session", c)[0].Key
+			results <- hl.bindCandidates("session", poolRoute{}, c)[0].Key
 		}(i)
 	}
 	wg.Wait()

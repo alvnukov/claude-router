@@ -175,7 +175,7 @@ func TestProfilePointerHandEditIsWatched(t *testing.T) {
 	if err := cs.createProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	h.bindCandidates("session", []candidate{{Key: "p/a"}})
+	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
 	if err := writeActiveProfile(path, "cloud"); err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +400,7 @@ func TestReloadReadBeforeActivationKeepsNewProfile(t *testing.T) {
 	if err := cs.createProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	h.bindCandidates("session", []candidate{{Key: "p/a"}})
+	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
 	readOld, release := make(chan struct{}), make(chan struct{})
 	reloadDone := make(chan error, 1)
 	go func() {

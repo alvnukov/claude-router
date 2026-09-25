@@ -88,7 +88,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	pickCfg.failover = true
 	cands := withoutSignedOut(hl.pick(pickCfg))
 	scope := affinityKey(cfg, body, req)
-	cands = hl.bindCandidates(scope, cands)
+	cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
 	if !cfg.failover && len(cands) > 1 {
 		cands = cands[:1]
 	}

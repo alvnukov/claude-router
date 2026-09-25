@@ -90,7 +90,7 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	cfg := cs.get()
 	req := anthropicRequest{Model: "claude-opus-5"}
 	scope := affinityKey(cfg, []byte(`{"metadata":{"user_id":"{\"session_id\":\"session-1\"}"}}`), req)
-	h.bindCandidates(scope, []candidate{{Key: "p/a"}})
+	h.bindCandidates(scope, poolRoute{}, []candidate{{Key: "p/a"}})
 	if len(h.sessions) == 0 {
 		t.Fatal("binding not created")
 	}
@@ -269,7 +269,7 @@ func TestProfilesHandEditChangesActiveProfileAndClearsAffinity(t *testing.T) {
 	if err := writeProviders(path, l); err != nil {
 		t.Fatal(err)
 	}
-	h.bindCandidates("session", []candidate{{Key: "p/a"}})
+	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
 	if err := cs.reloadProfiles(h); err != nil {
 		t.Fatal(err)
 	}

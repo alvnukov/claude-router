@@ -13,6 +13,10 @@ import (
 // healthy member in pool order. An absent type means failover.
 const poolFailover = "failover"
 
+// poolBalance spreads new sessions over the pool's connections; a bound
+// session keeps its member, as in a failover pool.
+const poolBalance = "balance"
+
 // Pool behavior is persisted independently of the legacy env defaults.
 type poolSettings struct {
 	Type          string `json:"type,omitempty"`
@@ -56,8 +60,8 @@ func (s poolSettings) apply(c config) config {
 }
 
 func (s poolSettings) validate() error {
-	if s.Type != "" && s.Type != poolFailover {
-		return fmt.Errorf("тип пула %q не поддерживается (есть только failover)", s.Type)
+	if s.Type != "" && s.Type != poolFailover && s.Type != poolBalance {
+		return fmt.Errorf("тип пула %q не поддерживается (есть failover и balance)", s.Type)
 	}
 	if s.FirstByteSec < 0 || s.ProbeSec < 0 || s.MaxInputChars < 0 {
 		return fmt.Errorf("настройки пула: значения должны быть целыми числами >= 0")
@@ -71,7 +75,7 @@ func (s poolSettings) validate() error {
 }
 
 func parsePoolSettings(in settingsInput) (poolSettings, error) {
-	s := poolSettings{Failover: in.Failover == "1"}
+	s := poolSettings{Type: strings.TrimSpace(in.Type), Failover: in.Failover == "1"}
 	for _, field := range []struct {
 		name, value string
 		out         *int

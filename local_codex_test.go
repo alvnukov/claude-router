@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -309,4 +311,52 @@ func TestCodexSignedOutMemberFailsOver(t *testing.T) {
 			t.Fatalf("all signed out: %d %s", w.Code, w.Body.String())
 		}
 	})
+}
+
+func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
+	seedTwoConnections(t)
+	codexStatusByAccount(t, map[string]int{})
+	path := filepath.Join(t.TempDir(), "providers.json")
+	start := config{local: codexPoolSetup("codex/gpt", "work/gpt"), failover: true, firstByte: 5 * time.Second}
+	start.local.PoolSettings = map[string]poolSettings{"gpt": {Failover: true, FirstByteSec: 5}}
+	start.upstream, _ = url.Parse("https://api.anthropic.com")
+	if err := writeProviders(path, start.local); err != nil {
+		t.Fatal(err)
+	}
+	cs, hl := newConfigStore(start, path), newHealth("")
+	serve := func(session, want string) {
+		t.Helper()
+		if _, tr := runLocalSession(t, cs.get().forModel("local-model", ""), hl, session); tr.Served != want {
+			t.Fatalf("%s served by %q, want %s", session, tr.Served, want)
+		}
+	}
+	serve("s1", "codex/gpt")
+	serve("s2", "codex/gpt")
+
+	// Switched from the UI path: new sessions balance, bound ones stay.
+	if err := cs.savePoolSettings("gpt", poolSettings{Type: poolBalance, Failover: true, FirstByteSec: 5}); err != nil {
+		t.Fatal(err)
+	}
+	serve("n1", "work/gpt")
+	serve("n2", "work/gpt")
+	serve("n3", "codex/gpt")
+	serve("s1", "codex/gpt")
+	serve("s2", "codex/gpt")
+
+	// Switched back by editing the file and reloading it.
+	l, err := readProviders(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps := l.PoolSettings["gpt"]
+	ps.Type = poolFailover
+	l.PoolSettings["gpt"] = ps
+	if err := writeProviders(path, l); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.reloadProfiles(hl); err != nil {
+		t.Fatal(err)
+	}
+	serve("n4", "codex/gpt")
+	serve("n1", "work/gpt")
 }
