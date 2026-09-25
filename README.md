@@ -304,6 +304,41 @@ Once the agent is installed, `start`, `stop` and `restart` delegate to
 `launchctl` -- a plain kill would only be undone by `KeepAlive`. `stop` unloads
 the agent, so it stays down until the next login or an explicit `start`.
 
+### One-time move to Caddy and blue/green deploys
+
+**Do not run cutover during normal traffic.** The manual `./router install
+--cutover` is the only migration from the legacy launchd agent. It requires
+Caddy, prepares a standby blue slot, prints the plan and the 15-minute
+pending-request limit, and waits for a typed `yes`. It reads the legacy UI's
+`/status` until pending reaches zero, then stops the legacy agent and binds
+Caddy to the public API/UI addresses. Connections may fail between that stop
+and Caddy's start; if Caddy never becomes ready, it stops Caddy and blue and
+restarts the legacy agent. Schedule a maintenance window and move clients to
+the cloud first. A second `install --cutover` refuses once the cutover is
+recorded; if recording failed after Caddy and blue took over, running it again
+only records the switch.
+
+After cutover, Caddy is the only public listener; the router runs in blue and
+green launchd slots. The six loopback addresses and the Caddy admin address are
+saved in `ROUTER_HOME/deploy.json` by cutover; the candidate Caddy binary path
+is saved there too. Configure the addresses in `env` *before* cutover if the
+defaults in `env.example` conflict. All tests use ephemeral addresses and do
+not run cutover on the public ports.
+
+`./router deploy` builds a candidate and switches slots without restarting
+Caddy. Identical binaries are a no-op; `./router deploy -force` switches even
+when the digest is unchanged, as does `./router restart` after cutover. A
+serving request stays on its original slot until it ends, or until
+`-drain-timeout` (15 minutes) passes; then the old slot is stopped and its own
+`ROUTER_DRAIN_TIMEOUT` shutdown ends what is left. A deploy interrupted before
+the switch is resumed by the next one. The new slot runs the config migrations
+when it becomes active, once the old slot has stopped writing. `./router status`
+reports the active slot and launchd labels; `./router start` reloads its slot
+and Caddy; `./router stop` deliberately unloads Caddy and both slots (an
+outage), so do not use it as a deployment operation. Existing `./router
+install` and `./router uninstall` apply only before cutover; after cutover
+both refuse, so the legacy agent never comes back beside the slots.
+
 ## Context handling
 
 `ROUTER_LOCAL_MAX_INPUT_CHARS` limits the prompt sent to pool members; zero
@@ -318,4 +353,28 @@ messages are omitted when translating to an OpenAI-compatible provider.
 go test ./...
 go test -race ./...
 go vet ./...
+deploy/check.sh
 ```
+
+`deploy/check.sh` runs the whole deploy path under the real launchd and Caddy,
+on its own labels (`router-check.*`), free ports and a temporary `ROUTER_HOME`:
+
+1. It starts a legacy router, cuts it over, and keeps a slow event stream open
+   through Caddy.
+2. While the stream is open, Caddy reloads and `./router deploy -force` moves
+   the router to the other slot. The stream must end with every event, and the
+   next request must reach a new PID.
+3. The old process must have exited and its label must be unloaded. Caddy,
+   restarted by launchd, must still route to the new slot.
+4. A repeat deploy must report `no change`.
+
+The check refuses to start if any of its labels is loaded, if a port is in use
+or belongs to the live router, or if its directory lies inside the router home.
+It also refuses the live label names. `deploy/check.sh --live` runs the deploy
+checks against the installed router. That run is a real deploy of the build the
+active slot already runs, never of the checkout, so it skips the stream and the
+Caddy restart.
+
+The cutover label prefix defaults to the live names (`com.claude-local-router`).
+`localrouter cutover -label-prefix` records another prefix in `deploy.json`, and
+everything after cutover reads it from there.

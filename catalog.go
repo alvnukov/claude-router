@@ -131,6 +131,9 @@ func (u *uiServer) startCatalogUpdates(ctx context.Context) {
 // Network reads happen outside the config lock. Results are merged into the
 // latest configuration, so an hourly update never overwrites a dashboard edit.
 func (u *uiServer) refreshModels(ctx context.Context) error {
+	if u.life != nil && !u.life.writesSharedState() {
+		return fmt.Errorf("model catalog refresh requires active instance")
+	}
 	u.catalogMu.Lock()
 	defer u.catalogMu.Unlock()
 	snapshot := u.cs.get().local
@@ -144,6 +147,9 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	}
 	u.cs.mu.Lock()
 	defer u.cs.mu.Unlock()
+	if u.life != nil && !u.life.writesSharedState() {
+		return fmt.Errorf("model catalog refresh requires active instance")
+	}
 	next := u.cs.c.local.clone()
 	next.Catalog.CheckedAt = time.Now()
 	next.Catalog.Notes = nil

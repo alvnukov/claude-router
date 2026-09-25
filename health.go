@@ -52,6 +52,7 @@ type health struct {
 	m        map[string]*modelStat
 	inflight map[string]int // requests being served right now, by model key
 	path     string
+	life     *lifecycle
 	// balanceBy scores connections for new sessions of a balance pool; nil
 	// means sessionsOnConnection.
 	balanceBy balanceCriterion
@@ -181,7 +182,7 @@ func (h *health) reset(model string) {
 }
 
 func (h *health) save() {
-	if h.path == "" {
+	if h.path == "" || (h.life != nil && !h.life.writesSharedState()) {
 		return
 	}
 	h.mu.Lock()

@@ -22,6 +22,7 @@ const respCaptureLimit = 8 << 20
 
 type config struct {
 	listen        string
+	publicListen  string // where clients reach the router; a slot listens behind Caddy
 	upstream      *url.URL
 	local         localSetup
 	maxInputChars int
@@ -76,9 +77,10 @@ func loadConfigChecked() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	if assigned {
+	if assigned && !routerStartsStandby() {
 		// One-time migration: persist the new auth_id values before the other
-		// startup migrations read or rewrite the file.
+		// startup migrations read or rewrite the file. A standby slot writes
+		// them when it is activated.
 		if err := saveConfigurationMigration(providersPath(), local, ".before-codex-ids"); err != nil {
 			return config{}, fmt.Errorf("codex id migration: %w", err)
 		}
@@ -93,22 +95,32 @@ func loadConfigChecked() (config, error) {
 	c.firstByte = time.Duration(atoiOr(env("ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", "45"), 45)) * time.Second
 	c.balance = atoiOr(env("ROUTER_LOCAL_BALANCE", "3"), 3)
 	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
+	c.publicListen = env("ROUTER_PUBLIC_LISTEN", c.listen)
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
+	if routerStartsStandby() {
+		return c, nil // standby migrates when it is activated, as the only writer
+	}
+	return migrateConfig(c, providersPath())
+}
+
+// migrateConfig brings providers.json at path to the current schema, keeping
+// a backup of each step.
+func migrateConfig(c config, path string) (config, error) {
 	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
-		if err := savePoolMigration(providersPath(), migrated); err != nil {
+		if err := savePoolMigration(path, migrated); err != nil {
 			return config{}, fmt.Errorf("pool migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migrateFamilyRoutes(c.local); changed {
-		if err := saveConfigurationMigration(providersPath(), migrated, ".before-families"); err != nil {
+		if err := saveConfigurationMigration(path, migrated, ".before-families"); err != nil {
 			return config{}, fmt.Errorf("family migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migratePoolSettings(c); changed {
-		if err := saveConfigurationMigration(providersPath(), migrated, ".before-pool-settings"); err != nil {
+		if err := saveConfigurationMigration(path, migrated, ".before-pool-settings"); err != nil {
 			return config{}, fmt.Errorf("pool settings migration: %w", err)
 		}
 		c.local = migrated
@@ -181,37 +193,11 @@ func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error)
 	return probe.Model, route, nil
 }
 
-func main() {
-	loadEnvFile()
-	codexAuth = newCodexAuthStore()
-	cfg := loadConfig()
-	cs := newConfigStore(cfg, providersPath())
-	if err := cs.ensureProfiles(); err != nil {
-		log.Fatalf("profile migration: %v", err)
-	}
-	st := newStore(cfg.uiHistory, historyPath())
-	hl := newHealth(healthPath())
-	cs.health = hl
-	cs.watch(2 * time.Second)
-	startChecker(cs, hl)
-	u := newUIServer(st, cs, hl)
-	u.limits = newAnthropicLimits(limitsPath(), anthropicLimitsMaxAge)
-	u.startCatalogUpdates(context.Background())
-	u.startCodexUsageUpdates(context.Background())
-	mux := newMainHandler(cfg, cs, st, hl, u)
-	log.Printf("listening on %s", cfg.listen)
-	log.Printf("  upstream     %s", cfg.upstream)
-	log.Printf("  local        %s", cfg.local.summary())
-	if cfg.uiListen != "" {
-		log.Printf("  ui           http://%s (history %d)", cfg.uiListen, cfg.uiHistory)
-		startUI(cfg.uiListen, u)
-	}
-	if err := http.ListenAndServe(cfg.listen, mux); err != nil {
-		log.Fatal(err)
-	}
+func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer) http.Handler {
+	return newRouterHandler(cfg, cs, st, hl, u, nil)
 }
 
-func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer) http.Handler {
+func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer, life *lifecycle) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
@@ -308,10 +294,6 @@ func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiSer
 		json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4})
 	})
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("ok"))
-	})
-
 	// Everything else goes to Anthropic as is. One log line per request says
 	// what went by: no query, headers or bodies, and a bounded, escaped path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +309,45 @@ func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiSer
 		}
 		log.Printf("pass %s %s -> %d in %s", r.Method, path, status, time.Since(start).Round(time.Millisecond))
 	})
+	if life == nil {
+		return mux
+	}
+	api := http.NewServeMux()
+	api.HandleFunc("/healthz", life.healthz)
+	api.Handle("/", life.guard(mux))
+	return api
+}
 
-	return mux
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "deploy" {
+		if err := runDeploy(context.Background(), os.Args[2:], os.Stdout, newDeployOps); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "service-labels" {
+		if err := runServiceLabels(os.Args[2:], os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "cutover" {
+		if err := runCutover(context.Background(), os.Args[2:], os.Stdin, os.Stdout, newCutoverOps); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	loadEnvFile()
+	codexAuth = newCodexAuthStore()
+	cfg := loadConfig()
+	life := newLifecycle(routerStartsStandby())
+	server := newRouterServer(cfg, life, statePath())
+	if life.mode() != modeStandby {
+		if err := server.cs.ensureProfiles(); err != nil {
+			log.Fatalf("profile migration: %v", err)
+		}
+	}
+	if err := server.run(); err != nil {
+		log.Fatal(err)
+	}
 }

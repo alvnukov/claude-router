@@ -380,8 +380,32 @@ func (u *uiServer) startCodexUsageUpdates(ctx context.Context) {
 	ticker := time.NewTicker(codexUsageRefresh)
 	go func() {
 		defer ticker.Stop()
-		refreshCodexUsageEvery(ctx, u.codexUsageTargets, ticker.C)
+		refreshCodexUsageEvery(ctx, u.codexUsageTargets, activeTicks(ctx, u.life, ticker.C))
 	}()
+}
+
+// activeTicks passes ticks on only while life lets this router write shared
+// state, so a slot that was quiesced or drained stops asking Codex once the
+// new one has taken over. Like a ticker, it drops a tick nobody is waiting for.
+func activeTicks(ctx context.Context, life *lifecycle, in <-chan time.Time) <-chan time.Time {
+	out := make(chan time.Time, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case t := <-in:
+				if life != nil && !life.writesSharedState() {
+					continue
+				}
+				select {
+				case out <- t:
+				default:
+				}
+			}
+		}
+	}()
+	return out
 }
 
 func quotaTimeLeft(d time.Duration) string {

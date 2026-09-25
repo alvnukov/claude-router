@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -129,6 +130,9 @@ func loadEnvFile() {
 		return
 	}
 	for k, v := range vals {
+		if os.Getenv("ROUTER_SLOT") != "" && (k == "ROUTER_LISTEN" || k == "ROUTER_UI_LISTEN" || k == "ROUTER_STANDBY" || k == "ROUTER_SLOT" || k == "ROUTER_ACTIVE_SLOT_FILE") {
+			continue
+		}
 		os.Setenv(k, v)
 	}
 	log.Printf("env: %d vars from %s", len(vals), p)
@@ -151,6 +155,36 @@ func mtime(p string) time.Time {
 	return time.Time{}
 }
 
+func (s *configStore) reloadProviders() error {
+	if s.provPath == "" {
+		return nil
+	}
+	setup, err := readProviders(s.provPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return s.applyLocal(setup, false)
+}
+
+// migrate runs the config migrations a standby slot skipped at start.
+func (s *configStore) migrate() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.provPath == "" {
+		return nil
+	}
+	c, err := migrateConfig(s.c, s.provPath)
+	if err != nil {
+		return err
+	}
+	s.c = c
+	s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
+	return nil
+}
+
 func (s *configStore) get() config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -161,9 +195,19 @@ func (s *configStore) get() config {
 // settings the UI can change are reloaded; addresses and the upstream URL are
 // bound at start and still need one. A write from the UI bumps the mtime too;
 // that reload is a no-op because the values already match.
-func (s *configStore) watch(every time.Duration) {
+func (s *configStore) watch(ctx context.Context, every time.Duration, life *lifecycle) {
 	go func() {
-		for range time.Tick(every) {
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if life.mode() != modeActive {
+				continue
+			}
 			s.pollOnce()
 		}
 	}()

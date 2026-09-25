@@ -44,6 +44,14 @@ func newClaudeProxy() *claudeProxy {
 	return &claudeProxy{path: filepath.Join(dir, "settings.json")}
 }
 
+// clientListen is the address clients should use to reach the router.
+func (c config) clientListen() string {
+	if c.publicListen != "" {
+		return c.publicListen
+	}
+	return c.listen
+}
+
 func routerClientURL(listen string) (string, error) {
 	if listen == "" {
 		listen = "127.0.0.1:8787"
@@ -250,7 +258,7 @@ func writePrivateAtomic(path string, data []byte) error {
 }
 
 func (u *uiServer) claudeProxyView() claudeProxyView {
-	target, err := routerClientURL(u.cs.get().listen)
+	target, err := routerClientURL(u.cs.get().clientListen())
 	if err != nil {
 		return claudeProxyView{Error: err.Error()}
 	}
@@ -264,7 +272,7 @@ func (u *uiServer) settingsClaudeProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	op := r.FormValue("op")
-	target, err := routerClientURL(u.cs.get().listen)
+	target, err := routerClientURL(u.cs.get().clientListen())
 	if err == nil && op != "connect" && op != "restore" {
 		err = fmt.Errorf("неизвестное действие")
 	}

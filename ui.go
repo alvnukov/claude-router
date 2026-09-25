@@ -39,6 +39,7 @@ type uiServer struct {
 	st             *store
 	cs             *configStore
 	hl             *health
+	life           *lifecycle
 	tpl            *template.Template
 	started        time.Time
 
@@ -144,6 +145,10 @@ func (u *uiServer) handler() http.Handler {
 	mux.HandleFunc("POST /settings/refresh-models", u.settingsRefreshModels)
 	mux.HandleFunc("GET /settings/pool-add", u.settingsPoolAdd)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && u.life != nil && !u.life.writesSharedState() {
+			http.Error(w, "router is not active", http.StatusServiceUnavailable)
+			return
+		}
 		if r.Method == http.MethodPost && !sameOriginPost(r) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return

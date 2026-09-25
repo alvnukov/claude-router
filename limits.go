@@ -57,7 +57,8 @@ type anthropicLimits struct {
 	maxAge time.Duration
 	logged map[string]bool // name sets already logged
 
-	path    string // "" keeps the snapshot in memory only
+	path    string     // "" keeps the snapshot in memory only
+	life    *lifecycle // only an active slot writes path
 	saveMu  sync.Mutex
 	closed  bool
 	dirty   chan struct{} // saver started on the first change
@@ -391,7 +392,7 @@ func (l *anthropicLimits) close() {
 // the file, so a process with older state never overwrites a newer one, and
 // takes over whatever newer state the file had.
 func (l *anthropicLimits) save() error {
-	if l == nil || l.path == "" {
+	if l == nil || l.path == "" || (l.life != nil && !l.life.writesSharedState()) {
 		return nil
 	}
 	l.saveMu.Lock()

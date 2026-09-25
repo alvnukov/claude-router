@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manage the local-router: start|stop|restart|status|logs|build|install|uninstall
+# Manage the local-router: start|stop|restart|status|logs|build|deploy|install|uninstall
 #
 # Once installed as a launchd agent, launchd owns the process. Every command
 # below then delegates to launchctl, because a plain kill would only be undone
@@ -20,6 +20,29 @@ TARGET="gui/${UID}/${LABEL}"
 
 [ -f "$DIR/env" ] && { set -a; . "$DIR/env"; set +a; }
 ADDR="${ROUTER_LISTEN:-127.0.0.1:8787}"
+UI_ADDR="${ROUTER_UI_LISTEN:-127.0.0.1:8788}"
+SLOT_MODE=0
+[ -f "$DIR/deploy.json" ] && SLOT_MODE=1
+CADDY_LABEL=""
+BLUE_LABEL=""
+GREEN_LABEL=""
+CADDY_PLIST=""
+CADDY_TARGET=""
+
+load_slot_labels() {
+  local json
+  local active
+  active="$(cat "$DIR/active-slot" 2>/dev/null || true)"
+  case "$active" in blue|green) ;; *) echo "invalid active slot marker" >&2; return 1 ;; esac
+  json="$("$DIR/localrouter.$active" service-labels -home "$DIR")" || return
+  # The Go command validates the configuration and generates the label names.
+  # Read JSON without eval or trusting any unquoted shell expansion.
+  CADDY_LABEL="$(printf '%s' "$json" | /usr/bin/plutil -extract caddy raw -o - -)" || return
+  BLUE_LABEL="$(printf '%s' "$json" | /usr/bin/plutil -extract blue raw -o - -)" || return
+  GREEN_LABEL="$(printf '%s' "$json" | /usr/bin/plutil -extract green raw -o - -)" || return
+  CADDY_PLIST="$HOME/Library/LaunchAgents/$CADDY_LABEL.plist"
+  CADDY_TARGET="gui/${UID}/${CADDY_LABEL}"
+}
 
 alive()   { curl -sf "http://${ADDR}/healthz" >/dev/null 2>&1; }
 build()   { mkdir -p "$DIR" && (cd "$SRC" && go build -o "$DIR/localrouter" .); }
@@ -77,7 +100,61 @@ stop_manual() {
     rm -f "$PIDFILE"
   fi
   # Also catch an instance started by claude-local, which writes no pidfile.
-  pkill -f "$DIR/localrouter" 2>/dev/null || true
+  # Anchored: the slot binaries localrouter.blue and .green share the prefix.
+  pkill -f "$DIR/localrouter( |\$)" 2>/dev/null || true
+}
+
+slot_label() {
+  local slot
+  slot="$(cat "$DIR/active-slot" 2>/dev/null || true)"
+  case "$slot" in blue) printf '%s' "$BLUE_LABEL" ;; green) printf '%s' "$GREEN_LABEL" ;; *) return 1 ;; esac
+}
+
+build_candidate() {
+  mkdir -p "$DIR"
+  (cd "$SRC" && go build -o "$DIR/localrouter.candidate" .)
+}
+
+run_deploy() {
+  build_candidate
+  "$DIR/localrouter.candidate" deploy -home "$DIR" -binary "$DIR/localrouter.candidate" "$@"
+}
+
+install_cutover() {
+  if [ "$SLOT_MODE" = 1 ]; then
+    echo "cutover already installed; use 'router deploy'" >&2
+    return 1
+  fi
+  local caddy
+  caddy="$(command -v caddy)" || { echo "install caddy first" >&2; return 1; }
+  build_candidate
+  "$DIR/localrouter.candidate" cutover -home "$DIR" -binary "$DIR/localrouter.candidate" -caddy "$caddy" \
+    -caddy-admin "${ROUTER_CADDY_ADMIN:-127.0.0.1:2019}" \
+    -public-api "$ADDR" -public-ui "$UI_ADDR" \
+    -blue-api "${ROUTER_BLUE_API:-127.0.0.1:8791}" -blue-ui "${ROUTER_BLUE_UI:-127.0.0.1:8793}" \
+    -green-api "${ROUTER_GREEN_API:-127.0.0.1:8792}" -green-ui "${ROUTER_GREEN_UI:-127.0.0.1:8794}" "$@"
+}
+
+slot_start() {
+  local slot label plist
+  load_slot_labels
+  slot="$(cat "$DIR/active-slot" 2>/dev/null || true)"
+  label="$(slot_label)" || { echo "invalid active slot marker" >&2; return 1; }
+  plist="$HOME/Library/LaunchAgents/$label.plist"
+  [ -f "$CADDY_PLIST" ] && [ -f "$plist" ] || { echo "slot or Caddy launchd agent missing" >&2; return 1; }
+  launchctl print "gui/${UID}/$label" >/dev/null 2>&1 || launchctl bootstrap "gui/${UID}" "$plist"
+  launchctl print "$CADDY_TARGET" >/dev/null 2>&1 || launchctl bootstrap "gui/${UID}" "$CADDY_PLIST"
+  waitup && echo "Caddy and $slot started on $ADDR"
+}
+
+slot_stop() {
+  load_slot_labels
+  # Explicit stop is an outage, not a deploy. Caddy stops taking new
+  # requests, then both KeepAlive agents are unloaded until next login.
+  launchctl bootout "$CADDY_TARGET" 2>/dev/null || true
+  launchctl bootout "gui/${UID}/${BLUE_LABEL}" 2>/dev/null || true
+  launchctl bootout "gui/${UID}/${GREEN_LABEL}" 2>/dev/null || true
+  echo "Caddy and both router slots stopped"
 }
 
 start() {
@@ -105,9 +182,10 @@ stop() {
 }
 
 case "${1:-status}" in
-  start)     start ;;
-  stop)      stop ;;
+  start)     if [ "$SLOT_MODE" = 1 ]; then slot_start; else start; fi ;;
+  stop)      if [ "$SLOT_MODE" = 1 ]; then slot_stop; else stop; fi ;;
   restart)
+    if [ "$SLOT_MODE" = 1 ]; then run_deploy -force; exit; fi
     build
     if managed && loaded; then
       launchctl kickstart -k "$TARGET" >/dev/null
@@ -116,9 +194,26 @@ case "${1:-status}" in
       stop; sleep 0.5; start
     fi ;;
   build)     build; echo "built" ;;
-  install)   install_agent ;;
-  uninstall) uninstall_agent ;;
+  deploy)
+    shift
+    run_deploy "$@" ;;
+  install)
+    shift
+    if [ "${1:-}" = "--cutover" ]; then shift; install_cutover "$@"
+    elif [ "$SLOT_MODE" = 1 ]; then echo "cutover already installed; use 'router deploy'" >&2; exit 1
+    elif [ "$#" = 0 ]; then install_agent
+    else echo "usage: router install [--cutover]" >&2; exit 2; fi ;;
+  uninstall) if [ "$SLOT_MODE" = 1 ]; then echo "slot-based uninstall requires a maintenance window" >&2; exit 1; else uninstall_agent; fi ;;
   status)
+    if [ "$SLOT_MODE" = 1 ]; then
+      load_slot_labels
+      echo "slot-based router: $(cat "$DIR/active-slot" 2>/dev/null || echo unknown)"
+      launchctl print "$CADDY_TARGET" >/dev/null 2>&1 && echo "Caddy: loaded" || echo "Caddy: not loaded"
+      launchctl print "gui/${UID}/${BLUE_LABEL}" >/dev/null 2>&1 && echo "blue: loaded" || echo "blue: not loaded"
+      launchctl print "gui/${UID}/${GREEN_LABEL}" >/dev/null 2>&1 && echo "green: loaded" || echo "green: not loaded"
+      alive && echo "running on $ADDR" || echo "not running"
+      exit
+    fi
     if managed; then
       loaded && echo "launchd agent ${LABEL}: loaded" || echo "launchd agent ${LABEL}: installed but not loaded"
     else
@@ -126,5 +221,5 @@ case "${1:-status}" in
     fi
     alive && echo "running on ${ADDR}" || echo "not running" ;;
   logs)      tail -f "$LOG" ;;
-  *) echo "usage: router {start|stop|restart|status|logs|build|install|uninstall}" >&2; exit 2 ;;
+  *) echo "usage: router {start|stop|restart|status|logs|build|deploy [-force]|install [--cutover]|uninstall}" >&2; exit 2 ;;
 esac

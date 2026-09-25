@@ -17,31 +17,38 @@ import (
 // is a one-token completion; it moves the rating, the latency and the
 // cooldown like a real request but is counted apart from real traffic.
 
-func startChecker(cs *configStore, hl *health) {
+func startChecker(ctx context.Context, cs *configStore, hl *health, life *lifecycle) {
 	go func() {
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		running := map[string]bool{}
 		done := make(chan string)
 		for {
-			for key, pc := range poolProbeConfigs(cs.get()) {
-				if running[key] {
-					continue
+			if life.mode() == modeActive && ctx.Err() == nil {
+				for key, pc := range poolProbeConfigs(cs.get()) {
+					if running[key] {
+						continue
+					}
+					last := hl.snapshot(key).LastAt
+					if !last.IsZero() && time.Since(last) < pc.probeEvery {
+						continue
+					}
+					running[key] = true
+					go func() {
+						checkModels(pc, hl)
+						select {
+						case done <- key:
+						case <-ctx.Done():
+						}
+					}()
 				}
-				last := hl.snapshot(key).LastAt
-				if !last.IsZero() && time.Since(last) < pc.probeEvery {
-					continue
-				}
-				running[key] = true
-				go func() {
-					checkModels(pc, hl)
-					done <- key
-				}()
 			}
 			select {
 			case key := <-done:
 				delete(running, key)
 			case <-ticker.C:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()

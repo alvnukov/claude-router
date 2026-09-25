@@ -183,6 +183,9 @@ func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrows
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if s.life != nil && !s.life.writesSharedState() {
+			return errors.New("Codex login unavailable while router is not active")
+		}
 		if stillCurrent != nil && !stillCurrent() {
 			return errors.New("подключение изменилось во время входа; войдите заново")
 		}

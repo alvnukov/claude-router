@@ -130,7 +130,8 @@ type store struct {
 	seq  int64
 	recs []*record
 
-	path  string     // history file; "" keeps history in memory only
+	path  string // history file; "" keeps history in memory only
+	life  *lifecycle
 	fmu   sync.Mutex // serialises file writes
 	lines int        // lines currently in the file, for compaction
 }

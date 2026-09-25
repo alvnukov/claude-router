@@ -40,6 +40,7 @@ type codexAuthStore struct {
 	rejectedAt    time.Time
 	authProblem   string
 	mu            sync.Mutex
+	life          *lifecycle
 	credential    codexCredential
 	loaded        bool
 	path          string
@@ -87,7 +88,7 @@ func readCodexCredential(path string) (codexCredential, error) {
 func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.loaded {
+	if !s.loaded || (s.life != nil && !s.life.writesSharedState()) {
 		c, err := readCodexCredential(s.path)
 		if err != nil {
 			return c, fmt.Errorf("Codex login: %w; войдите через панель роутера", err)
@@ -97,6 +98,9 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 	}
 	if jwtExpiry(s.credential.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
 		return s.credential, nil
+	}
+	if s.life != nil && !s.life.writesSharedState() {
+		return codexCredential{}, errors.New("Codex token expired while router is quiesced; retry after deployment")
 	}
 	if err := s.refreshLocked(ctx); err != nil {
 		return codexCredential{}, err
@@ -235,6 +239,9 @@ func (s *codexAuthStore) save(c codexCredential) error {
 }
 
 func (s *codexAuthStore) importFromCLI() error {
+	if s.life != nil && !s.life.writesSharedState() {
+		return errors.New("Codex login unavailable while router is not active")
+	}
 	c, err := readCodexCredential(s.cliPath)
 	if err != nil {
 		return fmt.Errorf("Codex login: %w", err)
@@ -242,6 +249,9 @@ func (s *codexAuthStore) importFromCLI() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if s.life != nil && !s.life.writesSharedState() {
+			return errors.New("Codex login unavailable while router is not active")
+		}
 		if err := s.save(c); err != nil {
 			return err
 		}
@@ -344,6 +354,13 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 		return codexCredential{}, errCodexSignIn
 	}
 	s.rejectedToken, s.rejectedAt = rejected, time.Now()
+	if s.life != nil && !s.life.writesSharedState() {
+		if disk, err := readCodexCredential(s.path); err == nil && disk.Tokens.AccessToken != rejected {
+			s.credential = disk
+			return disk, nil
+		}
+		return codexCredential{}, errCodexSignIn
+	}
 	if err := s.refreshLocked(ctx); err != nil {
 		s.authProblem = errCodexSignIn.Error()
 		return codexCredential{}, errCodexSignIn

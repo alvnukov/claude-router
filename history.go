@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -10,8 +12,9 @@ import (
 
 // History persists across restarts as one JSON line per finished request in
 // ROUTER_UI_HISTORY_FILE (default history.jsonl next to the binary, mode 0600:
-// it holds prompts). Pending requests are never written. The file is compacted
-// from the ring once it holds more than twice the ring size.
+// it holds prompts). Pending requests are never written. Once the file holds
+// more than twice the ring size, a router that is alone on it keeps the newest
+// ring-size lines; while two blue/green slots overlap, neither compacts.
 
 func historyPath() string {
 	if v, ok := os.LookupEnv("ROUTER_UI_HISTORY_FILE"); ok {
@@ -99,48 +102,75 @@ func (s *store) persist(r *record) {
 	s.lines++
 	compact := s.lines > 2*s.max
 	s.mu.Unlock()
-	if compact {
-		s.rewrite()
-	}
-}
-
-// rewrite replaces the file with the finished records in the ring.
-// Caller holds s.fmu.
-func (s *store) rewrite() {
-	s.mu.RLock()
-	recs := make([]*record, 0, len(s.recs))
-	for _, r := range s.recs {
-		if r.Done() {
-			recs = append(recs, r)
-		}
-	}
-	s.mu.RUnlock()
-	tmp := s.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		log.Printf("history: %v", err)
-		return
-	}
-	w := bufio.NewWriter(f)
-	enc := json.NewEncoder(w)
-	for _, r := range recs {
-		if err := enc.Encode(r); err != nil {
+	if compact && (s.life == nil || s.life.compactsHistory()) {
+		if err := s.compactAfterDrain(); err != nil {
 			log.Printf("history: %v", err)
 		}
 	}
-	if err := w.Flush(); err != nil {
-		log.Printf("history: %v", err)
+}
+
+// compactAfterDrain keeps the newest ring-size lines of the file, including
+// those another router appended. It runs only once no other router appends:
+// the legacy router always, a slot after the deploy retired the other one.
+// The lock file keeps its inode across compaction.
+func (s *store) compactAfterDrain() error {
+	if s.path == "" {
+		return nil
 	}
-	if err := f.Close(); err != nil {
-		log.Printf("history: %v", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		log.Printf("history: %v", err)
-		return
-	}
-	s.mu.Lock()
-	s.lines = len(recs)
-	s.mu.Unlock()
+	return withFileLock(context.Background(), s.path+".lock", func() error {
+		f, err := os.Open(s.path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // nothing was served yet
+		}
+		if err != nil {
+			return err
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 1<<20), 64<<20)
+		var lines [][]byte
+		for sc.Scan() {
+			line := append([]byte(nil), sc.Bytes()...)
+			var r struct{ ID string }
+			if json.Unmarshal(line, &r) == nil && r.ID != "" {
+				lines = append(lines, line)
+				if len(lines) > s.max {
+					lines = lines[1:]
+				}
+			}
+		}
+		err = sc.Err()
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+		tmp, err := os.CreateTemp(filepath.Dir(s.path), ".history-*")
+		if err != nil {
+			return err
+		}
+		defer os.Remove(tmp.Name())
+		if err := tmp.Chmod(0o600); err != nil {
+			tmp.Close()
+			return err
+		}
+		for _, line := range lines {
+			if _, err := tmp.Write(append(line, '\n')); err != nil {
+				tmp.Close()
+				return err
+			}
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp.Name(), s.path); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.lines = len(lines)
+		s.mu.Unlock()
+		return nil
+	})
 }
 
 // truncate empties the file; used by clear.
