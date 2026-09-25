@@ -2,9 +2,10 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+
+	"localrouter/internal/platform"
 )
 
 func pick(m map[string]string, key, def string) string {
@@ -87,24 +88,7 @@ func writeEnv(path string, updates map[string]string) error {
 			lines = append(lines, key+"="+envQuote(updates[key]))
 		}
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".env-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return platform.WriteFileAtomic(path, []byte(strings.Join(lines, "\n")+"\n"), mode)
 }
 
 func envQuote(v string) string {

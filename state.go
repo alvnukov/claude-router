@@ -3,8 +3,9 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 type routerSnapshot struct {
@@ -29,23 +30,7 @@ func (h *health) saveSnapshot(path string) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".router-state-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return platform.WriteFileAtomic(path, data, 0o600)
 }
 
 func (h *health) loadSnapshot(path string) error {
