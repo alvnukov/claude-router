@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -257,5 +258,66 @@ func TestReloadErrorBannerRenders(t *testing.T) {
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	if !strings.Contains(body, "файл providers.json не применён: boom; действует снимок от") {
 		t.Fatal("banner not rendered")
+	}
+}
+
+func TestCodexSectionPerConnection(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	var calls atomic.Int32
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	// Connection cards probe model lists on render; only a usage request
+	// spends the subscription and must wait for the button.
+	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() == codexUsageURL {
+			calls.Add(1)
+		}
+		return usageResponse(500, ""), nil
+	})
+	_, h := codexUI(t)
+	work, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if err := work.save(usageCredential("work-account")); err != nil {
+		t.Fatal(err)
+	}
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	for _, want := range []string{`<h4>codex</h4>`, `<h4>work</h4>`, `hx-get="/settings/codex/usage?provider=work"`, `hx-get="/settings/codex/status?provider=work"`, `name="provider" value="work"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if strings.Contains(body, `id="codex-login"`) {
+		t.Error("one element id repeated per connection")
+	}
+	if strings.Contains(body, "access_token") || strings.Contains(body, "private-refresh") {
+		t.Fatal("token leaked into the page")
+	}
+	usage := get(t, h, "GET", "/settings/codex/usage?provider=work", nil).Body.String()
+	for _, want := range []string{`class="codex-usage"`, `"provider":"work"`, `hx-target="closest .codex-usage"`} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("usage fragment missing %s", want)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("page load asked for usage %d times", calls.Load())
+	}
+}
+
+// The provider pane's "import from Codex CLI" button names its provider;
+// without it the import handler answers 400 after Task 3.
+func TestCodexProviderPaneImportNamesProvider(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	_, h := codexUI(t)
+	pane := get(t, h, "GET", "/settings/provider?name=work", nil).Body.String()
+	if !strings.Contains(pane, `hx-post="/settings/codex/import" hx-vals='{"provider":"work"}'`) {
+		t.Fatalf("import button without provider:\n%s", pane)
+	}
+	data, _ := json.Marshal(usageCredential("work-account"))
+	writeRaw(t, codexAuth.cliPath, string(data))
+	if code := get(t, h, "POST", "/settings/codex/import", url.Values{"provider": {"work"}}).Code; code != 200 {
+		t.Fatalf("import: %d", code)
+	}
+	work, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if !work.connected() || codexAuth.connected() {
+		t.Fatal("import did not reach work's file")
 	}
 }

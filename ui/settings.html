@@ -50,8 +50,8 @@
 <form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.ActiveProfile}}"><input type="hidden" name="op" value="create"><input name="name" aria-label="Название пула" placeholder="Название: быстрый, сложные задачи…" required><button class="btn primary" type="submit">Создать пул</button></form>
 </section>
 <section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
-{{range .Logins}}{{template "codex-login" .}}
-<div class="codex-usage" hx-get="/settings/codex/usage" hx-vals='{"provider":"{{.Provider}}"}' hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>{{end}}
+{{range .Logins}}<div class="codex-connection"><h4>{{.Provider}}</h4>{{template "codex-login" .}}
+<div class="codex-usage" hx-get="/settings/codex/usage?provider={{.Provider}}" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div></div>{{end}}
 </section>
 <section class="settings-section" id="anthropic-limits"><h2>Лимиты Anthropic</h2>
 {{with .Limits}}{{if eq .State "unverified"}}<p><b>Не подтверждено.</b> Anthropic присылает заголовки лимитов, но что они значат для подписки, ещё не проверено, поэтому значения не показываются.</p>
@@ -73,7 +73,7 @@
 </div>
 {{end}}
 {{define "codex-login"}}
-<div id="codex-login" hx-get="/settings/codex/status" hx-vals='{"provider":"{{.Provider}}"}' hx-trigger="every 2s" hx-swap="outerHTML">
+<div class="codex-login" hx-get="/settings/codex/status?provider={{.Provider}}" hx-trigger="every 2s" hx-swap="outerHTML">
   {{if .Pending}}<span class="muted">Ожидаем вход в браузере…</span>
   {{else if .Error}}<span class="err">{{.Error}}</span>
   {{else if .Connected}}<span class="ok">● Подписка подключена</span>
@@ -101,7 +101,7 @@
 <div class="provider">
   <p><b>{{.P.Name}}</b> <code>{{.P.BaseURL}}</code> — <span class="{{if .Probe.OK}}ok{{else}}err{{end}}">● {{.Probe.Msg}}</span>
     <button type="button" class="link" hx-post="/settings/probe" hx-vals='{"provider":"{{.P.Name}}"}' hx-target="#provider-pane" hx-swap="innerHTML">проверить снова</button></p>
-  {{if eq .P.Type "codex"}}<p><button type="button" class="link" hx-post="/settings/codex/import" hx-target="#detail" hx-swap="innerHTML">подхватить новый вход из Codex CLI</button></p>{{end}}
+  {{if eq .P.Type "codex"}}<p><button type="button" class="link" hx-post="/settings/codex/import" hx-vals='{"provider":"{{.P.Name}}"}' hx-target="#detail" hx-swap="innerHTML">подхватить новый вход из Codex CLI</button></p>{{end}}
   {{if .Probe.OK}}
   <form class="filter" hx-get="/settings/provider" hx-target="#provider-pane" hx-swap="innerHTML" hx-trigger="change, keyup changed delay:300ms from:input">
     <input type="hidden" name="name" value="{{.P.Name}}"><input type="hidden" name="filter" value="1">

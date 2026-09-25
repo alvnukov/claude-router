@@ -163,18 +163,26 @@ the selected backend separately for each incoming model and effort. Subsequent
 requests retain that model despite load or rating changes. Requests without a
 session ID are selected independently.
 
-Each pool has its own **Сессии и таймауты** form: failover, response-start
-timeout, new-session balancing, idle probes and context character limit.
+Each pool has its own **Сессии и таймауты** form: pool type, failover,
+response-start timeout, idle probes and context character limit.
 Settings persist in `providers.json` under `pool_settings`. Existing pools
 receive a copy of their previous global values on upgrade (backup:
 `providers.json.before-pool-settings`). Legacy `ROUTER_LOCAL_*` behavior
 variables only supply initial defaults for new pools; they do not override
 saved pool settings.
 
-The pool’s **Распределять новые сессии** setting distributes new sessions over the least busy of the top
-N healthy candidates in the selected pool (0 or 1 selects the first). Pool
-order supplies the preferred first member and breaks rating ties; unhealthy
-models rank behind healthy ones. Ratings and cooldowns remain in `models.json`.
+A pool has a `type`. `failover` is the default (an absent `type` is
+failover): a new session goes to the first healthy member in pool order.
+`balance` is set explicitly on a pool, in the form or in the file, and sends
+each new session to the connection with the fewest sessions of this pool.
+The type switches without a restart and applies to new sessions. In both
+types pool order, not rating, decides; unhealthy members go last. A session
+stays on its connection and model while it is healthy, moves to the next
+member on failure and does not return. A signed-out Codex connection is
+skipped. A client cancel (Esc) is not a failure. The old numeric pool
+`balance` field is ignored and dropped at the next save; the global
+`ROUTER_LOCAL_BALANCE` is unchanged. Ratings and cooldowns remain in
+`models.json`.
 
 With **Переключать модель при сбое** enabled in the pool, a timeout, connection failure, HTTP 404/408/429
 or 5xx before the response begins retries another member of the same pool.
@@ -214,7 +222,16 @@ is never read automatically.
 
 The router saves and refreshes its own credential in
 `~/.config/claude-router/codex-auth.json` (0600). `ROUTER_CODEX_AUTH_FILE` changes
-that path. Calls use stateless Responses requests and subscription access,
+that path.
+
+Each Codex provider is a separate subscription with its own sign-in, import
+and limits; the **Подписка Codex** section shows one block per connection.
+New connections get an `auth_id`, and their credential lives next to
+`codex-auth.json` as `codex-auth-<hex name>-<auth_id>.json`. Renaming a
+connection is not supported: remove it, add it again and sign in. A removed
+connection leaves its file behind; delete it by hand if it is not needed. A
+hand-added Codex provider without `auth_id` (other than the original `codex`)
+is rejected until it is added through the dashboard. Calls use stateless Responses requests and subscription access,
 not OpenAI API billing. Availability follows the signed-in account catalog.
 Anthropic credentials are never forwarded to other providers.
 
