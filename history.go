@@ -11,8 +11,9 @@ import (
 
 // History persists across restarts as one JSON line per finished request in
 // ROUTER_UI_HISTORY_FILE (default history.jsonl next to the binary, mode 0600:
-// it holds prompts). Pending requests are never written. The file is compacted
-// from the ring once it holds more than twice the ring size.
+// it holds prompts). Pending requests are never written. Once the file holds
+// more than twice the ring size, a router that is alone on it keeps the newest
+// ring-size lines; while two blue/green slots overlap, neither compacts.
 
 func historyPath() string {
 	if v, ok := os.LookupEnv("ROUTER_UI_HISTORY_FILE"); ok {
@@ -100,52 +101,17 @@ func (s *store) persist(r *record) {
 	s.lines++
 	compact := s.lines > 2*s.max
 	s.mu.Unlock()
-	if compact && s.life == nil {
-		s.rewrite()
-	}
-}
-
-// rewrite replaces the file with the finished records in the ring.
-// Caller holds s.fmu.
-func (s *store) rewrite() {
-	s.mu.RLock()
-	recs := make([]*record, 0, len(s.recs))
-	for _, r := range s.recs {
-		if r.Done() {
-			recs = append(recs, r)
-		}
-	}
-	s.mu.RUnlock()
-	tmp := s.path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		log.Printf("history: %v", err)
-		return
-	}
-	w := bufio.NewWriter(f)
-	enc := json.NewEncoder(w)
-	for _, r := range recs {
-		if err := enc.Encode(r); err != nil {
+	if compact && (s.life == nil || s.life.compactsHistory()) {
+		if err := s.compactAfterDrain(); err != nil {
 			log.Printf("history: %v", err)
 		}
 	}
-	if err := w.Flush(); err != nil {
-		log.Printf("history: %v", err)
-	}
-	if err := f.Close(); err != nil {
-		log.Printf("history: %v", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		log.Printf("history: %v", err)
-		return
-	}
-	s.mu.Lock()
-	s.lines = len(recs)
-	s.mu.Unlock()
 }
 
-// compactAfterDrain runs only after the other slot has exited. Both the
-// history file and the lock file retain stable inodes across compaction.
+// compactAfterDrain keeps the newest ring-size lines of the file, including
+// those another router appended. It runs only once no other router appends:
+// the legacy router always, a slot after the deploy retired the other one.
+// The lock file keeps its inode across compaction.
 func (s *store) compactAfterDrain() error {
 	if s.path == "" {
 		return nil
@@ -160,7 +126,7 @@ func (s *store) compactAfterDrain() error {
 		var lines [][]byte
 		for sc.Scan() {
 			line := append([]byte(nil), sc.Bytes()...)
-			var r record
+			var r struct{ ID string }
 			if json.Unmarshal(line, &r) == nil && r.ID != "" {
 				lines = append(lines, line)
 				if len(lines) > s.max {

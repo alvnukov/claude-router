@@ -123,6 +123,9 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 		return err
 	}
 	if current.Digest == digest && !force {
+		if err = d.ops.admin(ctx, old, "compact"); err != nil {
+			return err
+		}
 		return d.ops.save(ctx, old)
 	}
 	started, quiesced, flipped, committed := false, false, false, false
@@ -191,6 +194,10 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 		return err
 	}
 	if err = d.ops.stop(ctx, old); err != nil {
+		return err
+	}
+	// Nothing else appends to the history now.
+	if err = d.ops.admin(ctx, newSlot, "compact"); err != nil {
 		return err
 	}
 	return d.ops.save(ctx, newSlot)

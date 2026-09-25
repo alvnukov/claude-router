@@ -181,6 +181,10 @@ Type yes to continue: `, file.PublicAPI, file.PublicUI, blue.PID, file.BlueAPI, 
 	if err = ops.commit(ctx, file); err != nil {
 		return fmt.Errorf("Caddy and blue serve, but the cutover was not recorded: %w", err)
 	}
+	// The legacy router has exited, so nothing else appends to the history.
+	if err = ops.admin(ctx, "blue", "compact"); err != nil {
+		return fmt.Errorf("blue serves, but its history was not compacted: %w", err)
+	}
 	fmt.Fprintf(out, "Caddy serves %s and %s from blue (pid %d); ./router deploy switches slots from now on\n", file.PublicAPI, file.PublicUI, blue.PID)
 	return nil
 }

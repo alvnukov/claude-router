@@ -24,6 +24,7 @@ type lifecycle struct {
 	state    lifecycleMode
 	pending  int
 	inflight sync.WaitGroup
+	alone    bool // no other router appends to the shared history
 }
 
 // routerStartsStandby decides the start mode. A blue/green slot is active only
@@ -63,6 +64,21 @@ func (l *lifecycle) acceptsTraffic() bool {
 
 func (l *lifecycle) writesSharedState() bool { return l.mode() == modeActive }
 
+// markAlone records that no other router appends to the shared history, so
+// this one may compact it. Leaving active mode forgets it: the next deploy
+// starts another slot that appends too.
+func (l *lifecycle) markAlone() {
+	l.mu.Lock()
+	l.alone = true
+	l.mu.Unlock()
+}
+
+func (l *lifecycle) compactsHistory() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.state == modeActive && l.alone
+}
+
 func (l *lifecycle) activate() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -80,12 +96,14 @@ func (l *lifecycle) quiesce() error {
 		return fmt.Errorf("cannot quiesce %s instance", l.state)
 	}
 	l.state = modeQuiesced
+	l.alone = false
 	return nil
 }
 
 func (l *lifecycle) drain() {
 	l.mu.Lock()
 	l.state = modeDraining
+	l.alone = false
 	l.mu.Unlock()
 }
 

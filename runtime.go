@@ -14,6 +14,7 @@ type runtimeAdmin struct {
 	health   *health
 	state    string
 	activate func() error
+	compact  func() error
 }
 
 func newRuntimeAdmin(life *lifecycle, health *health, state string) *runtimeAdmin {
@@ -58,6 +59,15 @@ func (a *runtimeAdmin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/admin/drain":
 		a.life.drain()
+	case "/admin/compact": // the deploy retired the other slot
+		if a.life.mode() != modeActive {
+			err = fmt.Errorf("cannot compact history in %s mode", a.life.mode())
+		} else if a.compact != nil {
+			err = a.compact()
+		}
+		if err == nil {
+			a.life.markAlone()
+		}
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 		return

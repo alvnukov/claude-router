@@ -358,3 +358,18 @@ func TestDeployRejectsReservedPortsInTests(t *testing.T) {
 		}
 	}
 }
+
+// History is compacted only once no other slot can append to it.
+func TestDeployCompactsHistoryOnceTheOldSlotIsGone(t *testing.T) {
+	f := newDeployFixture(t)
+	for _, run := range []string{"switch", "repeat"} {
+		f.calls = nil
+		if err := f.controller.deploy(t.Context(), "new", false); err != nil {
+			t.Fatal(err)
+		}
+		got := strings.Join(f.calls, ",")
+		if stop, compact := strings.Index(got, "stop:blue"), strings.Index(got, "compact:green"); stop < 0 || compact < stop {
+			t.Fatalf("%s: compacted before the other slot exited: %s", run, got)
+		}
+	}
+}

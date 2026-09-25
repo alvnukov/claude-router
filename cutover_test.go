@@ -173,7 +173,7 @@ func TestCutoverMovesPublicPortsFromLegacyToCaddy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	f.order(t, "mark:legacy", "start:blue", "legacy-pending", "stop-legacy", "save:blue", "activate:blue", "start-caddy", "commit")
+	f.order(t, "mark:legacy", "start:blue", "legacy-pending", "stop-legacy", "save:blue", "activate:blue", "start-caddy", "commit", "compact:blue")
 	if f.slots["blue"].Mode != modeActive || f.marker != "blue" || !f.committed {
 		t.Fatalf("blue not serving: %+v marker=%s", f.slots["blue"], f.marker)
 	}

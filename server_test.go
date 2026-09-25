@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,6 +44,52 @@ func TestRouterServerKeepsAnthropicLimitsInMemoryUntilActive(t *testing.T) {
 		t.Fatalf("active slot did not write limits.json: %v", err)
 	}
 	limits.close()
+}
+
+// The legacy router is alone on history.jsonl; a slot is alone only once the
+// deploy says the other slot has exited.
+func TestRouterServerCompactsHistoryOnlyWhenNoOtherSlotAppends(t *testing.T) {
+	for _, slot := range []string{"", "blue"} {
+		t.Run("slot="+slot, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "history.jsonl")
+			t.Setenv("ROUTER_UI_HISTORY_FILE", path)
+			t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
+			t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", filepath.Join(dir, "limits.json"))
+			t.Setenv("ROUTER_SLOT", slot)
+			state := filepath.Join(dir, "state.json")
+			server := newRouterServer(config{uiHistory: 2}, newLifecycle(false), state)
+			lines := func() int {
+				data, _ := os.ReadFile(path)
+				return strings.Count(string(data), "\n")
+			}
+			for i := range 5 {
+				server.st.persist(&record{ID: fmt.Sprintf("r-%d", i), End: time.Now()})
+			}
+			if slot == "" {
+				if got := lines(); got != 2 {
+					t.Fatalf("legacy router did not compact: %d lines", got)
+				}
+				return
+			}
+			if got := lines(); got != 5 {
+				t.Fatalf("slot compacted before the deploy said it was alone: %d lines", got)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/admin/compact", nil)
+			request.RemoteAddr = "127.0.0.1:1"
+			response := httptest.NewRecorder()
+			server.runtimeAdmin(state).ServeHTTP(response, request)
+			if response.Code != http.StatusNoContent || lines() != 2 {
+				t.Fatalf("compact: HTTP %d, %d lines", response.Code, lines())
+			}
+			for i := range 3 {
+				server.st.persist(&record{ID: fmt.Sprintf("s-%d", i), End: time.Now()})
+			}
+			if got := lines(); got != 2 {
+				t.Fatalf("slot alone on the file did not keep compacting: %d lines", got)
+			}
+		})
+	}
 }
 
 func TestRouterServerStandbyAndActivation(t *testing.T) {

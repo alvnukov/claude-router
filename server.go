@@ -37,6 +37,9 @@ func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	h := newHealth(healthPath())
 	cs.health = h
 	h.life = life
+	if os.Getenv("ROUTER_SLOT") == "" {
+		life.markAlone() // the legacy router has no second slot
+	}
 	if life.mode() != modeStandby {
 		if err := h.loadSnapshot(slotStatePath(state)); err != nil {
 			log.Printf("slot snapshot: %v", err)
@@ -79,6 +82,7 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 		}
 		return nil
 	}
+	admin.compact = r.st.compactAfterDrain
 	return admin
 }
 
