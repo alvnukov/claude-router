@@ -7,11 +7,11 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 type routerServer struct {
@@ -172,7 +172,7 @@ func (r *routerServer) run() error {
 		}
 	}
 	log.Printf("listening on %s, ui %s, mode %s", r.cfg.listen, r.cfg.uiListen, r.life.mode())
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := platform.ShutdownContext(context.Background(), effectiveLabel("", os.Getenv("ROUTER_SLOT")))
 	defer stop()
 	done := make(chan error, 1)
 	go func() { done <- r.serve(api, ui) }()
