@@ -125,9 +125,9 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 	if current.Digest == digest && !force {
 		return d.ops.save(ctx, old)
 	}
-	started, quiesced, flipped := false, false, false
+	started, quiesced, flipped, committed := false, false, false, false
 	defer func() {
-		if err == nil || !started {
+		if err == nil || !started || committed {
 			return
 		}
 		if flipped {
@@ -181,8 +181,9 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 	if err = d.ready(ctx, newSlot, standby.PID); err != nil {
 		return err
 	}
-	// Beyond this point the old instance is draining; no rollback is possible.
-	flipped, quiesced = false, false
+	// The new slot serves now. Beyond this point nothing rolls back: a failure
+	// leaves the old slot to the next deploy's retire.
+	committed = true
 	if err = d.ops.admin(ctx, old, "drain"); err != nil {
 		return err
 	}

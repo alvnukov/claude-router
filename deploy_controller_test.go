@@ -128,7 +128,7 @@ func (f *deployFixture) stop(_ context.Context, slot string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "stop:"+slot)
-	if f.fail == "stop" {
+	if f.fail == "stop" || f.fail == "stop:"+slot {
 		return errors.New("stop failed")
 	}
 	f.slots[slot].PID = 0
@@ -240,14 +240,28 @@ func TestDeployNoopSameDigestAndForcedSwitch(t *testing.T) {
 	}
 }
 
+// Once Caddy routes to the new slot and it answered, it is the router; no
+// later failure may unload it.
 func TestDeployDoesNotStopNewSlotAfterDrainFailure(t *testing.T) {
-	f := newDeployFixture(t)
-	f.fail = "stop"
-	if err := f.controller.deploy(t.Context(), "new", false); err == nil {
-		t.Fatal("expected bootout failure")
-	}
-	if f.active != "green" || f.slots["green"].PID == 0 || f.slots["blue"].Mode != modeDraining {
-		t.Fatalf("post-drain failure destroyed active slot: active=%s slots=%+v", f.active, f.slots)
+	for _, point := range []string{"drain", "drain-state", "stop:blue", "save"} {
+		t.Run(point, func(t *testing.T) {
+			f := newDeployFixture(t)
+			f.fail = point
+			if point == "drain-state" {
+				f.onState = func(slot string, s *deploySlotState) error {
+					if slot == "blue" && s.Mode == modeDraining {
+						return syscall.ECONNRESET
+					}
+					return nil
+				}
+			}
+			if err := f.controller.deploy(t.Context(), "new", false); err == nil {
+				t.Fatal("expected failure")
+			}
+			if f.active != "green" || f.slots["green"].PID == 0 || f.slots["green"].Mode != modeActive {
+				t.Fatalf("post-flip failure destroyed the serving slot: active=%s green=%+v calls=%s", f.active, *f.slots["green"], strings.Join(f.calls, ","))
+			}
+		})
 	}
 }
 
