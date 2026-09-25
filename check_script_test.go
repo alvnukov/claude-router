@@ -16,6 +16,13 @@ import (
 // succeeds only for the labels in loaded.
 func checkScript(t *testing.T, env []string, labelsJSON, ports string, loaded ...string) (string, string, error) {
 	t.Helper()
+	return checkScriptArgs(t, nil, env, labelsJSON, ports, loaded...)
+}
+
+// checkScriptArgs is checkScript with arguments for the script. curl answers
+// with CURL_OUT when env sets it.
+func checkScriptArgs(t *testing.T, args, env []string, labelsJSON, ports string, loaded ...string) (string, string, error) {
+	t.Helper()
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	home := filepath.Join(root, "home")
@@ -50,8 +57,8 @@ if [ "$1" = print ]; then
 fi
 [ "$1" != bootstrap ]`)
 	stub("caddy", `printf 'caddy %s\n' "$*" >> "$CALLS"`)
-	stub("curl", `printf 'curl %s\n' "$*" >> "$CALLS"; exit 7`)
-	cmd := exec.Command("bash", filepath.Join("deploy", "check.sh"))
+	stub("curl", `printf 'curl %s\n' "$*" >> "$CALLS"; [ -n "$CURL_OUT" ] || exit 7; printf '%s' "$CURL_OUT"`)
+	cmd := exec.Command("bash", append([]string{filepath.Join("deploy", "check.sh")}, args...)...)
 	cmd.Env = append(os.Environ(), "HOME="+home, "TMPDIR="+filepath.Join(root, "tmp"), "PATH="+bin+":"+os.Getenv("PATH"),
 		"CALLS="+calls, "LABELS_JSON="+labelsJSON, "PORTS="+ports, "LOADED="+strings.Join(loaded, " "))
 	cmd.Env = append(cmd.Env, env...)
@@ -126,6 +133,29 @@ func TestCheckScriptRefusesBeforeLaunchdWhenScratchIsNotItsOwn(t *testing.T) {
 				t.Fatalf("check did not stop before launchd: err=%v\n%s\n%s", err, output, calls)
 			}
 		})
+	}
+}
+
+// --live redeploys the build the installed router runs, never the checkout
+// the script lies in. Everything here is a stub under a temporary home.
+func TestCheckScriptLiveRedeploysTheInstalledBuild(t *testing.T) {
+	home := t.TempDir()
+	labels := scratchLabels(defaultRouterLabel, true)
+	files := map[string]string{
+		"deploy.json":      `{"public_api":"127.0.0.1:1"}`,
+		"active-slot":      "blue\n",
+		"localrouter.blue": "#!/bin/sh\nprintf 'binary %s\\n' \"$*\" >> \"$CALLS\"\n[ \"$1\" != service-labels ] || printf '%s\\n' \"$LABELS_JSON\"\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(home, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := []string{"ROUTER_HOME=" + home, `CURL_OUT={"slot":"blue","pid":1}`}
+	output, calls, _ := checkScriptArgs(t, []string{"--live"}, env, labels, "")
+	binary := filepath.Join(home, "localrouter.blue")
+	if !strings.Contains(calls, "binary deploy -home "+home+" -binary "+binary+" -force\n") || strings.Contains(calls, "go build") {
+		t.Fatalf("live check deployed something other than the installed build:\n%s\n%s", output, calls)
 	}
 }
 

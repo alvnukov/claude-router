@@ -176,7 +176,15 @@ live_setup() {
   WORK="$(mktemp -d "${TMPDIR:-/tmp}/router-check.XXXXXX")"
   KEEP=1
   PUBLIC_API="$(field public_api <"$HOME_DIR/deploy.json")"
-  DEPLOY=(env "ROUTER_HOME=$HOME_DIR" "$SRC/router" deploy)
+  DEPLOY=(live_deploy)
+}
+
+# live_deploy redeploys the build the active slot runs, not this checkout, so
+# the check never ships code nobody installed.
+live_deploy() {
+  local bin
+  bin="$HOME_DIR/localrouter.$(cat "$HOME_DIR/active-slot")"
+  "$bin" deploy -home "$HOME_DIR" -binary "$bin" "$@"
 }
 
 start_stream() {
