@@ -162,6 +162,14 @@ func TestWithLockExcludesOtherProcess(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// On a failed check the helper would hold the lock file open, and Windows
+	// could not remove the test's directory.
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+		}
+	})
 	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "held\n" {
 		t.Fatalf("helper: %q %v", line, err)
 	}
