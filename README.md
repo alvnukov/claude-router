@@ -17,6 +17,7 @@ To use the regular `claude` command, click **Подключить Claude к ро
 in the dashboard. The same button becomes **Восстановить настройки Claude**.
 It changes only `env.ANTHROPIC_BASE_URL` in the user's Claude settings and
 keeps the original value in a private `settings.json.router-proxy-backup` file.
+`./router env` does the same connect from the terminal and prints the value.
 Restore preserves unrelated edits made since connection. `CLAUDE_CONFIG_DIR`
 is respected. Relaunch Claude Code after switching; project or managed
 settings can override the user setting. See the official
@@ -39,6 +40,13 @@ there is nothing to manage. For the rest:
     ./router stop
     ./router restart     # rebuilds first; use after editing env or Go sources
     ./router logs        # tail -f router.log
+    ./router env         # point Claude Code's settings.json at the router
+
+`start`, `stop`, `status`, `install`, `uninstall` and `env` are commands of the
+binary (`localrouter <command> -home DIR`); the script builds it and passes
+them on. `install` always rebuilds it, and `start` rebuilds one that is
+missing or older than the script; the others refuse such a binary and ask for
+`./router build`.
 
 ## Routing and pools
 
@@ -300,9 +308,10 @@ which is what the terminal actually needs, and it avoids running a proxy that
 holds an API key as root. The key stays in `env` (mode 600), read by the binary
 itself; the plist is world-readable and never sees it.
 
-Once the agent is installed, `start`, `stop` and `restart` delegate to
-`launchctl` -- a plain kill would only be undone by `KeepAlive`. `stop` unloads
-the agent, so it stays down until the next login or an explicit `start`.
+Once the agent is installed, `start`, `stop` and `restart` go through launchd
+-- a plain kill would only be undone by `KeepAlive`. `stop` unloads the agent,
+so it stays down until the next login or an explicit `start`. `restart`, and
+`install` over a loaded agent, unload it and load it again.
 
 ### One-time move to Caddy and blue/green deploys
 
