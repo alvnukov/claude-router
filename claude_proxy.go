@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"localrouter/internal/platform"
 )
 
 const claudeBaseURLKey = "ANTHROPIC_BASE_URL"
@@ -235,26 +237,10 @@ func (p *claudeProxy) set(target string, enable bool) error {
 }
 
 func writePrivateAtomic(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := platform.MkdirPrivate(filepath.Dir(path)); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".router-settings-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
+	return platform.WriteFileAtomic(path, data, 0o600)
 }
 
 func (u *uiServer) claudeProxyView() claudeProxyView {

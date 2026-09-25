@@ -8,6 +8,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 // Per-model stability. A model is scored by an exponential moving average of
@@ -196,7 +198,7 @@ func (h *health) save() {
 		log.Printf("models state: %v", err)
 		return
 	}
-	if err := os.Rename(tmp, h.path); err != nil {
+	if err := platform.ReplaceFile(tmp, h.path); err != nil {
 		log.Printf("models state: %v", err)
 	}
 }

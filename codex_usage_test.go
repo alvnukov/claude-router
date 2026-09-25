@@ -228,6 +228,10 @@ func TestCodexUsageBackgroundRefresh(t *testing.T) {
 		}
 		return usageResponse(200, `{"rate_limit":{"primary_window":{"used_percent":25}}}`), nil
 	})}}
+	// The clock moves a second at every read: Windows' clock ticks too coarsely
+	// to tell two requests apart.
+	start, reads := time.Now(), atomic.Int64{}
+	cache.now = func() time.Time { return start.Add(time.Duration(reads.Add(1)) * time.Second) }
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})

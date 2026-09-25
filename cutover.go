@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 // Cutover is the one-time move from the legacy router, which listens on the
@@ -336,17 +338,17 @@ func (o *systemCutoverOps) agentPlist(label string) string {
 // it would take the public ports from the legacy router at the next login.
 func (o *systemCutoverOps) prepare(ctx context.Context, slot string) error {
 	file := filepath.Join(o.home, "Caddyfile")
-	if err := writeFileAtomic(file, []byte(o.caddyfile(slot)), 0o600); err != nil {
+	if err := platform.WriteFileAtomic(file, []byte(o.caddyfile(slot)), 0o600); err != nil {
 		return err
 	}
 	if _, err := o.adapt(ctx, file); err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(o.home, o.label("caddy")+".plist"), o.caddyPlist().xml(), 0o644)
+	return platform.WriteFileAtomic(filepath.Join(o.home, o.label("caddy")+".plist"), o.caddyPlist().xml(), 0o644)
 }
 
 func (o *systemCutoverOps) mark(_ context.Context, slot string) error {
-	return writeFileAtomic(o.markerPath(), []byte(slot+"\n"), 0o600)
+	return platform.WriteFileAtomic(o.markerPath(), []byte(slot+"\n"), 0o600)
 }
 
 var (
@@ -396,7 +398,7 @@ func (o *systemCutoverOps) startCaddy(ctx context.Context) error {
 	if err := os.MkdirAll(o.agents, 0o755); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(o.agentPlist(o.label("caddy")), data, 0o644); err != nil {
+	if err := platform.WriteFileAtomic(o.agentPlist(o.label("caddy")), data, 0o644); err != nil {
 		return err
 	}
 	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(o.label("caddy")))
@@ -423,5 +425,5 @@ func (o *systemCutoverOps) commit(_ context.Context, file deployFile) error {
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(o.home, "deploy.json"), append(data, '\n'), 0o600)
+	return platform.WriteFileAtomic(filepath.Join(o.home, "deploy.json"), append(data, '\n'), 0o600)
 }

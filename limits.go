@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 // Anthropic subscription limits are observed passively. Claude Code asks for
@@ -415,32 +417,17 @@ func (l *anthropicLimits) save() error {
 	})
 }
 
-// withLimitsLock runs fn holding an exclusive flock on path+".lock", waiting
-// at most limitsLockWait for another process to finish.
+// withLimitsLock runs fn holding the lock on path+".lock", shared by every
+// router process on the file, waiting at most limitsLockWait for another
+// process to finish.
 func withLimitsLock(path string, fn func() error) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(context.Background(), limitsLockWait)
+	defer cancel()
+	err := platform.WithLock(ctx, path+".lock", fn)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%s.lock: held by another process", path)
 	}
-	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	deadline := time.Now().Add(limitsLockWait)
-	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-			return fn()
-		}
-		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			return err
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%s.lock: held by another process", path)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	return err
 }
 
 // observeResponse is the reverse proxy's ModifyResponse hook. It only reads the
@@ -519,7 +506,7 @@ func (u *uiServer) limitsAPI(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(limitsReportOf(u.limits.view(now), codex, now))
+	_ = json.NewEncoder(w).Encode(limitsReportOf(u.limits.view(now), codex, now)) // the client may be gone
 }
 
 // parseLimitWindows reads anthropic-ratelimit-<window>-<field> without knowing

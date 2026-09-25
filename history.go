@@ -2,12 +2,15 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"os"
 	"path/filepath"
+
+	"localrouter/internal/platform"
 )
 
 // History persists across restarts as one JSON line per finished request in
@@ -117,7 +120,7 @@ func (s *store) compactAfterDrain() error {
 	if s.path == "" {
 		return nil
 	}
-	return withFileLock(context.Background(), s.path+".lock", func() error {
+	return platform.WithLock(context.Background(), s.path+".lock", func() error {
 		f, err := os.Open(s.path)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // nothing was served yet
@@ -145,25 +148,12 @@ func (s *store) compactAfterDrain() error {
 		if err != nil {
 			return err
 		}
-		tmp, err := os.CreateTemp(filepath.Dir(s.path), ".history-*")
-		if err != nil {
-			return err
-		}
-		defer os.Remove(tmp.Name())
-		if err := tmp.Chmod(0o600); err != nil {
-			tmp.Close()
-			return err
-		}
+		var kept bytes.Buffer
 		for _, line := range lines {
-			if _, err := tmp.Write(append(line, '\n')); err != nil {
-				tmp.Close()
-				return err
-			}
+			kept.Write(line)
+			kept.WriteByte('\n')
 		}
-		if err := tmp.Close(); err != nil {
-			return err
-		}
-		if err := os.Rename(tmp.Name(), s.path); err != nil {
+		if err := platform.WriteFileAtomic(s.path, kept.Bytes(), 0o600); err != nil {
 			return err
 		}
 		s.mu.Lock()

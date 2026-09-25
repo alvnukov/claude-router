@@ -70,6 +70,14 @@ type codexUsageCache struct {
 	key    string
 	view   codexUsageView
 	client *http.Client
+	now    func() time.Time // stamps Updated and Attempted; nil is time.Now
+}
+
+func (cache *codexUsageCache) clock() time.Time {
+	if cache.now != nil {
+		return cache.now()
+	}
+	return time.Now()
 }
 
 func accountFromCredential(c codexCredential) codexAccount {
@@ -285,7 +293,7 @@ func (cache *codexUsageCache) get(ctx context.Context, auth *codexAuthStore, for
 			var payload codexUsagePayload
 			payload, err = fetchCodexUsage(ctx, cache.client, credential)
 			if err == nil {
-				cache.view = decodeCodexUsage(payload, account, time.Now())
+				cache.view = decodeCodexUsage(payload, account, cache.clock())
 			}
 		} else {
 			err = errors.New("не удалось обновить вход Codex; войдите заново через дашборд")
@@ -296,7 +304,7 @@ func (cache *codexUsageCache) get(ctx context.Context, auth *codexAuthStore, for
 			cache.view = codexUsageView{Connected: ok, Account: current, Error: "Аккаунт изменился во время загрузки. Обновите лимиты."}
 			return cache.view
 		}
-		cache.view.Attempted = time.Now()
+		cache.view.Attempted = cache.clock()
 		if err != nil {
 			cache.view.Error = err.Error()
 		}

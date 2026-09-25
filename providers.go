@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"localrouter/internal/platform"
 )
 
 // Local providers and models live in providers.json next to the binary (mode
@@ -372,7 +374,7 @@ func writeAtomicIfChanged(path string, data []byte) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return platform.ReplaceFile(tmp, path)
 }
 
 func writeActiveProfile(path, name string) error {

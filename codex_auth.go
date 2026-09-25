@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 const (
@@ -109,7 +110,7 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 }
 
 func (s *codexAuthStore) refreshLocked(ctx context.Context) error {
-	return withFileLock(ctx, s.path+".lock", func() error {
+	return platform.WithLock(ctx, s.path+".lock", func() error {
 		if disk, err := readCodexCredential(s.path); err == nil {
 			if disk.Tokens.RefreshToken != s.credential.Tokens.RefreshToken || disk.Tokens.AccessToken != s.credential.Tokens.AccessToken {
 				s.credential = disk
@@ -212,30 +213,11 @@ func codexAccountID(token string) string {
 }
 
 func (s *codexAuthStore) save(c codexCredential) error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.Marshal(c)
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".codex-auth-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := io.Copy(tmp, bytes.NewReader(data)); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.path)
+	return writePrivateAtomic(s.path, data)
 }
 
 func (s *codexAuthStore) importFromCLI() error {
@@ -248,7 +230,7 @@ func (s *codexAuthStore) importFromCLI() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return withFileLock(context.Background(), s.path+".lock", func() error {
+	return platform.WithLock(context.Background(), s.path+".lock", func() error {
 		if s.life != nil && !s.life.writesSharedState() {
 			return errors.New("Codex login unavailable while router is not active")
 		}

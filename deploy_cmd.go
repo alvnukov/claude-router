@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 // deployFile is <home>/deploy.json, written by install --cutover. It is the
@@ -74,7 +76,7 @@ func withDeployLock(ctx context.Context, home string, fn func() error) error {
 	try, stop := context.WithCancel(ctx)
 	stop()
 	locked := false
-	err := withFileLock(try, filepath.Join(home, "deploy.lock"), func() error {
+	err := platform.WithLock(try, filepath.Join(home, "deploy.lock"), func() error {
 		locked = true
 		return fn()
 	})

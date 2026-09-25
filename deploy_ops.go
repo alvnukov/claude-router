@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 type systemDeployOps struct {
@@ -314,10 +316,10 @@ func (o *systemDeployOps) flip(ctx context.Context, slot string) error {
 
 // save makes the on-disk Caddyfile and the active-slot marker name slot.
 func (o *systemDeployOps) save(_ context.Context, slot string) error {
-	if err := writeFileAtomic(filepath.Join(o.home, "Caddyfile"), []byte(o.caddyfile(slot)), 0o600); err != nil {
+	if err := platform.WriteFileAtomic(filepath.Join(o.home, "Caddyfile"), []byte(o.caddyfile(slot)), 0o600); err != nil {
 		return err
 	}
-	return writeFileAtomic(o.markerPath(), []byte(slot+"\n"), 0o600)
+	return platform.WriteFileAtomic(o.markerPath(), []byte(slot+"\n"), 0o600)
 }
 
 // start installs the candidate as the slot's own binary and loads the slot's
@@ -331,14 +333,14 @@ func (o *systemDeployOps) start(ctx context.Context, slot, digest string) error 
 	if got := hex.EncodeToString(hash[:]); got != digest {
 		return fmt.Errorf("candidate digest %s, want %s", got, digest)
 	}
-	if err := writeFileAtomic(filepath.Join(o.home, "localrouter."+slot), data, 0o700); err != nil {
+	if err := platform.WriteFileAtomic(filepath.Join(o.home, "localrouter."+slot), data, 0o700); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(o.agents, 0o755); err != nil {
 		return err
 	}
 	plist := filepath.Join(o.agents, o.label(slot)+".plist")
-	if err := writeFileAtomic(plist, o.slotPlist(slot).xml(), 0o644); err != nil {
+	if err := platform.WriteFileAtomic(plist, o.slotPlist(slot).xml(), 0o644); err != nil {
 		return err
 	}
 	return o.launchctl(ctx, "bootstrap", launchdDomain(), plist)
@@ -348,24 +350,4 @@ func (o *systemDeployOps) start(ctx context.Context, slot, digest string) error 
 // SIGTERM finds no request in flight; ExitTimeOut covers the rest.
 func (o *systemDeployOps) stop(ctx context.Context, slot string) error {
 	return o.launchctl(ctx, "bootout", launchdDomain()+"/"+o.label(slot))
-}
-
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
 }
