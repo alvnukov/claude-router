@@ -41,6 +41,9 @@ func codexStatusByAccount(t *testing.T, status map[string]int) *sync.Map {
 	old := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = old })
 	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host != "chatgpt.com" {
+			return usageResponse(400, `{"error":"invalid_grant"}`), nil
+		}
 		acct := r.Header.Get("ChatGPT-Account-Id")
 		n, _ := calls.LoadOrStore(acct, new(int))
 		*n.(*int)++
@@ -129,7 +132,8 @@ func TestCodexSessionStaysOnConnection(t *testing.T) {
 	delete(status, "acct-a")
 	hl.mu.Lock()
 	hl.m["codex/gpt"].CoolUntil = time.Time{}
-	hl.m["codex/gpt"].Score = 1
+	hl.m["codex/gpt"].Score = 0.2
+	hl.m["codex/gpt"].TTFBMs = 900
 	hl.mu.Unlock()
 	for i := 0; i < 3; i++ {
 		if _, tr := runLocalSession(t, cfg, hl, "s1"); tr.Served != "work/gpt" {

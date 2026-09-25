@@ -219,7 +219,7 @@ type candidate struct {
 // in rating order, so a request that fails on the chosen model moves to the
 // best-rated one, and the load spreads off it again once it is busy.
 //
-// A failover pool (poolType) ignores rating and balance and keeps pool order.
+// A pool route (any poolType) ignores rating and balance and keeps pool order.
 func (h *health) pick(c config) []candidate {
 	l := c.local
 	var out []candidate
@@ -231,7 +231,7 @@ func (h *health) pick(c config) []candidate {
 	if !c.failover && len(out) > 0 {
 		return out[:1]
 	}
-	if c.poolType == poolFailover {
+	if c.poolType != "" {
 		// Pool order, not rating: members that are not cooling keep the order
 		// the pool lists them in; cooling ones go last, soonest back first.
 		sort.SliceStable(out, func(i, j int) bool {

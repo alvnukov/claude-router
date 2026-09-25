@@ -55,17 +55,19 @@ func TestFailoverPoolCoolingLast(t *testing.T) {
 	if got := keys(hl.pick(cfg)); got != "q/b,p/a" {
 		t.Fatalf("all cooling must order by CoolUntil: %s", got)
 	}
-	hl.m["p/a"].CoolUntil = time.Time{}
-	hl.m["q/b"].CoolUntil = time.Time{}
+	// Both recover, and the second now rates far better: a rating order would
+	// put it first, pool order does not.
+	hl.m["p/a"] = &modelStat{Score: 0.2, TTFBMs: 900}
+	hl.m["q/b"] = &modelStat{Score: 1, TTFBMs: 10}
 	if got := keys(hl.pick(cfg)); got != "p/a,q/b" {
 		t.Fatalf("recovered first member must lead new sessions: %s", got)
 	}
 }
 
 func TestPoolTypeUnknownRejected(t *testing.T) {
-	l := twoMemberPool(map[string]poolSettings{"pair": {Type: "balance"}}).local
+	l := twoMemberPool(map[string]poolSettings{"pair": {Type: "roundrobin"}}).local
 	err := l.validate()
-	if err == nil || !strings.Contains(err.Error(), "balance") || !strings.Contains(err.Error(), "pair") {
+	if err == nil || !strings.Contains(err.Error(), "roundrobin") || !strings.Contains(err.Error(), "pair") {
 		t.Fatalf("unknown pool type: %v", err)
 	}
 }
@@ -91,6 +93,13 @@ func TestPoolSaveKeepsType(t *testing.T) {
 	}
 	if strings.Contains(html, `name="balance"`) {
 		t.Fatal("pool form still offers the numeric balance")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"balance"`) {
+		t.Fatalf("saved file still has the numeric balance: %s", raw)
 	}
 	l, err := readProviders(path)
 	if err != nil {
