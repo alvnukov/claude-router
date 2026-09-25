@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/limits"
 )
 
 const codexUsageURL = "https://chatgpt.com/backend-api/wham/usage"
@@ -319,7 +321,7 @@ func (cache *codexUsageCache) get(ctx context.Context, auth *codexAuthStore, for
 		if left <= 0 {
 			v.Limits[i].ResetIn = "ожидается обновление лимита"
 		} else {
-			v.Limits[i].ResetIn = "через " + quotaTimeLeft(left)
+			v.Limits[i].ResetIn = "через " + limits.TimeLeft(left)
 		}
 	}
 	return v
@@ -414,21 +416,6 @@ func activeTicks(ctx context.Context, life *lifecycle, in <-chan time.Time) <-ch
 		}
 	}()
 	return out
-}
-
-func quotaTimeLeft(d time.Duration) string {
-	if d < time.Minute {
-		return "менее минуты"
-	}
-	minutes := int(d.Minutes())
-	if minutes < 60 {
-		return fmt.Sprintf("%d мин.", minutes)
-	}
-	hours := minutes / 60
-	if hours < 24 {
-		return fmt.Sprintf("%d ч. %d мин.", hours, minutes%60)
-	}
-	return fmt.Sprintf("%d дн. %d ч.", hours/24, hours%24)
 }
 
 func (u *uiServer) settingsCodexUsage(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"localrouter/internal/history"
+	"localrouter/internal/limits"
 )
 
 // Both slots share limits.json during a deploy; only the active one writes it.
@@ -25,27 +26,27 @@ func TestRouterServerKeepsAnthropicLimitsInMemoryUntilActive(t *testing.T) {
 	t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
 	life := newLifecycle(true)
 	server := newRouterServer(config{uiHistory: 10}, life, filepath.Join(dir, "state.json"))
-	limits := server.ui.limits
-	limits.observe(http.Header{"Anthropic-Ratelimit-Requests-Remaining": {"41"}}, time.Now())
-	if err := limits.save(); err != nil {
+	l := server.ui.limits
+	l.Observe(http.Header{"Anthropic-Ratelimit-Requests-Remaining": {"41"}}, time.Now())
+	if err := l.Save(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("standby wrote limits.json: %v", err)
 	}
-	if got := limits.view(time.Now()).State; got != "fresh" {
+	if got := l.View(time.Now()).State; got != "fresh" {
 		t.Fatalf("standby lost the observation: %s", got)
 	}
 	if err := life.activate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := limits.save(); err != nil {
+	if err := l.Save(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("active slot did not write limits.json: %v", err)
 	}
-	limits.close()
+	l.Close()
 }
 
 // The legacy router is alone on history.jsonl; a slot is alone only once the
@@ -106,6 +107,18 @@ func TestNilLifecycleGatesWriteAndCompact(t *testing.T) {
 	}
 	if data, _ := os.ReadFile(path); strings.Count(string(data), "\n") != 2 {
 		t.Fatalf("store gated by a nil lifecycle did not compact: %q", data)
+	}
+
+	path = filepath.Join(t.TempDir(), "limits.json")
+	l := limits.New(path, limits.MaxAge)
+	l.SetGate(life)
+	l.Observe(http.Header{"Anthropic-Ratelimit-Requests-Remaining": {"41"}}, time.Now())
+	if err := l.Save(); err != nil {
+		t.Fatal(err)
+	}
+	l.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("store gated by a nil lifecycle did not write limits.json: %v", err)
 	}
 }
 

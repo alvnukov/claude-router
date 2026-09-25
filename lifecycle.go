@@ -64,6 +64,9 @@ func (l *lifecycle) acceptsTraffic() bool {
 
 func (l *lifecycle) writesSharedState() bool { return l.mode() == modeActive }
 
+// WritesSharedState gates internal/limits; a nil lifecycle is the only writer.
+func (l *lifecycle) WritesSharedState() bool { return l == nil || l.writesSharedState() }
+
 // markAlone records that no other router appends to the shared history, so
 // this one may compact it. Leaving active mode forgets it: the next deploy
 // starts another slot that appends too.

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"localrouter/internal/history"
+	"localrouter/internal/limits"
 )
 
 //go:embed ui/*
@@ -34,7 +35,7 @@ type uiServer struct {
 	codexUsage     codexUsageCache // template: per-connection caches copy its client
 	usageMu        sync.Mutex
 	codexUsages    map[string]*codexUsageCache // by name + "\x00" + auth id
-	limits         *anthropicLimits
+	limits         *limits.Store
 	claudeProxy    *claudeProxy
 	catalogMu      sync.Mutex
 	fetchAnthropic func(context.Context) ([]string, error)
@@ -102,7 +103,7 @@ func uiTemplates() (*template.Template, error) {
 }
 
 func newUIServer(st *history.Store, cs *configStore, hl *health) *uiServer {
-	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: newAnthropicLimits("", anthropicLimitsMaxAge)}
+	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: limits.New("", limits.MaxAge)}
 }
 
 func (u *uiServer) handler() http.Handler {
@@ -455,7 +456,7 @@ type settingsView struct {
 	Catalog       modelCatalog
 	AllModels     []localModel
 	Efforts       []string
-	Limits        anthropicLimitsView
+	Limits        limits.View
 }
 
 type routeRow struct {
@@ -552,7 +553,7 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
+	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.View(time.Now())}
 	for name := range c.local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}
