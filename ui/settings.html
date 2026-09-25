@@ -38,9 +38,9 @@
 <details class="settings-extra pool-behavior"><summary>Сессии и таймауты</summary><p class="help">Внутри сессии каждый маршрут закрепляется за выбранной моделью. При сбое до начала ответа роутер пробует следующую модель этого пула и запоминает новый выбор. Начавшийся ответ передаётся потоком; переключение посреди ответа не выполняется.</p>
 <form hx-post="/settings/pool-settings" hx-target="#detail" class="behavior-form" aria-label="Сессии и таймауты пула {{.Name}}"><input type="hidden" name="profile" value="{{.Profile}}">
 <input type="hidden" name="name" value="{{.Name}}">
+<p class="hint">Тип пула: failover — новая сессия идёт на первую здоровую модель по порядку пула и остаётся на ней</p>
 <label><input type="checkbox" name="failover" value="1" {{if .Settings.Failover}}checked{{end}}> Переключать модель при сбое</label>
 <label>Ожидание начала ответа, сек.<input type="number" name="first_byte" min="0" value="{{.Settings.FirstByteSec}}"><small>0 — без ограничения</small></label>
-<label>Распределять новые сессии между лучшими моделями<input type="number" name="balance" min="0" value="{{.Settings.Balance}}"><small>0 или 1 — первая здоровая модель; закреплённые сессии не перераспределяются</small></label>
 <label>Проверять простаивающие модели каждые, сек.<input type="number" name="probe_every" min="0" value="{{.Settings.ProbeSec}}"><small>0 — отключить. Подписка Codex не расходуется на проверки.</small></label>
 <label>Лимит символов контекста для моделей пула<input type="number" name="max_input_chars" min="0" value="{{.Settings.MaxInputChars}}"><small>0 — без обрезки</small></label>
 <button class="btn primary" type="submit">Сохранить настройки пула</button>

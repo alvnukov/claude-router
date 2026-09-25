@@ -698,11 +698,15 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		MaxInputChars: r.FormValue("max_input_chars"),
 		Failover:      r.FormValue("failover"),
 		FirstByte:     r.FormValue("first_byte"),
-		Balance:       r.FormValue("balance"),
 		ProbeEvery:    r.FormValue("probe_every"),
 	})
 	if err == nil {
-		err = u.cs.savePoolSettings(r.FormValue("name"), settings, r.FormValue("profile"))
+		err = u.cs.updatePoolSettings(r.FormValue("name"), func(old poolSettings) poolSettings {
+			if settings.Type == "" {
+				settings.Type = old.Type
+			}
+			return settings
+		}, r.FormValue("profile"))
 	}
 	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены")
 }

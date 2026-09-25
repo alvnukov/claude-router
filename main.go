@@ -29,6 +29,7 @@ type config struct {
 	firstByte     time.Duration // give up on a model that has not answered by then
 	balance       int           // spread requests over this many best-rated models; <2 sends everything to the first
 	probeEvery    time.Duration // ping idle models this often; 0 disables
+	poolType      string        // poolFailover for a pool route: pool order, no rating; "" keeps the rating order
 
 	uiListen  string
 	uiHistory int
@@ -134,6 +135,7 @@ func (c config) forModel(model, effort string) config {
 		next.failover = false
 	case "pool":
 		targets = c.local.ModelPools[route.Pool]
+		next.poolType = poolFailover
 		if settings, ok := c.local.PoolSettings[route.Pool]; ok {
 			next = settings.apply(next)
 		}

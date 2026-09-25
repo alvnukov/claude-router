@@ -408,7 +408,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err := cs.applyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.savePoolSettings("work", poolSettings{Balance: 4, FirstByteSec: 11}); err != nil {
+	if err := cs.savePoolSettings("work", poolSettings{ProbeSec: 4, FirstByteSec: 11}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.activateProfile("default", h); err != nil {
@@ -425,7 +425,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.ModelPools["work"][0] != (poolTarget{Model: "p/b", Effort: "xhigh"}) || reloaded.PoolSettings["work"].Balance != 4 {
+	if reloaded.ModelPools["work"][0] != (poolTarget{Model: "p/b", Effort: "xhigh"}) || reloaded.PoolSettings["work"].ProbeSec != 4 {
 		t.Fatalf("copy changes lost on disk: %+v", reloaded)
 	}
 }

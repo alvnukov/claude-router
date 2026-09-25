@@ -213,7 +213,7 @@ func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 	cs, h, _ := profileFixture(t)
 	l := cs.get().local.clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/a"}}}
-	l.PoolSettings = map[string]poolSettings{"work": {Balance: 2}}
+	l.PoolSettings = map[string]poolSettings{"work": {FirstByteSec: 2}}
 	if err := cs.applyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
@@ -227,12 +227,12 @@ func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 	if err := cs.activateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
-	values := url.Values{"profile": {"default"}, "name": {"work"}, "balance": {"9"}, "first_byte": {"1"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
+	values := url.Values{"profile": {"default"}, "name": {"work"}, "first_byte": {"1"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
 	req := httptest.NewRequest("POST", "/settings/pool-settings", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	u.handler().ServeHTTP(w, req)
-	if cs.get().local.PoolSettings["work"].Balance != 2 {
+	if cs.get().local.PoolSettings["work"].FirstByteSec != 2 {
 		t.Fatal("stale pool settings changed new active profile")
 	}
 }
