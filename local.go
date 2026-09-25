@@ -289,7 +289,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	t0 := time.Now()
 	client := http.DefaultClient
 	if cand.Provider.Type == "codex" {
-		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client = &http.Client{Transport: upstreamHTTP, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	var resp *http.Response
 	if cand.Provider.Type == "codex" {

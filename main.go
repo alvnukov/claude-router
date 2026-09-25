@@ -203,6 +203,7 @@ func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiSer
 
 func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer, life *lifecycle) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
+	proxy.Transport = upstreamHTTP
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
