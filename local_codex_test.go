@@ -333,9 +333,13 @@ func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
 	serve("s1", "codex/gpt")
 	serve("s2", "codex/gpt")
 
-	// Switched from the UI path: new sessions balance, bound ones stay.
-	if err := cs.savePoolSettings("gpt", poolSettings{Type: poolBalance, Failover: true, FirstByteSec: 5}); err != nil {
-		t.Fatal(err)
+	// Switched from the UI: new sessions balance, bound ones stay.
+	h := newUIServer(newStore(10, ""), cs, hl).handler()
+	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "type": {poolBalance}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})
+	// A form without the type field keeps the stored one.
+	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})
+	if typ := cs.get().local.PoolSettings["gpt"].Type; typ != poolBalance {
+		t.Fatalf("pool type after the UI saves: %q", typ)
 	}
 	serve("n1", "work/gpt")
 	serve("n2", "work/gpt")
