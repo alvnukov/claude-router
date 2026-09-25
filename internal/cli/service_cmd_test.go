@@ -26,6 +26,8 @@ type fakeService struct {
 	specs   map[string]platform.ServiceSpec
 	calls   []string
 	started func()
+	stopErr error // Stop of a loaded agent reports it
+	stuck   bool  // Stop leaves the agent loaded
 }
 
 func (f *fakeService) record(verb, label string) { f.calls = append(f.calls, verb+" "+label) }
@@ -60,9 +62,11 @@ func (f *fakeService) Stop(_ context.Context, label string) error {
 	if !st.Loaded {
 		return errors.New("launchctl bootout failed")
 	}
-	st.Loaded = false
-	f.state[label] = st
-	return nil
+	if !f.stuck {
+		st.Loaded = false
+		f.state[label] = st
+	}
+	return f.stopErr
 }
 
 func (f *fakeService) Status(_ context.Context, label string) (platform.Status, error) {
@@ -243,6 +247,49 @@ func TestInstallOverLoadedAgentIsStopThenStart(t *testing.T) {
 	code, stdout, stderr := f.run(t, "install")
 	expect(t, code, stdout, stderr, 0, "installed as com.claude-local-router, listening on 127.0.0.1:8787\n", "")
 	expectCalls(t, f, "Install "+legacyLabel, "Status "+legacyLabel, "Stop "+legacyLabel, "Start "+legacyLabel)
+}
+
+// launchctl bootout can report failure while launchd still unloads the
+// agent, and the script ignored its status. Only an agent left loaded is a
+// failure; otherwise install goes on to load it again, and restart, which
+// is stop then start, is not left with the router down.
+func TestFailedStopCountsOnlyIfTheAgentStaysLoaded(t *testing.T) {
+	bootout := errors.New("Boot-out failed: 5: Input/output error")
+	for _, tc := range []struct {
+		name       string
+		slot       bool
+		command    string
+		stuck      bool
+		wantCode   int
+		wantStdout string
+		wantStderr string
+		wantCalls  []string
+	}{
+		{"install, unloaded anyway", false, "install", false, 0, "installed as com.claude-local-router, listening on 127.0.0.1:8787\n", "",
+			[]string{"Install " + legacyLabel, "Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel, "Start " + legacyLabel}},
+		{"install, still loaded", false, "install", true, 1, "", "Boot-out failed: 5: Input/output error\n",
+			[]string{"Install " + legacyLabel, "Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel}},
+		{"stop, unloaded anyway", false, "stop", false, 0, "stopped; launchd will start it again at next login or on 'router start'\n", "",
+			[]string{"Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel}},
+		{"stop, still loaded", false, "stop", true, 1, "", "Boot-out failed: 5: Input/output error\n",
+			[]string{"Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel}},
+		{"slot stop, unloaded anyway", true, "stop", false, 0, "Caddy and both router slots stopped\n", "",
+			[]string{"Status p.caddy", "Stop p.caddy", "Status p.caddy", "Status p.blue", "Status p.green"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			if tc.slot {
+				f.slotMode(t, "blue\n")
+				f.svc.state["p.caddy"] = platform.Status{Installed: true, Loaded: true}
+			} else {
+				f.svc.state[legacyLabel] = platform.Status{Installed: true, Loaded: true}
+			}
+			f.svc.stopErr, f.svc.stuck = bootout, tc.stuck
+			code, stdout, stderr := f.run(t, tc.command)
+			expect(t, code, stdout, stderr, tc.wantCode, tc.wantStdout, tc.wantStderr)
+			expectCalls(t, f, tc.wantCalls...)
+		})
+	}
 }
 
 func TestInstallRefusals(t *testing.T) {
