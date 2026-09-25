@@ -66,9 +66,9 @@ type anthropicLimits struct {
 	lastErr string // saver goroutine only
 }
 
-// anthropicLimitsView is what the settings page and GET /api/limits show.
-// Windows and Raw are set only while the snapshot is fresh, and then always,
-// even empty; docs/features.md describes this JSON.
+// anthropicLimitsView is what the settings page shows and limitsReport
+// carries. Windows and Raw are set only while the snapshot is fresh, and then
+// always, even empty.
 type anthropicLimitsView struct {
 	State         string            `json:"state"` // fresh | no_headers | unavailable
 	ObservedAt    time.Time         `json:"observed_at,omitzero"`
