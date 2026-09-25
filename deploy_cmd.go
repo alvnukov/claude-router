@@ -12,14 +12,17 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 )
 
 // deployFile is <home>/deploy.json, written by install --cutover. It is the
 // only place the live public, slot and Caddy admin addresses are named.
 type deployFile struct {
-	CaddyAdmin string `json:"caddy_admin"`
-	Caddy      string `json:"caddy,omitempty"` // absolute path; launchd has no PATH to find it by
+	CaddyAdmin  string `json:"caddy_admin"`
+	Caddy       string `json:"caddy,omitempty"` // absolute path; launchd has no PATH to find it by
+	LabelPrefix string `json:"label_prefix,omitempty"`
 	deployConfig
 }
 
@@ -30,13 +33,19 @@ func newDeployOps(file deployFile, home, agents, binary string) deployOps {
 	if file.Caddy != "" {
 		ops.caddy = file.Caddy
 	}
+	ops.labelPrefix = file.LabelPrefix
 	return ops
 }
 
-// validate checks the Caddy admin address as well as the router ports.
+var labelPrefixPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$`)
+
+// validate checks the Caddy admin address, label prefix and router ports.
 func (f deployFile) validate() error {
 	if host, _, err := net.SplitHostPort(f.CaddyAdmin); err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return fmt.Errorf("Caddy admin must be a loopback host:port, got %q", f.CaddyAdmin)
+	}
+	if f.LabelPrefix != "" && (!labelPrefixPattern.MatchString(f.LabelPrefix) || strings.HasSuffix(f.LabelPrefix, ".blue") || strings.HasSuffix(f.LabelPrefix, ".green") || strings.HasSuffix(f.LabelPrefix, ".caddy")) {
+		return fmt.Errorf("invalid launchd label prefix %q", f.LabelPrefix)
 	}
 	return f.deployConfig.validate()
 }

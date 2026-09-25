@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,24 @@ func TestRealAdminEndpointsFollowLoopbackOnly(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent || life.mode() != modeQuiesced {
 		t.Fatalf("admin quiesce: %d %s", resp.StatusCode, life.mode())
+	}
+}
+
+func TestDeployOpsUseConfiguredScratchLabels(t *testing.T) {
+	cfg := testDeployConfig(t)
+	home := t.TempDir()
+	file := deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: "com.claude-local-router.scratch-123", deployConfig: cfg}
+	ops := newDeployOps(file, home, filepath.Join(home, "agents"), filepath.Join(home, "binary")).(*systemDeployOps)
+	if got := ops.slotPlist("blue").Label; got != file.LabelPrefix+".blue" {
+		t.Fatalf("blue label %q", got)
+	}
+	var calls []string
+	ops.launchctl = func(_ context.Context, args ...string) error {
+		calls = append(calls, strings.Join(args, " "))
+		return nil
+	}
+	if err := ops.stop(t.Context(), "green"); err != nil || len(calls) != 1 || !strings.Contains(calls[0], file.LabelPrefix+".green") {
+		t.Fatalf("stop touched another label: %v %v", err, calls)
 	}
 }
 

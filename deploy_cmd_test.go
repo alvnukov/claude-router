@@ -30,6 +30,48 @@ func deployBinary(t *testing.T, home string) string {
 	return path
 }
 
+func TestServiceLabelsReadDeployFileWithDefault(t *testing.T) {
+	for _, prefix := range []string{"", "com.claude-local-router.scratch-123"} {
+		home := t.TempDir()
+		file := deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: prefix, deployConfig: testDeployConfig(t)}
+		data, err := json.Marshal(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(home, "deploy.json"), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := runServiceLabels([]string{"-home", home}, &out); err != nil {
+			t.Fatal(err)
+		}
+		var labels struct{ Blue, Green, Caddy string }
+		if err := json.Unmarshal(out.Bytes(), &labels); err != nil {
+			t.Fatal(err)
+		}
+		want := prefix
+		if want == "" {
+			want = defaultRouterLabel
+		}
+		if labels.Blue != want+".blue" || labels.Green != want+".green" || labels.Caddy != want+".caddy" {
+			t.Fatalf("prefix %q labels %+v", prefix, labels)
+		}
+	}
+}
+
+func TestDeployFileRejectsInvalidLabelPrefix(t *testing.T) {
+	cfg := testDeployConfig(t)
+	for _, label := range []string{"../router", "com.example/router", "com.example router", "com.example.", "com.claude-local-router.caddy"} {
+		file := deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: label, deployConfig: cfg}
+		if err := file.validate(); err == nil {
+			t.Fatalf("accepted label prefix %q", label)
+		}
+	}
+	if err := (deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: "com.claude-local-router.check-123", deployConfig: cfg}).validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeployCommandRunsControllerWithConfiguredPorts(t *testing.T) {
 	f := newDeployFixture(t)
 	home := t.TempDir()

@@ -23,11 +23,6 @@ import (
 // only step that drops connections: between the legacy router's exit and
 // Caddy's bind nothing listens on the public ports.
 
-const (
-	legacyLabel = "com.claude-local-router"
-	caddyLabel  = "com.claude-local-router.caddy"
-)
-
 type cutoverOps interface {
 	deployOps
 	// prepare writes Caddy's config for slot and its launchd plist, loading
@@ -149,7 +144,7 @@ func cutover(ctx context.Context, file deployFile, ops cutoverOps, digest string
   3. stop the legacy router (%s); both ports refuse connections until Caddy binds them
   4. activate blue and start Caddy (%s)
   5. if Caddy does not answer within %s, stop it and blue and start the legacy router again
-Type yes to continue: `, file.PublicAPI, file.PublicUI, blue.PID, file.BlueAPI, file.BlueUI, wait, legacyLabel, caddyLabel, readyTimeout)
+Type yes to continue: `, file.PublicAPI, file.PublicUI, blue.PID, file.BlueAPI, file.BlueUI, wait, effectiveLabel(file.LabelPrefix, ""), effectiveLabel(file.LabelPrefix, "caddy"), readyTimeout)
 	answer, _ := bufio.NewReader(in).ReadString('\n')
 	if strings.TrimSpace(answer) != "yes" {
 		return errors.New("cutover declined; the legacy router keeps serving")
@@ -296,6 +291,7 @@ type systemCutoverOps struct {
 func newSystemCutoverOps(file deployFile, home, agents, binary, caddy string) *systemCutoverOps {
 	ops := newSystemDeployOps(file.deployConfig, "http://"+file.CaddyAdmin, home, agents, binary)
 	ops.caddy = caddy
+	ops.labelPrefix = file.LabelPrefix
 	return &systemCutoverOps{ops}
 }
 
@@ -303,7 +299,7 @@ func newSystemCutoverOps(file deployFile, home, agents, binary, caddy string) *s
 // any Caddy the user runs.
 func (o *systemCutoverOps) caddyPlist() launchdSlotPlist {
 	log := filepath.Join(o.home, "caddy.log")
-	return launchdSlotPlist{Label: caddyLabel, ProgramArguments: []string{o.caddy, "run", "--config", filepath.Join(o.home, "Caddyfile"), "--adapter", "caddyfile"}, WorkingDirectory: o.home, RunAtLoad: true, KeepAlive: true, ExitTimeOut: 30,
+	return launchdSlotPlist{Label: o.label("caddy"), ProgramArguments: []string{o.caddy, "run", "--config", filepath.Join(o.home, "Caddyfile"), "--adapter", "caddyfile"}, WorkingDirectory: o.home, RunAtLoad: true, KeepAlive: true, ExitTimeOut: 30,
 		EnvironmentVariables: map[string]string{"XDG_DATA_HOME": filepath.Join(o.home, "caddy", "data"), "XDG_CONFIG_HOME": filepath.Join(o.home, "caddy", "config")}, StandardOutPath: log, StandardErrorPath: log}
 }
 
@@ -322,7 +318,7 @@ func (o *systemCutoverOps) prepare(ctx context.Context, slot string) error {
 	if _, err := o.adapt(ctx, file); err != nil {
 		return err
 	}
-	return writeFileAtomic(filepath.Join(o.home, caddyLabel+".plist"), o.caddyPlist().xml(), 0o644)
+	return writeFileAtomic(filepath.Join(o.home, o.label("caddy")+".plist"), o.caddyPlist().xml(), 0o644)
 }
 
 func (o *systemCutoverOps) mark(_ context.Context, slot string) error {
@@ -361,32 +357,32 @@ func (o *systemCutoverOps) legacyPending(ctx context.Context) (int, error) {
 }
 
 func (o *systemCutoverOps) stopLegacy(ctx context.Context) error {
-	return o.launchctl(ctx, "bootout", launchdDomain()+"/"+legacyLabel)
+	return o.launchctl(ctx, "bootout", launchdDomain()+"/"+o.label(""))
 }
 
 func (o *systemCutoverOps) startLegacy(ctx context.Context) error {
-	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(legacyLabel))
+	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(o.label("")))
 }
 
 func (o *systemCutoverOps) startCaddy(ctx context.Context) error {
-	data, err := os.ReadFile(filepath.Join(o.home, caddyLabel+".plist"))
+	data, err := os.ReadFile(filepath.Join(o.home, o.label("caddy")+".plist"))
 	if err != nil {
 		return err
 	}
 	if err := os.MkdirAll(o.agents, 0o755); err != nil {
 		return err
 	}
-	if err := writeFileAtomic(o.agentPlist(caddyLabel), data, 0o644); err != nil {
+	if err := writeFileAtomic(o.agentPlist(o.label("caddy")), data, 0o644); err != nil {
 		return err
 	}
-	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(caddyLabel))
+	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(o.label("caddy")))
 }
 
 // stopCaddy unloads Caddy and takes its plist out of LaunchAgents, so the
 // legacy router keeps the ports after the next login too.
 func (o *systemCutoverOps) stopCaddy(ctx context.Context) error {
-	err := o.launchctl(ctx, "bootout", launchdDomain()+"/"+caddyLabel)
-	if remove := os.Remove(o.agentPlist(caddyLabel)); remove != nil && !errors.Is(remove, os.ErrNotExist) {
+	err := o.launchctl(ctx, "bootout", launchdDomain()+"/"+o.label("caddy"))
+	if remove := os.Remove(o.agentPlist(o.label("caddy"))); remove != nil && !errors.Is(remove, os.ErrNotExist) {
 		err = errors.Join(err, remove)
 	}
 	return err
@@ -396,7 +392,7 @@ func (o *systemCutoverOps) stopCaddy(ctx context.Context) error {
 // bootstrap` can still load it by hand, and writes deploy.json last: its
 // presence is what marks the cutover done.
 func (o *systemCutoverOps) commit(_ context.Context, file deployFile) error {
-	if err := os.Rename(o.agentPlist(legacyLabel), filepath.Join(o.home, "legacy.plist")); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Rename(o.agentPlist(o.label("")), filepath.Join(o.home, "legacy.plist")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	data, err := json.MarshalIndent(file, "", "  ")

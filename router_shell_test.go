@@ -27,7 +27,13 @@ func routerScript(t *testing.T, command string, slot bool) (string, string, erro
 	stub("go", `printf 'go %s\n' "$*" >> "$CALLS"
 while [ "$1" != "-o" ]; do shift; done
 shift
-printf '#!/bin/sh\nprintf "binary %%s\\n" "$*" >> "$CALLS"\n' > "$1"
+cat > "$1" <<'BIN'
+#!/bin/sh
+printf 'binary %s\n' "$*" >> "$CALLS"
+if [ "$1" = service-labels ]; then
+  printf '{"blue":"com.claude-local-router.blue","green":"com.claude-local-router.green","caddy":"com.claude-local-router.caddy","prefix":"com.claude-local-router"}\n'
+fi
+BIN
 chmod +x "$1"`)
 	stub("launchctl", `printf 'launchctl %s\n' "$*" >> "$CALLS"; [ "$1" != print ]`)
 	stub("curl", `printf 'curl %s\n' "$*" >> "$CALLS"; exit 0`)
@@ -53,6 +59,9 @@ chmod +x "$1"`)
 			if err := os.WriteFile(plist, []byte("fixture"), 0o644); err != nil {
 				t.Fatal(err)
 			}
+		}
+		if err := os.WriteFile(filepath.Join(home, "localrouter.blue"), []byte("#!/bin/sh\nprintf 'binary %s\\n' \"$*\" >> \"$CALLS\"\nif [ \"$1\" = service-labels ]; then printf '{\"blue\":\"com.claude-local-router.blue\",\"green\":\"com.claude-local-router.green\",\"caddy\":\"com.claude-local-router.caddy\"}\\n'; fi\n"), 0o700); err != nil {
+			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(home, "deploy.json"), []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
@@ -90,6 +99,17 @@ func TestRouterRestartUsesForcedDeployAfterCutover(t *testing.T) {
 	}
 	if !strings.Contains(calls, "binary deploy -home") || !strings.Contains(calls, " -force") || strings.Contains(calls, "launchctl kickstart") {
 		t.Fatalf("slot restart was not a forced deploy: %s", calls)
+	}
+}
+
+func TestRouterSlotCommandsReadLabelsFromDeployFile(t *testing.T) {
+	for _, command := range []string{"start", "stop", "status"} {
+		t.Run(command, func(t *testing.T) {
+			output, calls, err := routerScript(t, command, true)
+			if err != nil || !strings.Contains(calls, "binary service-labels -home") {
+				t.Fatalf("%s did not load service labels from deploy.json: %v %s %s", command, err, output, calls)
+			}
+		})
 	}
 }
 
