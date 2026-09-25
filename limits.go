@@ -353,6 +353,11 @@ func (l *anthropicLimits) observeResponse(resp *http.Response) error {
 	if resp.Request == nil || !strings.HasSuffix(resp.Request.URL.Path, "/v1/messages") {
 		return nil
 	}
+	// An error without headers is not evidence that successful Anthropic
+	// responses omit limits. Keep any headers the error actually carries.
+	if (resp.StatusCode < 200 || resp.StatusCode >= 300) && len(limitHeaders(resp.Header)) == 0 {
+		return nil
+	}
 	l.observe(resp.Header, time.Now())
 	return nil
 }

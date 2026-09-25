@@ -119,6 +119,30 @@ func TestAnthropicLimitsHookNeverFails(t *testing.T) {
 	}
 }
 
+func TestAnthropicLimitsErrorWithoutHeadersDoesNotClaimAbsence(t *testing.T) {
+	buf := captureLog(t)
+	l := newAnthropicLimits("", anthropicLimitsMaxAge)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	for _, status := range []int{http.StatusBadGateway, 529} {
+		resp := &http.Response{StatusCode: status, Request: req, Header: http.Header{}}
+		if err := l.observeResponse(resp); err != nil {
+			t.Fatal(err)
+		}
+		if v := l.view(time.Now()); v.State != "unavailable" {
+			t.Fatalf("%d without headers claimed Anthropic sent no limits: %+v", status, v)
+		}
+	}
+	if strings.Contains(buf.String(), "response headers: none") {
+		t.Fatalf("error response logged as evidence of absent headers: %s", buf.String())
+	}
+	if err := l.observeResponse(&http.Response{StatusCode: http.StatusNoContent, Request: req, Header: http.Header{}}); err != nil {
+		t.Fatal(err)
+	}
+	if v := l.view(time.Now()); v.State != "no_headers" {
+		t.Fatalf("successful response without headers must be diagnostic: %+v", v)
+	}
+}
+
 // countingTransport counts every outbound request the process makes through
 // the default transport, which the reverse proxy uses.
 type countingTransport struct {
