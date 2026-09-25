@@ -22,7 +22,7 @@ internal/config/                types (Provider, Model, Pool, Route, Profile, Ca
 internal/history/               request records: record/recorder, history.jsonl, compaction
 internal/limits/                Anthropic limits from response headers, limits.json, view
 internal/routing/               health (EWMA, cooldown), session affinity, candidate choice, pool checker, state snapshot
-internal/providers/             Upstream interface, shared Request/Response, translation (Anthropic to OpenAI), trimming
+internal/providers/             Upstream interface, shared Request/Response, translation (Anthropic to OpenAI), trimming; upstream transport: request and first-byte timeouts, stall watch, SSE frame writer
 internal/providers/openai/      adapter for OpenAI-compatible providers (chat/completions)
 internal/providers/codex/       Codex adapter: Responses API, OAuth (auth store, login listener on 1455), usage, context
 internal/providers/anthropic/   cloud reverse proxy to api.anthropic.com, count_tokens, limits observation hook
@@ -59,6 +59,9 @@ up:
   code into its package, then changes it. The move itself edits the root
   files that call the moved code, so that they use the new package; those
   edits are not new code.
+- A feature for the team is one package `internal/<package>` plus wiring
+  in `main.go` and, later, a UI section; it edits providers, routing and
+  server only at the extension points.
 
 What each package does not know:
 
@@ -131,15 +134,24 @@ func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error
 func ReplaceFile(src, dst string) error
 func MkdirPrivate(path string) error
 
-type ServiceSpec struct{ Label, Exe string; Args []string; Env map[string]string; LogPath string; KeepAlive bool }
-type Service interface {
-    Install(ServiceSpec) error
-    Uninstall(label string) error
-    Start(label string) error
-    Stop(label string) error
-    Status(label string) (Status, error)
+type ServiceSpec struct {
+    Label, Exe string
+    Args       []string
+    Env        map[string]string // omitted when empty
+    Dir        string            // working directory
+    LogPath    string
+    KeepAlive  bool
+    ThrottleInterval, ExitTimeout time.Duration // 0 = not written, the OS default applies
 }
-func NewService() Service // chosen by build tag
+type Status struct{ Installed, Loaded bool }
+type Service interface {
+    Install(ctx context.Context, spec ServiceSpec) error // writes the definition, does not load it
+    Uninstall(ctx context.Context, label string) error   // unloads if loaded, removes the definition
+    Start(ctx context.Context, label string) error       // loads (launchctl bootstrap)
+    Stop(ctx context.Context, label string) error        // unloads (launchctl bootout)
+    Status(ctx context.Context, label string) (Status, error)
+}
+func NewService() Service // darwin: launchd in ~/Library/LaunchAgents; other OSes: ErrUnsupported until the Windows adapter
 
 // The context is done on SIGTERM/SIGINT (unix), or on Ctrl+C and the named event Local\claude-router-<label> (windows).
 func ShutdownContext(parent context.Context, label string) (context.Context, context.CancelFunc)
@@ -223,3 +235,41 @@ already on disk.
 
 Shutdown goes through `platform.ShutdownContext`, then drain, then exit.
 `main()` stays under 200 lines, with no handler logic.
+
+## Extension points
+
+Features for the team of sessions (spend, activity, bypass, reserve, events)
+enter the code only here; the rest of providers, routing and server is
+closed to them. The seams arrive right after providers, routing and server
+move into their packages.
+
+1. `history.Reader`, a read model: `List() []*Record` (a record in flight
+   has a zero End; a record carries Session, Model, Route, Served,
+   Start/End, Headers with X-App, and Resp with usage) and
+   `Subscribe(func(*Record))`, called when a record is added and when it is
+   done. The source for spend, activity, events and bypass.
+2. `limits.View()` and `limits.Subscribe(func(View))`: the Anthropic windows
+   for reserve and events; no knowledge of Codex.
+3. `server.Admission`: a chain in `/v1/messages` after the route is chosen
+   and before the proxy or the local handler. `Admit(ctx, Meta) Decision`
+   with `Meta{Session, App, Model, Route string}` and
+   `Decision{Reject bool; Status int; Message string}`. Registered in
+   `main` in wiring order; the first reject wins; a reject goes out as an
+   Anthropic error and is written to history. The point sits in server,
+   not in routing: the cloud route bypasses Pick, and today that is all the
+   traffic. It is the only way for a feature to affect a request (a limit
+   per session or role, a reserve for the work machine); the first release
+   of each feature only warns.
+4. `/api/<package>` endpoints on the UI port: an `http.ServeMux` in `main`
+   in front of `ui` (`mux.Handle("/api/spend", spend.Handler(reader))`);
+   `ui` itself is not touched until the UI redesign. The UI block of a
+   feature is a section of the new information architecture.
+5. `providers.Upstream`: for new providers (Codex later), not for features.
+6. Feature settings: the feature's own file `ROUTER_HOME/<package>.json`
+   through `platform.WriteFileAtomic` (plus `WithLock` when two processes
+   write); `config` is not extended for features. Reading Claude Code's
+   local state (the sessions on the machine, for bypass) belongs to
+   `claudecode`, not to server.
+7. `routing.Filter`: excludes candidates for a session inside Pick. Named
+   now, added when Codex returns as a route: with one Anthropic account
+   there is nothing to filter.
