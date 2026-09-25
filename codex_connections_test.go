@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -129,5 +130,44 @@ func TestCodexProviderAddAssignsFreshIDAndRejectsRename(t *testing.T) {
 	again, _ := u.cs.get().local.provider("work")
 	if !authIDOK(again.AuthID) || again.AuthID == p.AuthID {
 		t.Fatal("recreated provider reused the old id")
+	}
+}
+
+func useTestCodexHome(t *testing.T, issuer string, client *http.Client) {
+	t.Helper()
+	old := codexAuth
+	t.Cleanup(func() { codexAuth = old })
+	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "codex-auth.json"), cliPath: filepath.Join(t.TempDir(), "cli.json"), issuer: issuer, client: client}
+}
+
+func TestCodexStoreForSeparatesConnections(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	legacy, err := codexStoreFor(provider{Name: "codex", Type: "codex"})
+	if err != nil || legacy != codexAuth {
+		t.Fatalf("legacy store: %v", err)
+	}
+	a, _ := codexStoreFor(provider{Name: "codex", Type: "codex", AuthID: testAuthA})
+	b, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if a == codexAuth || a == b || a.path == b.path || filepath.Dir(a.path) != filepath.Dir(codexAuth.path) {
+		t.Fatalf("paths %q %q", a.path, b.path)
+	}
+	if again, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB}); again != b {
+		t.Fatal("store not cached")
+	}
+	if _, err := codexStoreFor(provider{Name: "work", Type: "codex"}); err == nil {
+		t.Fatal("non-legacy without id got a store")
+	}
+	if err := codexAuth.save(usageCredential("legacy")); err != nil {
+		t.Fatal(err)
+	}
+	if b.connected() {
+		t.Fatal("new connection adopted the legacy token")
+	}
+	if err := b.save(usageCredential("old-work")); err != nil {
+		t.Fatal(err)
+	}
+	recreated, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: strings.Repeat("c", 32)})
+	if recreated.connected() {
+		t.Fatal("recreated name adopted the old id's token")
 	}
 }

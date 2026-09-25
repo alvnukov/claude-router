@@ -176,10 +176,12 @@ func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrows
 	c.Tokens.AccessToken, c.Tokens.RefreshToken, c.Tokens.IDToken, c.Tokens.AccountID = token.Access, token.Refresh, token.ID, account
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.save(c); err != nil {
-		return err
-	}
-	s.credential, s.loaded = c, true
-	s.rejectedToken, s.authProblem = "", ""
-	return nil
+	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if err := s.save(c); err != nil {
+			return err
+		}
+		s.credential, s.loaded = c, true
+		s.rejectedToken, s.authProblem = "", ""
+		return nil
+	})
 }

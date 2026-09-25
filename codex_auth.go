@@ -98,10 +98,26 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 	if jwtExpiry(s.credential.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
 		return s.credential, nil
 	}
-	if err := s.refresh(ctx); err != nil {
+	if err := s.refreshLocked(ctx); err != nil {
 		return codexCredential{}, err
 	}
 	return s.credential, nil
+}
+
+func (s *codexAuthStore) refreshLocked(ctx context.Context) error {
+	return withFileLock(ctx, s.path+".lock", func() error {
+		if disk, err := readCodexCredential(s.path); err == nil {
+			if disk.Tokens.RefreshToken != s.credential.Tokens.RefreshToken || disk.Tokens.AccessToken != s.credential.Tokens.AccessToken {
+				s.credential = disk
+				if jwtExpiry(disk.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
+					return nil
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return s.refresh(ctx)
+	})
 }
 
 func jwtExpiry(token string) time.Time {
@@ -225,12 +241,14 @@ func (s *codexAuthStore) importFromCLI() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.save(c); err != nil {
-		return err
-	}
-	s.credential, s.loaded = c, true
-	s.rejectedToken, s.authProblem = "", ""
-	return nil
+	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if err := s.save(c); err != nil {
+			return err
+		}
+		s.credential, s.loaded = c, true
+		s.rejectedToken, s.authProblem = "", ""
+		return nil
+	})
 }
 
 func (s *codexAuthStore) connected() bool {
@@ -306,7 +324,7 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 		return codexCredential{}, errCodexSignIn
 	}
 	s.rejectedToken, s.rejectedAt = rejected, time.Now()
-	if err := s.refresh(ctx); err != nil {
+	if err := s.refreshLocked(ctx); err != nil {
 		s.authProblem = errCodexSignIn.Error()
 		return codexCredential{}, errCodexSignIn
 	}

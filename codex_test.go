@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -325,5 +328,71 @@ func TestCodexBrowserRejectsWrongState(t *testing.T) {
 	result := <-flow.result
 	if result.err == nil || result.code != "" {
 		t.Fatal("unverified code accepted")
+	}
+}
+
+func TestCodexConcurrentExpiryRefreshesOnce(t *testing.T) {
+	var refreshes atomic.Int32
+	fresh := testJWT(time.Now().Add(2 * time.Hour))
+	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprintf(w, `{"access_token":%q,"refresh_token":"rotated"}`, fresh)
+	}))
+	defer oauth.Close()
+	path := filepath.Join(t.TempDir(), "auth.json")
+	expired := usageCredential("acct")
+	expired.Tokens.AccessToken = testJWT(time.Now().Add(-time.Minute))
+	if err := (&codexAuthStore{path: path}).save(expired); err != nil {
+		t.Fatal(err)
+	}
+	// Two stores on one path stand in for two router processes.
+	one := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client()}
+	two := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client()}
+	var wg sync.WaitGroup
+	for _, s := range []*codexAuthStore{one, two} {
+		wg.Add(1)
+		go func(s *codexAuthStore) {
+			defer wg.Done()
+			if c, err := s.credentialFor(context.Background()); err != nil || c.Tokens.AccessToken != fresh {
+				t.Errorf("credential: %v", err)
+			}
+		}(s)
+	}
+	wg.Wait()
+	if refreshes.Load() != 1 {
+		t.Fatalf("refreshes=%d", refreshes.Load())
+	}
+}
+
+func TestCodexConcurrentRejectedRefreshesOnce(t *testing.T) {
+	var refreshes atomic.Int32
+	fresh := testJWT(time.Now().Add(2 * time.Hour))
+	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprintf(w, `{"access_token":%q,"refresh_token":"rotated"}`, fresh)
+	}))
+	defer oauth.Close()
+	path := filepath.Join(t.TempDir(), "auth.json")
+	cred := usageCredential("acct")
+	if err := (&codexAuthStore{path: path}).save(cred); err != nil {
+		t.Fatal(err)
+	}
+	one := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client(), loaded: true, credential: cred}
+	two := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client(), loaded: true, credential: cred}
+	var wg sync.WaitGroup
+	for _, s := range []*codexAuthStore{one, two} {
+		wg.Add(1)
+		go func(s *codexAuthStore) {
+			defer wg.Done()
+			if c, err := s.refreshRejected(context.Background(), cred.Tokens.AccessToken, "acct"); err != nil || c.Tokens.AccessToken != fresh {
+				t.Errorf("rejected refresh: %v", err)
+			}
+		}(s)
+	}
+	wg.Wait()
+	if refreshes.Load() != 1 {
+		t.Fatalf("refreshes=%d", refreshes.Load())
 	}
 }
