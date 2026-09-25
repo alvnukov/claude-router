@@ -9,12 +9,6 @@ linters:
     # those errors on purpose, as idiomatic Go does.
     presets:
       - std-error-handling
-    rules:
-      # File locking is moving to a platform package, and these files'
-      # unchecked errors go with it.
-      - path: (^|/)(filelock|limits)\.go$
-        linters:
-          - errcheck
   settings:
     staticcheck:
       checks:

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"localrouter/internal/platform"
 )
 
 func writeDeployFile(t *testing.T, home string, cfg deployConfig) {
@@ -115,7 +117,7 @@ func TestDeployCommandRefusesConcurrentDeploy(t *testing.T) {
 	held, release := make(chan struct{}), make(chan struct{})
 	done := make(chan error)
 	go func() {
-		done <- withFileLock(context.Background(), filepath.Join(home, "deploy.lock"), func() error {
+		done <- platform.WithLock(context.Background(), filepath.Join(home, "deploy.lock"), func() error {
 			close(held)
 			<-release
 			return nil

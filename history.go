@@ -8,6 +8,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+
+	"localrouter/internal/platform"
 )
 
 // History persists across restarts as one JSON line per finished request in
@@ -117,7 +119,7 @@ func (s *store) compactAfterDrain() error {
 	if s.path == "" {
 		return nil
 	}
-	return withFileLock(context.Background(), s.path+".lock", func() error {
+	return platform.WithLock(context.Background(), s.path+".lock", func() error {
 		f, err := os.Open(s.path)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // nothing was served yet

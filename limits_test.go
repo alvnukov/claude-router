@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,9 +20,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 // The unified-* names below are the ones the Claude Code client reads; every
@@ -475,18 +477,41 @@ func TestAnthropicLimitsSaveKeepsNewerDiskState(t *testing.T) {
 	}
 }
 
+// holdLock holds the file lock at path, as another router process would.
+// The returned func releases it; the end of the test releases it too.
+func holdLock(t *testing.T, path string) (release func()) {
+	t.Helper()
+	held, stop, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- platform.WithLock(context.Background(), path, func() error {
+			close(held)
+			<-stop
+			return nil
+		})
+	}()
+	select {
+	case <-held:
+	case err := <-done:
+		t.Fatalf("hold lock: %v", err)
+	}
+	var once sync.Once
+	release = func() {
+		once.Do(func() {
+			close(stop)
+			if err := <-done; err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	t.Cleanup(release)
+	return release
+}
+
 // The read-merge-write of one process must not interleave with another's.
 func TestAnthropicLimitsSaveWaitsForOtherWriter(t *testing.T) {
 	captureLog(t)
 	path := filepath.Join(t.TempDir(), "limits.json")
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatal(err)
-	}
+	release := holdLock(t, path+".lock")
 	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
 	t.Cleanup(l.close)
 	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
@@ -500,11 +525,30 @@ func TestAnthropicLimitsSaveWaitsForOtherWriter(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("written while another writer held the lock")
 	}
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
-		t.Fatal(err)
-	}
+	release()
 	if err := <-saved; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A writer that keeps the lock makes a save fail after limitsLockWait, with
+// the lock file named, instead of blocking the saver for good.
+func TestAnthropicLimitsSaveGivesUpOnHeldLock(t *testing.T) {
+	captureLog(t)
+	path := filepath.Join(t.TempDir(), "limits.json")
+	holdLock(t, path+".lock")
+	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
+	t.Cleanup(l.close)
+	start := time.Now()
+	err := l.save()
+	if err == nil || err.Error() != path+".lock: held by another process" {
+		t.Fatalf("save under a held lock: %v", err)
+	}
+	if waited := time.Since(start); waited < limitsLockWait || waited > limitsLockWait+time.Second {
+		t.Fatalf("waited %v, want about %v", waited, limitsLockWait)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("written while another writer held the lock")
 	}
 }
 

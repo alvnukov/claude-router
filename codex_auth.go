@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 const (
@@ -109,7 +111,7 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 }
 
 func (s *codexAuthStore) refreshLocked(ctx context.Context) error {
-	return withFileLock(ctx, s.path+".lock", func() error {
+	return platform.WithLock(ctx, s.path+".lock", func() error {
 		if disk, err := readCodexCredential(s.path); err == nil {
 			if disk.Tokens.RefreshToken != s.credential.Tokens.RefreshToken || disk.Tokens.AccessToken != s.credential.Tokens.AccessToken {
 				s.credential = disk
@@ -248,7 +250,7 @@ func (s *codexAuthStore) importFromCLI() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return withFileLock(context.Background(), s.path+".lock", func() error {
+	return platform.WithLock(context.Background(), s.path+".lock", func() error {
 		if s.life != nil && !s.life.writesSharedState() {
 			return errors.New("Codex login unavailable while router is not active")
 		}

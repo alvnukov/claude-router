@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 const codexCallbackAddr = "127.0.0.1:1455"
@@ -182,7 +184,7 @@ func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrows
 	c.Tokens.AccessToken, c.Tokens.RefreshToken, c.Tokens.IDToken, c.Tokens.AccountID = token.Access, token.Refresh, token.ID, account
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return withFileLock(context.Background(), s.path+".lock", func() error {
+	return platform.WithLock(context.Background(), s.path+".lock", func() error {
 		if s.life != nil && !s.life.writesSharedState() {
 			return errors.New("Codex login unavailable while router is not active")
 		}
