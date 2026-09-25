@@ -50,7 +50,7 @@
 </section>
 <section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
 {{range .Logins}}{{template "codex-login" .}}
-<div id="codex-usage" hx-get="/settings/codex/usage" hx-vals='{"provider":"{{.Provider}}"}' hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>{{end}}
+<div class="codex-usage" hx-get="/settings/codex/usage" hx-vals='{"provider":"{{.Provider}}"}' hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>{{end}}
 </section>
 <section class="settings-section" id="anthropic-limits"><h2>Лимиты Anthropic</h2>
 {{with .Limits}}{{if eq .State "unverified"}}<p><b>Не подтверждено.</b> Anthropic присылает заголовки лимитов, но что они значат для подписки, ещё не проверено, поэтому значения не показываются.</p>

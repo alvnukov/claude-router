@@ -28,7 +28,9 @@ var uiFS embed.FS
 // (loopback by default) so nothing about it touches the API path, and it has
 // no auth: everything it shows is the traffic of the user running it.
 type uiServer struct {
-	codexUsage     codexUsageCache
+	codexUsage     codexUsageCache // template: per-connection caches copy its client
+	usageMu        sync.Mutex
+	codexUsages    map[string]*codexUsageCache // by name + "\x00" + auth id
 	limits         *anthropicLimits
 	claudeProxy    *claudeProxy
 	catalogMu      sync.Mutex
@@ -57,6 +59,7 @@ type probeResult struct {
 	Facets []facet // derived from Info, with no value picked
 	Base   string
 	Key    string // api key the probe used; a change invalidates the cache
+	AuthID string // Codex connection the probe used; a recreated one re-probes
 }
 
 // uiTemplates parses the embedded pages. Kept apart from startUI so a test
@@ -1271,10 +1274,10 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 	if u.probe == nil {
 		u.probe = map[string]probeResult{}
 	}
-	if old, ok := u.probe[p.Name]; ok && !force && old.Base == p.BaseURL && old.Key == p.APIKey && time.Since(old.At) < catalogRefreshInterval {
+	if old, ok := u.probe[p.Name]; ok && !force && old.Base == p.BaseURL && old.Key == p.APIKey && old.AuthID == p.AuthID && time.Since(old.At) < catalogRefreshInterval {
 		return old
 	}
-	res := probeResult{At: time.Now(), Base: p.BaseURL, Key: p.APIKey}
+	res := probeResult{At: time.Now(), Base: p.BaseURL, Key: p.APIKey, AuthID: p.AuthID}
 	defer func() { u.probe[p.Name] = res }()
 	endpoint := p.BaseURL + "/models"
 	if p.Type == "codex" {
@@ -1286,7 +1289,11 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 		return res
 	}
 	if p.Type == "codex" {
-		if err := codexAuth.authorize(req.Context(), req); err != nil {
+		store, err := codexStoreFor(p)
+		if err == nil {
+			err = store.authorize(req.Context(), req)
+		}
+		if err != nil {
 			res.Msg = err.Error()
 			return res
 		}

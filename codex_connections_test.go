@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 const testAuthA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -218,5 +220,80 @@ func TestCodexImportTargetsNamedProvider(t *testing.T) {
 	}
 	if v := u.codexLoginViewFor(provider{Name: "codex", Type: "codex"}); v.Connected {
 		t.Fatal("legacy shows work's login")
+	}
+}
+
+func seedConnection(t *testing.T, p provider, account string) codexCredential {
+	t.Helper()
+	s, err := codexStoreFor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := usageCredential(account)
+	// A distinct expiry per account gives each connection its own valid token.
+	c.Tokens.AccessToken = testJWT(time.Now().Add(time.Hour + time.Duration(account[len(account)-1])*time.Minute))
+	if err := s.save(c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestCodexRequestsUseTheirOwnAccount(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	a := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
+	b := provider{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}
+	ca, cb := seedConnection(t, a, "acct-a"), seedConnection(t, b, "acct-b")
+	seen := map[string]string{}
+	var mu sync.Mutex
+	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		seen[r.Header.Get("ChatGPT-Account-Id")] = r.Header.Get("Authorization")
+		mu.Unlock()
+		return usageResponse(200, `{"ok":true}`), nil
+	})
+	for _, p := range []provider{a, b} {
+		res := tryModel(httptest.NewRequest("POST", "/", nil), config{firstByte: time.Second}, candidate{Key: p.Name + "/m", Provider: p}, []byte(`{}`), false)
+		if res.err != nil {
+			t.Fatal(res.err)
+		}
+		res.resp.Body.Close()
+		res.cancel()
+	}
+	if seen["acct-a"] != "Bearer "+ca.Tokens.AccessToken || seen["acct-b"] != "Bearer "+cb.Tokens.AccessToken {
+		t.Fatalf("accounts mixed: %v", seen)
+	}
+}
+
+func TestCodexProbeUsesOwnAccount(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	u, _ := codexUI(t)
+	a, _ := u.cs.get().local.provider("codex")
+	b, _ := u.cs.get().local.provider("work")
+	seedConnection(t, a, "acct-a")
+	seedConnection(t, b, "acct-b")
+	var seen []string
+	var mu sync.Mutex
+	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("ChatGPT-Account-Id"))
+		mu.Unlock()
+		return usageResponse(200, `{"models":[]}`), nil
+	})
+	u.probeProvider(a, true)
+	u.probeProvider(b, true)
+	if strings.Join(seen, ",") != "acct-a,acct-b" {
+		t.Fatalf("probes: %v", seen)
+	}
+	// "work" removed and added again: same name, new id, new login.
+	recreated := b
+	recreated.AuthID = strings.Repeat("c", 32)
+	seedConnection(t, recreated, "acct-c")
+	u.probeProvider(recreated, false)
+	if strings.Join(seen, ",") != "acct-a,acct-b,acct-c" {
+		t.Fatalf("probe cache ignored the new id: %v", seen)
 	}
 }

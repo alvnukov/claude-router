@@ -163,17 +163,20 @@ func TestCodexUsageOnlyManualRefreshAndAccountIsolation(t *testing.T) {
 }
 
 func TestCodexUsagePanelAndManualButton(t *testing.T) {
-	oldAuth := codexAuth
-	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("acct-test")}
-	defer func() { codexAuth = oldAuth }()
-	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}}}, ""), newHealth(""))
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
+	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
+	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
+	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
 	calls := 0
-	u.codexUsage.client = &http.Client{Transport: usageTransport(func(*http.Request) (*http.Response, error) {
+	var accounts []string
+	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
 		calls++
+		accounts = append(accounts, r.Header.Get("ChatGPT-Account-Id"))
 		return usageResponse(200, `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000}},"rate_limit_reset_credits":{"available_count":0}}`), nil
 	})}
-	request := func(method, origin string) (int, string) {
-		r := httptest.NewRequest(method, "http://localhost:8788/settings/codex/usage?provider=codex", nil)
+	request := func(method, name, origin string) (int, string) {
+		r := httptest.NewRequest(method, "http://localhost:8788/settings/codex/usage?provider="+name, nil)
 		if origin != "" {
 			r.Header.Set("Origin", origin)
 		}
@@ -181,13 +184,22 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 		u.handler().ServeHTTP(w, r)
 		return w.Code, w.Body.String()
 	}
-	if code, html := request("GET", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || strings.Contains(html, "every 60s") {
+	if code, html := request("GET", "work", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || !strings.Contains(html, `class="codex-usage"`) || !strings.Contains(html, `"provider":"work"`) || strings.Contains(html, "every 60s") {
 		t.Fatalf("GET panel: %d %s", code, html)
 	}
-	if code, _ := request("POST", "https://other.test"); code != 403 || calls != 0 {
+	if code, _ := request("POST", "work", "https://other.test"); code != 403 || calls != 0 {
 		t.Fatal("cross-origin refresh allowed")
 	}
-	if code, html := request("POST", "http://localhost:8788"); code != 200 || calls != 1 || !strings.Contains(html, "80%") || !strings.Contains(html, "Доступно сбросов лимита: <b>0</b>") || strings.Contains(html, "private-refresh") {
+	if code, html := request("POST", "work", "http://localhost:8788"); code != 200 || calls != 1 || !strings.Contains(html, "80%") || !strings.Contains(html, "Доступно сбросов лимита: <b>0</b>") || strings.Contains(html, "private-refresh") {
 		t.Fatalf("POST panel: %d %s", code, html)
+	}
+	if code, _ := request("POST", "codex", "http://localhost:8788"); code != 200 || calls != 2 {
+		t.Fatalf("POST codex panel: %d", code)
+	}
+	if strings.Join(accounts, ",") != "acct-b,acct-a" {
+		t.Fatalf("usage accounts: %v", accounts)
+	}
+	if a, b := u.usageCache(providers[0]).view.Account.ID, u.usageCache(providers[1]).view.Account.ID; a != "acct-a" || b != "acct-b" {
+		t.Fatalf("views: %q %q", a, b)
 	}
 }

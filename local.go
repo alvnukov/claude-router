@@ -211,8 +211,13 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		return attemptResult{err: err}
 	}
 	up.Header.Set("Content-Type", "application/json")
+	var store *codexAuthStore
 	if cand.Provider.Type == "codex" {
-		if err := codexAuth.authorize(ctx, up); err != nil {
+		if store, err = codexStoreFor(cand.Provider); err != nil {
+			cancel()
+			return attemptResult{err: err}
+		}
+		if err := store.authorize(ctx, up); err != nil {
 			cancel()
 			return attemptResult{err: err}
 		}
@@ -236,7 +241,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	var resp *http.Response
 	if cand.Provider.Type == "codex" {
-		resp, err = codexAuth.doWithReauth(client, up)
+		resp, err = store.doWithReauth(client, up)
 	} else {
 		resp, err = client.Do(up)
 	}

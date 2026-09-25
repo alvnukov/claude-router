@@ -52,6 +52,7 @@ type codexUsageRow struct {
 	Blocked   bool
 }
 type codexUsageView struct {
+	Provider           string
 	Connected          bool
 	Account            codexAccount
 	Plan               string
@@ -332,14 +333,32 @@ func (u *uiServer) settingsCodexUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	_, store, err := u.codexProvider(r)
+	p, store, err := u.codexProvider(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	view := u.codexUsage.get(ctx, store, r.Method == http.MethodPost)
+	view := u.usageCache(p).get(ctx, store, r.Method == http.MethodPost)
+	view.Provider = p.Name
 	w.Header().Set("Cache-Control", "no-store")
 	u.render(w, "codex-usage", view)
+}
+
+// usageCache keeps one connection's usage apart from every other's; a
+// recreated name gets a fresh cache through its new id.
+func (u *uiServer) usageCache(p provider) *codexUsageCache {
+	u.usageMu.Lock()
+	defer u.usageMu.Unlock()
+	if u.codexUsages == nil {
+		u.codexUsages = map[string]*codexUsageCache{}
+	}
+	key := p.Name + "\x00" + p.AuthID
+	c, ok := u.codexUsages[key]
+	if !ok {
+		c = &codexUsageCache{client: u.codexUsage.client}
+		u.codexUsages[key] = c
+	}
+	return c
 }
