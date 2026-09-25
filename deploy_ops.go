@@ -222,7 +222,7 @@ func (p launchdSlotPlist) xml() []byte {
 func (o *systemDeployOps) slotPlist(slot string) launchdSlotPlist {
 	log := filepath.Join(o.home, "router."+slot+".log")
 	return launchdSlotPlist{Label: o.label(slot), ProgramArguments: []string{filepath.Join(o.home, "localrouter."+slot)}, WorkingDirectory: o.home, RunAtLoad: true, KeepAlive: true, ExitTimeOut: 960,
-		EnvironmentVariables: map[string]string{"ROUTER_SLOT": slot, "ROUTER_ACTIVE_SLOT_FILE": o.markerPath(), "ROUTER_LISTEN": o.address(slot, false), "ROUTER_UI_LISTEN": o.address(slot, true), "ROUTER_PROVIDERS_FILE": filepath.Join(o.home, "providers.json"), "ROUTER_ENV_FILE": filepath.Join(o.home, "env"), "ROUTER_STATE_FILE": filepath.Join(o.home, "state.json"), "ROUTER_UI_HISTORY_FILE": filepath.Join(o.home, "history.jsonl")}, StandardOutPath: log, StandardErrorPath: log}
+		EnvironmentVariables: map[string]string{"ROUTER_SLOT": slot, "ROUTER_ACTIVE_SLOT_FILE": o.markerPath(), "ROUTER_LISTEN": o.address(slot, false), "ROUTER_UI_LISTEN": o.address(slot, true), "ROUTER_PROVIDERS_FILE": filepath.Join(o.home, "providers.json"), "ROUTER_ANTHROPIC_LIMITS_FILE": filepath.Join(o.home, "limits.json"), "ROUTER_ENV_FILE": filepath.Join(o.home, "env"), "ROUTER_STATE_FILE": filepath.Join(o.home, "state.json"), "ROUTER_UI_HISTORY_FILE": filepath.Join(o.home, "history.jsonl")}, StandardOutPath: log, StandardErrorPath: log}
 }
 
 func (o *systemDeployOps) markerPath() string { return filepath.Join(o.home, "active-slot") }

@@ -46,6 +46,8 @@ func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
 	r := &routerServer{cfg: cfg, life: life, health: h, state: state, cs: cs, st: st, background: ctx, cancel: cancel}
 	r.ui = newUIServer(st, cs, h)
 	r.ui.life = life
+	r.ui.limits = newAnthropicLimits(limitsPath(), anthropicLimitsMaxAge)
+	r.ui.limits.life = life
 	return r
 }
 

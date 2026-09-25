@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -10,6 +11,37 @@ import (
 	"testing"
 	"time"
 )
+
+// Both slots share limits.json during a deploy; only the active one writes it.
+func TestRouterServerKeepsAnthropicLimitsInMemoryUntilActive(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "limits.json")
+	t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", path)
+	t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
+	life := newLifecycle(true)
+	server := newRouterServer(config{uiHistory: 10}, life, filepath.Join(dir, "state.json"))
+	limits := server.ui.limits
+	limits.observe(http.Header{"Anthropic-Ratelimit-Requests-Remaining": {"41"}}, time.Now())
+	if err := limits.save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("standby wrote limits.json: %v", err)
+	}
+	if got := limits.view(time.Now()).State; got != "unverified" {
+		t.Fatalf("standby lost the observation: %s", got)
+	}
+	if err := life.activate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := limits.save(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("active slot did not write limits.json: %v", err)
+	}
+	limits.close()
+}
 
 func TestRouterServerStandbyAndActivation(t *testing.T) {
 	dir := t.TempDir()
