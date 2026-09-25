@@ -56,7 +56,9 @@ up:
   time. `providers`, `routing` and `server` move early, right after
   `history` and `limits`, so that most new work has a package to land in.
 - A change to code that is still in the root package first moves that
-  code into its package, then changes it.
+  code into its package, then changes it. The move itself edits the root
+  files that call the moved code, so that they use the new package; those
+  edits are not new code.
 
 What each package does not know:
 
@@ -206,7 +208,8 @@ already on disk.
   - `go test ./...`;
   - `router.exe install`;
   - /healthz after logging in again;
-  - one request from Claude Code.
+  - `router env` writes `settings.json`, checked by the integration test;
+    no Claude Code client runs on the Windows machine.
 
 ## Process
 
