@@ -35,7 +35,7 @@ func codexStoreFor(p provider) (*codexAuthStore, error) {
 	if s, ok := codexStores.m[path]; ok {
 		return s, nil
 	}
-	s := &codexAuthStore{path: path, cliPath: codexAuth.cliPath, issuer: codexAuth.issuer, client: codexAuth.client}
+	s := &codexAuthStore{path: path, cliPath: codexAuth.cliPath, issuer: codexAuth.issuer, client: codexAuth.client, life: codexAuth.life}
 	codexStores.m[path] = s
 	return s, nil
 }

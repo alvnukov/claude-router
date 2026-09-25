@@ -57,3 +57,29 @@ func TestQuiescedAuthRefusesImport(t *testing.T) {
 		t.Fatalf("quiesced instance wrote auth: %v", err)
 	}
 }
+
+// Every Codex connection's store follows the router's lifecycle, not only the
+// legacy one the router wires at start.
+func TestQuiescedConnectionAuthRefusesImport(t *testing.T) {
+	dir := t.TempDir()
+	old := codexAuth
+	t.Cleanup(func() { codexAuth = old })
+	codexAuth = &codexAuthStore{path: filepath.Join(dir, "codex-auth.json"), cliPath: filepath.Join(dir, "cli.json"), life: newLifecycle(false)}
+	s, err := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(usageCredential("account"))
+	if err := os.WriteFile(s.cliPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := codexAuth.life.quiesce(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.importFromCLI(); err == nil {
+		t.Fatal("quiesced connection imported credential")
+	}
+	if _, err := os.Stat(s.path); !os.IsNotExist(err) {
+		t.Fatalf("quiesced connection wrote auth: %v", err)
+	}
+}
