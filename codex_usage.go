@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -44,6 +45,8 @@ func (a codexAccount) key() string { return a.ID + "\x00" + a.Email }
 
 type codexUsageRow struct {
 	Name      string
+	ID        string // stable name for /api/limits: [limit_name-]primary|secondary
+	Seconds   int64  // window length, 0 when not reported
 	Known     bool
 	Remaining float64
 	Used      float64
@@ -209,15 +212,15 @@ func decodeCodexUsage(payload codexUsagePayload, account codexAccount, now time.
 			if window == nil {
 				continue
 			}
-			fallback := "Основное окно"
+			fallback, id := "Основное окно", "primary"
 			if i == 1 {
-				fallback = "Дополнительное окно"
+				fallback, id = "Дополнительное окно", "secondary"
 			}
 			label := usageWindowName(window.Seconds, fallback)
 			if name != "" {
-				label = name + " · " + label
+				label, id = name+" · "+label, name+"-"+id
 			}
-			row := codexUsageRow{Name: label, Blocked: blocked}
+			row := codexUsageRow{Name: label, ID: id, Seconds: max(window.Seconds, 0), Blocked: blocked}
 			if window.Used != nil {
 				row.Known = true
 				row.Used = max(0, min(100, *window.Used))
@@ -230,10 +233,11 @@ func decodeCodexUsage(payload codexUsagePayload, account codexAccount, now time.
 			count++
 		}
 		if count == 0 && blocked {
+			id := name
 			if name == "" {
-				name = "Codex"
+				name, id = "Codex", "rate_limit"
 			}
-			v.Limits = append(v.Limits, codexUsageRow{Name: name, Blocked: true})
+			v.Limits = append(v.Limits, codexUsageRow{Name: name, ID: id, Blocked: true})
 		}
 	}
 	appendWindows("", payload.Limits)
@@ -311,6 +315,73 @@ func (cache *codexUsageCache) get(ctx context.Context, auth *codexAuthStore, for
 		}
 	}
 	return v
+}
+
+const (
+	// codexUsageRefresh is how often the router asks Codex for usage on its
+	// own. codexUsageMaxAge is how long /api/limits shows the answer, so
+	// Codex windows survive two failed refreshes in a row.
+	codexUsageRefresh = 10 * time.Minute
+	codexUsageMaxAge  = 30 * time.Minute
+)
+
+// codexUsageTarget is one Codex connection as the background refresh and
+// /api/limits see it: its name, the cache its settings block reads and its
+// credential store.
+type codexUsageTarget struct {
+	provider string
+	cache    *codexUsageCache
+	auth     *codexAuthStore
+}
+
+// codexUsageTargets lists the Codex connections of the current settings in
+// providers order. A connection without a usable store is left out; the
+// settings page shows its error.
+func (u *uiServer) codexUsageTargets() []codexUsageTarget {
+	var targets []codexUsageTarget
+	for _, p := range u.cs.get().local.Providers {
+		if p.Type != "codex" {
+			continue
+		}
+		if auth, err := codexStoreFor(p); err == nil {
+			targets = append(targets, codexUsageTarget{p.Name, u.usageCache(p), auth})
+		}
+	}
+	return targets
+}
+
+// refreshCodexUsageEvery sends the refresh button's request for every Codex
+// connection, one after another, at start and on every tick until ctx ends.
+// The list is read anew each time, so added and removed connections follow
+// the settings. A failed request waits for the next tick, and a ticker drops
+// ticks that arrive during a refresh, so a slow Codex never queues requests.
+func refreshCodexUsageEvery(ctx context.Context, targets func() []codexUsageTarget, ticks <-chan time.Time) {
+	refresh := func() {
+		for _, t := range targets() {
+			rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if v := t.cache.get(rctx, t.auth, true); v.Connected && v.Error != "" {
+				log.Printf("codex usage refresh %s: %s", t.provider, v.Error)
+			}
+			cancel()
+		}
+	}
+	refresh()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticks:
+			refresh()
+		}
+	}
+}
+
+func (u *uiServer) startCodexUsageUpdates(ctx context.Context) {
+	ticker := time.NewTicker(codexUsageRefresh)
+	go func() {
+		defer ticker.Stop()
+		refreshCodexUsageEvery(ctx, u.codexUsageTargets, ticker.C)
+	}()
 }
 
 func quotaTimeLeft(d time.Duration) string {

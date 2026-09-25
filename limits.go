@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,8 +22,9 @@ import (
 // and the router must not repeat that call with the client's token. The only
 // source is the anthropic-ratelimit-* headers on Anthropic's answers to the
 // /v1/messages requests the client sent through the router; the proxy hook
-// copies them and leaves the response alone. What these headers mean for the
-// subscription is not confirmed yet, so only their names are shown.
+// copies them and leaves the response alone. parseLimitWindows turns them into
+// per-window numbers; the unified names and scales it expects are the ones the
+// Claude Code client reads, not yet confirmed against live traffic.
 
 const (
 	anthropicLimitsPrefix = "anthropic-ratelimit-"
@@ -63,14 +66,112 @@ type anthropicLimits struct {
 	lastErr string // saver goroutine only
 }
 
-// anthropicLimitsView is what the settings page and GET /api/limits show.
-// Header values are never part of it.
+// anthropicLimitsView is what the settings page shows and limitsReport
+// carries. Windows and Raw are set only while the snapshot is fresh, and then
+// always, even empty.
 type anthropicLimitsView struct {
-	State         string    `json:"state"` // unverified | no_headers | unavailable
-	ObservedAt    time.Time `json:"observed_at,omitzero"`
-	AgeSeconds    *int64    `json:"age_seconds,omitempty"`
-	MaxAgeSeconds int64     `json:"max_age_seconds"`
-	Headers       []string  `json:"headers,omitempty"`
+	State         string            `json:"state"` // fresh | no_headers | unavailable
+	ObservedAt    time.Time         `json:"observed_at,omitzero"`
+	AgeSeconds    *int64            `json:"age_seconds,omitempty"`
+	MaxAgeSeconds int64             `json:"max_age_seconds"`
+	Windows       []limitWindow     `json:"windows,omitzero"`
+	Raw           map[string]string `json:"raw,omitzero"` // headers parseLimitWindows did not read
+}
+
+// limitWindow is one anthropic-ratelimit-<name>-<field> group. Only what the
+// response carried is set: percentages from utilization, or from remaining
+// and limit when utilization is absent.
+type limitWindow struct {
+	Source           string    `json:"source,omitempty"`   // set in limitsReport
+	Provider         string    `json:"provider,omitempty"` // Codex connection name
+	Name             string    `json:"name"`
+	RemainingPercent *float64  `json:"remaining_percent,omitempty"`
+	UsedPercent      *float64  `json:"used_percent,omitempty"`
+	Remaining        *int64    `json:"remaining,omitempty"`
+	Limit            *int64    `json:"limit,omitempty"`
+	ResetAt          time.Time `json:"reset_at,omitzero"`
+	Status           string    `json:"status,omitempty"`
+	WindowSeconds    int64     `json:"window_seconds,omitempty"`
+	ObservedAt       time.Time `json:"observed_at,omitzero"` // set in limitsReport
+	ResetIn          string    `json:"-"`
+}
+
+// limitsReport is GET /api/limits: the state of every source and one list of
+// windows, each with its source and when it was observed. docs/features.md
+// describes this JSON.
+type limitsReport struct {
+	Sources []limitSource `json:"sources"`
+	Windows []limitWindow `json:"windows"`
+}
+
+type limitSource struct {
+	Source        string            `json:"source"`             // anthropic | codex
+	Provider      string            `json:"provider,omitempty"` // Codex connection name
+	State         string            `json:"state"`              // fresh | no_headers | unavailable | not_connected
+	ObservedAt    time.Time         `json:"observed_at,omitzero"`
+	AgeSeconds    *int64            `json:"age_seconds,omitempty"`
+	MaxAgeSeconds int64             `json:"max_age_seconds"`
+	Raw           map[string]string `json:"raw,omitzero"`
+	Error         string            `json:"error,omitempty"`
+}
+
+// limitsReportOf puts Anthropic and every Codex connection in one report, a
+// codex source per connection named by provider; with no Codex connection
+// there is one codex source, not_connected. Codex windows come from the last
+// successful usage request and are shown while it is at most
+// codexUsageMaxAge old; a later failure is reported next to them.
+func limitsReportOf(a anthropicLimitsView, codex []codexUsageView, now time.Time) limitsReport {
+	r := limitsReport{Windows: []limitWindow{}}
+	r.Sources = append(r.Sources, limitSource{Source: "anthropic", State: a.State, ObservedAt: a.ObservedAt,
+		AgeSeconds: a.AgeSeconds, MaxAgeSeconds: a.MaxAgeSeconds, Raw: a.Raw})
+	for _, w := range a.Windows {
+		w.Source, w.ObservedAt = "anthropic", a.ObservedAt
+		r.Windows = append(r.Windows, w)
+	}
+
+	if len(codex) == 0 {
+		codex = []codexUsageView{{}}
+	}
+	for _, c := range codex {
+		r.codexSource(c, now)
+	}
+	return r
+}
+
+func (r *limitsReport) codexSource(c codexUsageView, now time.Time) {
+	s := limitSource{Source: "codex", Provider: c.Provider, State: "not_connected", MaxAgeSeconds: int64(codexUsageMaxAge / time.Second), Error: c.Error}
+	if c.Connected {
+		s.State = "unavailable"
+	}
+	if c.Connected && !c.Updated.IsZero() {
+		age := now.Sub(c.Updated)
+		s.ObservedAt = c.Updated
+		seconds := max(int64(age/time.Second), 0)
+		s.AgeSeconds = &seconds
+		if age >= -limitsClockSkew && age <= codexUsageMaxAge {
+			s.State = "fresh"
+			for _, row := range c.Limits {
+				w := limitWindow{Source: "codex", Provider: c.Provider, Name: row.ID, WindowSeconds: row.Seconds, ObservedAt: c.Updated}
+				if row.Known {
+					remaining, used := row.Remaining, row.Used
+					w.RemainingPercent, w.UsedPercent = &remaining, &used
+				}
+				if !row.Reset.IsZero() {
+					w.ResetAt = row.Reset.UTC()
+				}
+				if row.Blocked {
+					w.Status = "rejected"
+				}
+				r.Windows = append(r.Windows, w)
+			}
+		}
+	}
+	r.Sources = append(r.Sources, s)
+}
+
+// Low marks a window the page highlights: a tenth or less left, or refused.
+func (w limitWindow) Low() bool {
+	return w.RemainingPercent != nil && *w.RemainingPercent <= 10 || w.Status == "rejected"
 }
 
 func (v anthropicLimitsView) MaxAgeMinutes() int64 { return v.MaxAgeSeconds / 60 }
@@ -378,8 +479,17 @@ func (l *anthropicLimits) view(now time.Time) anthropicLimitsView {
 	}
 	switch {
 	case st.WithHeaders != nil && current(st.WithHeaders.At):
-		v.State, v.ObservedAt = "unverified", st.WithHeaders.At
-		v.Headers = sortedNames(st.WithHeaders.Headers)
+		v.State, v.ObservedAt = "fresh", st.WithHeaders.At
+		v.Windows, v.Raw = parseLimitWindows(st.WithHeaders.Headers)
+		for i, w := range v.Windows {
+			switch left := w.ResetAt.Sub(now); {
+			case w.ResetAt.IsZero():
+			case left <= 0:
+				v.Windows[i].ResetIn = "ожидается обновление лимита"
+			default:
+				v.Windows[i].ResetIn = "через " + quotaTimeLeft(left)
+			}
+		}
 	case current(st.WithoutAt):
 		v.State, v.ObservedAt = "no_headers", st.WithoutAt
 	default:
@@ -396,13 +506,113 @@ func (l *anthropicLimits) view(now time.Time) anthropicLimitsView {
 	return v
 }
 
-// limitsAPI is GET /api/limits: the view the settings page shows, from the
-// store only; nothing here reaches Anthropic.
+// limitsAPI is GET /api/limits: what the settings page shows, from the
+// stores only; nothing here reaches Anthropic or Codex.
 func (u *uiServer) limitsAPI(w http.ResponseWriter, r *http.Request) {
+	var codex []codexUsageView
+	for _, t := range u.codexUsageTargets() {
+		v := t.cache.get(r.Context(), t.auth, false)
+		v.Provider = t.provider
+		codex = append(codex, v)
+	}
+	now := time.Now()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(u.limits.view(time.Now()))
+	json.NewEncoder(w).Encode(limitsReportOf(u.limits.view(now), codex, now))
 }
+
+// parseLimitWindows reads anthropic-ratelimit-<window>-<field> without knowing
+// window names: the field is what follows the last hyphen. Utilization is a
+// fraction of 1 and a numeric reset is unix seconds, as the unified headers
+// the Claude Code client reads; remaining and limit are counts and a textual
+// reset is RFC 3339, as the documented API headers. A header of another shape,
+// or a value that does not parse, is returned in raw under its full name.
+func parseLimitWindows(h map[string]string) ([]limitWindow, map[string]string) {
+	found := map[string]*limitWindow{}
+	utilization := map[string]float64{}
+	raw := map[string]string{}
+	for name, value := range h {
+		rest, prefixed := strings.CutPrefix(name, anthropicLimitsPrefix)
+		i := strings.LastIndexByte(rest, '-')
+		if !prefixed || i <= 0 {
+			raw[name] = value
+			continue
+		}
+		window, field := rest[:i], rest[i+1:]
+		w := found[window]
+		if w == nil {
+			w = &limitWindow{Name: window}
+		}
+		ok := false
+		switch field {
+		case "utilization":
+			var u float64
+			if u, ok = parseFraction(value); ok {
+				utilization[window] = u
+			}
+		case "remaining", "limit":
+			n, err := strconv.ParseInt(value, 10, 64)
+			if ok = err == nil && n >= 0; ok {
+				if field == "remaining" {
+					w.Remaining = &n
+				} else {
+					w.Limit = &n
+				}
+			}
+		case "reset":
+			var t time.Time
+			if t, ok = parseLimitReset(value); ok {
+				w.ResetAt = t
+			}
+		case "status":
+			if ok = value != ""; ok {
+				w.Status = value
+			}
+		}
+		if !ok {
+			raw[name] = value
+			continue
+		}
+		found[window] = w
+	}
+
+	windows := make([]limitWindow, 0, len(found))
+	for name, w := range found {
+		if u, ok := utilization[name]; ok {
+			used, left := round1(u*100), round1(min(max(100-u*100, 0), 100))
+			w.UsedPercent, w.RemainingPercent = &used, &left
+		} else if w.Remaining != nil && w.Limit != nil && *w.Limit > 0 {
+			left := round1(min(float64(*w.Remaining)/float64(*w.Limit)*100, 100))
+			w.RemainingPercent = &left
+		}
+		windows = append(windows, *w)
+	}
+	sort.Slice(windows, func(i, j int) bool { return windows[i].Name < windows[j].Name })
+	return windows, raw
+}
+
+func parseFraction(s string) (float64, bool) {
+	u, err := strconv.ParseFloat(s, 64)
+	return u, err == nil && u >= 0 && !math.IsInf(u, 0) // NaN fails u >= 0
+}
+
+// parseLimitReset takes unix seconds or RFC 3339. Milliseconds and other
+// large numbers are not guessed at.
+func parseLimitReset(s string) (time.Time, bool) {
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if n <= 0 || n >= 1e11 {
+			return time.Time{}, false
+		}
+		return time.Unix(n, 0).UTC(), true
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
+}
+
+func round1(f float64) float64 { return math.Round(f*10) / 10 }
 
 func sortedNames(m map[string]string) []string {
 	names := make([]string, 0, len(m))

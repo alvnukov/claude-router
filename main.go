@@ -197,6 +197,7 @@ func main() {
 	u := newUIServer(st, cs, hl)
 	u.limits = newAnthropicLimits(limitsPath(), anthropicLimitsMaxAge)
 	u.startCatalogUpdates(context.Background())
+	u.startCodexUsageUpdates(context.Background())
 	mux := newMainHandler(cfg, cs, st, hl, u)
 	log.Printf("listening on %s", cfg.listen)
 	log.Printf("  upstream     %s", cfg.upstream)
@@ -311,8 +312,20 @@ func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiSer
 		w.Write([]byte("ok"))
 	})
 
+	// Everything else goes to Anthropic as is. One log line per request says
+	// what went by: no query, headers or bodies, and a bounded, escaped path.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		pass(w, r, nil)
+		start, path := time.Now(), r.URL.EscapedPath()
+		if len(path) > 256 {
+			path = path[:256] + "…"
+		}
+		rw := newRecorder(w, 0)
+		pass(rw, r, nil)
+		status := rw.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		log.Printf("pass %s %s -> %d in %s", r.Method, path, status, time.Since(start).Round(time.Millisecond))
 	})
 
 	return mux

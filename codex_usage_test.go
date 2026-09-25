@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -184,7 +186,8 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 		u.handler().ServeHTTP(w, r)
 		return w.Code, w.Body.String()
 	}
-	if code, html := request("GET", "work", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || !strings.Contains(html, `class="codex-usage"`) || !strings.Contains(html, `"provider":"work"`) || strings.Contains(html, "every 60s") {
+	if code, html := request("GET", "work", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || !strings.Contains(html, `class="codex-usage"`) || !strings.Contains(html, `"provider":"work"`) || strings.Contains(html, "every 60s") ||
+		!strings.Contains(html, "при старте роутера, раз в 10 минут и по кнопке") {
 		t.Fatalf("GET panel: %d %s", code, html)
 	}
 	if code, _ := request("POST", "work", "https://other.test"); code != 403 || calls != 0 {
@@ -201,5 +204,126 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 	}
 	if a, b := u.usageCache(providers[0]).view.Account.ID, u.usageCache(providers[1]).view.Account.ID; a != "acct-a" || b != "acct-b" {
 		t.Fatalf("views: %q %q", a, b)
+	}
+}
+
+// The background refresh sends the refresh button's request once at start and
+// once per tick. A failed request is not retried before the next tick, keeps
+// the last good numbers and does not stop the loop.
+func TestCodexUsageBackgroundRefresh(t *testing.T) {
+	auth := &codexAuthStore{loaded: true, credential: usageCredential("acct")}
+	calls := make(chan struct{}, 100)
+	var fail atomic.Bool
+	cache := &codexUsageCache{client: &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
+		calls <- struct{}{}
+		if r.URL.String() != codexUsageURL {
+			t.Errorf("request to %s", r.URL)
+		}
+		if fail.Load() {
+			return usageResponse(503, "private-body"), nil
+		}
+		return usageResponse(200, `{"rate_limit":{"primary_window":{"used_percent":25}}}`), nil
+	})}}
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		refreshCodexUsageEvery(ctx, func() []codexUsageTarget { return []codexUsageTarget{{"codex", cache, auth}} }, ticks)
+		close(done)
+	}()
+	// A request holds the cache until its answer is stored, so a read right
+	// after it sees the result. Each expected request is taken from calls
+	// here; anything left there at the end is a request too many.
+	request := func() codexUsageView {
+		t.Helper()
+		select {
+		case <-calls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no request")
+		}
+		return cache.get(t.Context(), auth, false)
+	}
+	tick := func() { ticks <- time.Now() }
+
+	v := request()
+	if v.Updated.IsZero() || len(v.Limits) != 1 || v.Limits[0].Remaining != 75 {
+		t.Fatalf("start: %+v", v)
+	}
+	updated := v.Updated
+
+	fail.Store(true)
+	tick()
+	if v = request(); v.Error == "" || !v.Updated.Equal(updated) || len(v.Limits) != 1 || strings.Contains(v.Error, "private-body") {
+		t.Fatalf("failed refresh: %+v", v)
+	}
+	tick()
+	request()
+
+	fail.Store(false)
+	tick()
+	if v = request(); v.Error != "" || !v.Updated.After(updated) {
+		t.Fatalf("recovery: %+v", v)
+	}
+
+	// Without a Codex login there is nothing to ask for.
+	auth.mu.Lock()
+	auth.loaded, auth.path = false, filepath.Join(t.TempDir(), "missing.json")
+	auth.mu.Unlock()
+	tick()
+	tick()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh loop did not stop")
+	}
+	if n := len(calls); n != 0 {
+		t.Fatalf("%d requests beyond one at start and one per tick", n)
+	}
+}
+
+// The background refresh asks for every Codex connection of the current
+// settings, in providers order, and stores the answer where that
+// connection's settings block reads it.
+func TestCodexUsageRefreshEveryConnection(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
+	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
+	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
+	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	calls := make(chan string, 10)
+	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
+		calls <- r.Header.Get("ChatGPT-Account-Id")
+		return usageResponse(200, `{"rate_limit":{"primary_window":{"used_percent":25}}}`), nil
+	})}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { refreshCodexUsageEvery(ctx, u.codexUsageTargets, make(chan time.Time)); close(done) }()
+
+	accounts := []string{"acct-a", "acct-b"}
+	for _, want := range accounts {
+		select {
+		case got := <-calls:
+			if got != want {
+				t.Fatalf("request for %q, want %q", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no request")
+		}
+	}
+	for i, p := range providers {
+		store, err := codexStoreFor(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v := u.usageCache(p).get(t.Context(), store, false); v.Updated.IsZero() || v.Account.ID != accounts[i] || len(v.Limits) != 1 {
+			t.Fatalf("%s: %+v", p.Name, v)
+		}
+	}
+	cancel()
+	<-done
+	if n := len(calls); n != 0 {
+		t.Fatalf("%d requests beyond one per connection at start", n)
 	}
 }
