@@ -285,6 +285,35 @@ Once the agent is installed, `start`, `stop` and `restart` delegate to
 `launchctl` -- a plain kill would only be undone by `KeepAlive`. `stop` unloads
 the agent, so it stays down until the next login or an explicit `start`.
 
+### One-time move to Caddy and blue/green deploys
+
+**Do not run cutover during normal traffic.** The manual `./router install
+--cutover` is the only migration from the legacy launchd agent. It requires
+Caddy, prepares a standby blue slot, prints the plan and the 15-minute
+pending-request limit, and waits for a typed `yes`. It reads the legacy UI's
+`/status` until pending reaches zero, then stops the legacy agent and binds
+Caddy to the public API/UI addresses. Connections may fail between that stop
+and Caddy's start; if Caddy never becomes ready, it stops Caddy and blue and
+restarts the legacy agent. Schedule a maintenance window and move clients to
+the cloud first. Do not run `install --cutover` a second time.
+
+After cutover, Caddy is the only public listener; the router runs in blue and
+green launchd slots. The six loopback addresses and the Caddy admin address are
+saved in `ROUTER_HOME/deploy.json` by cutover; the candidate Caddy binary path
+is saved there too. Configure the addresses in `env` *before* cutover if the
+defaults in `env.example` conflict. All tests use ephemeral addresses and do
+not run cutover on the public ports.
+
+`./router deploy` builds a candidate and switches slots without restarting
+Caddy. Identical binaries are a no-op; `./router deploy -force` switches even
+when the digest is unchanged, as does `./router restart` after cutover. A
+serving request stays on its original slot until it ends. `./router status`
+reports the active slot and launchd labels; `./router start` reloads its slot
+and Caddy; `./router stop` deliberately unloads Caddy and both slots (an
+outage), so do not use it as a deployment operation. Existing `./router
+install` and `./router uninstall` apply only before cutover; after cutover,
+uninstall refuses instead of accidentally removing the old agent alone.
+
 ## Context handling
 
 `ROUTER_LOCAL_MAX_INPUT_CHARS` limits the prompt sent to pool members; zero
