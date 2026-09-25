@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"syscall"
@@ -65,6 +66,7 @@ type deployController struct {
 	ops          deployOps
 	client       *http.Client
 	readyTimeout time.Duration // how long a started slot may take to answer
+	drainTimeout time.Duration // how long a draining slot may keep requests before it is stopped
 }
 
 func (d *deployController) ready(ctx context.Context, slot string, pid int) error {
@@ -242,8 +244,16 @@ func (d *deployController) retire(ctx context.Context, slot string) error {
 
 // waitDrain returns once the slot has no request in flight. A slot launchd
 // restarted comes back standby or not listening yet; either way the process
-// that held the requests is gone.
+// that held the requests is gone. Past the drain timeout it returns anyway:
+// stopping the slot then ends what is left, and a stream that never ends
+// cannot hold the slot for every later deploy.
 func (d *deployController) waitDrain(ctx context.Context, slot string) error {
+	var deadline <-chan time.Time
+	if d.drainTimeout > 0 {
+		timer := time.NewTimer(d.drainTimeout)
+		defer timer.Stop()
+		deadline = timer.C
+	}
 	for {
 		state, err := d.ops.state(ctx, slot)
 		if errors.Is(err, syscall.ECONNREFUSED) {
@@ -258,6 +268,9 @@ func (d *deployController) waitDrain(ctx context.Context, slot string) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-deadline:
+			log.Printf("deploy: slot %s still has %d requests after %s; stopping it", slot, state.Pending, d.drainTimeout)
+			return nil
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

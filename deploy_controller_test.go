@@ -346,6 +346,35 @@ func TestDeployRetiresLeftoverCandidateBeforeStart(t *testing.T) {
 	}
 }
 
+// A stream that outlives the drain timeout must not keep a slot draining for
+// every later deploy: past it the slot is stopped, and its own shutdown ends
+// what is left.
+func TestDeployStopsASlotThatOutlivesTheDrainTimeout(t *testing.T) {
+	for _, slot := range []string{"blue", "green"} {
+		t.Run(slot, func(t *testing.T) {
+			f := newDeployFixture(t)
+			if slot == "green" {
+				f.slots["green"] = &deploySlotState{Mode: modeDraining, PID: 40, Digest: "stale"}
+			}
+			f.onState = func(name string, s *deploySlotState) error {
+				if name == slot && s.Mode == modeDraining {
+					s.Pending = 1
+				}
+				return nil
+			}
+			f.controller.drainTimeout = 200 * time.Millisecond
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			if err := f.controller.deploy(ctx, "new", false); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(f.calls, ","); !strings.Contains(got, "stop:"+slot) || !strings.HasSuffix(got, "save:green") {
+				t.Fatalf("slot %s that would not drain was left running: %s", slot, got)
+			}
+		})
+	}
+}
+
 func TestDeployRejectsReservedPortsInTests(t *testing.T) {
 	for _, port := range []string{"8787", "8788", "8791", "8792", "8793", "8794"} {
 		f := newDeployFixture(t)
