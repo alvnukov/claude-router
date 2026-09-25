@@ -89,9 +89,11 @@ type localTrace struct {
 }
 
 type attempt struct {
-	Model string
-	Err   string // empty on success
-	Dur   time.Duration
+	Model   string
+	Err     string // empty on success
+	Dur     time.Duration
+	Outcome string        // ok, upstream_idle, upstream_closed, upstream_error or client_closed
+	MaxGap  time.Duration // longest silence of the upstream body
 }
 
 type respBlock struct {

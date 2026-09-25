@@ -19,10 +19,20 @@ type codexRequest struct {
 	Store        bool             `json:"store"`
 	Stream       bool             `json:"stream"`
 	Include      []string         `json:"include"`
-	Reasoning    *struct {
-		Effort string `json:"effort"`
-	} `json:"reasoning,omitempty"`
+	Reasoning    *codexReasoning  `json:"reasoning,omitempty"`
 }
+
+// Summary "auto" makes Codex send reasoning summaries while it thinks. They
+// are not shown to the client, but they are bytes from a live model: without
+// them a long think is indistinguishable from a dead connection.
+type codexReasoning struct {
+	Effort  string `json:"effort,omitempty"`
+	Summary string `json:"summary"`
+}
+
+// errCodexIncomplete is a Codex answer that ended in failure rather than in
+// silence or a dropped connection.
+var errCodexIncomplete = errors.New("Codex response did not complete")
 
 // Same stateless Responses mapping used by CozyPhi. Tool call IDs survive the
 // round trip so Claude Code can send their outputs on the following turn.
@@ -34,11 +44,7 @@ func toCodex(req openaiRequest) (codexRequest, error) {
 	out := codexRequest{Model: req.Model, Store: false, Stream: true,
 		Include: []string{"reasoning.encrypted_content"},
 		Input:   make([]any, 0, len(req.Messages))}
-	if req.ReasoningEffort != "" {
-		out.Reasoning = &struct {
-			Effort string `json:"effort"`
-		}{Effort: req.ReasoningEffort}
-	}
+	out.Reasoning = &codexReasoning{Effort: req.ReasoningEffort, Summary: "auto"}
 	if choice, ok := req.ToolChoice.(map[string]any); ok {
 		if fn, ok := choice["function"].(map[string]any); ok {
 			out.ToolChoice = map[string]any{"type": "function", "name": fn["name"]}
@@ -156,12 +162,12 @@ func readCodexEvents(body io.Reader) (codexResult, error) {
 			}
 		case "response.completed":
 			if e.Response.Status != "" && e.Response.Status != "completed" {
-				return out, fmt.Errorf("Codex response status: %s", e.Response.Status)
+				return out, fmt.Errorf("%w: status %s", errCodexIncomplete, e.Response.Status)
 			}
 			out.InputTokens, out.OutputTokens = e.Response.Usage.InputTokens, e.Response.Usage.OutputTokens
 			complete = true
 		case "response.failed", "response.incomplete", "error":
-			return out, errors.New("Codex response did not complete")
+			return out, errCodexIncomplete
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -286,7 +292,7 @@ func writeCodexChatStream(w io.Writer, body io.Reader) error {
 			}
 		case "response.completed":
 			if e.Response.Status != "" && e.Response.Status != "completed" {
-				return errors.New("Codex response did not complete")
+				return errCodexIncomplete
 			}
 			finish := "stop"
 			if toolIndex > 0 {
@@ -300,7 +306,7 @@ func writeCodexChatStream(w io.Writer, body io.Reader) error {
 			}
 			completed = true
 		case "response.failed", "response.incomplete", "error":
-			return errors.New("Codex response did not complete")
+			return errCodexIncomplete
 		}
 	}
 	if err := scanner.Err(); err != nil {

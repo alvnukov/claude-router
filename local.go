@@ -140,7 +140,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			res.resp.Body.Close()
 			res.cancel()
 			if err != nil {
-				res.err, res.retryable = err, true
+				res.err, res.retryable = err, !idleMidAnswer(err)
 				// A read cut short by the client (Esc) is not the model's fault.
 				res.clientGone = r.Context().Err() != nil
 			}
@@ -150,7 +150,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		}
 
 		if tr != nil {
-			tr.Attempts = append(tr.Attempts, attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
+			tr.Attempts = append(tr.Attempts, attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb,
+				Outcome: outcome(r, res, res.err), MaxGap: res.watch.MaxGap()})
 		}
 		if res.err != nil {
 			hl.release(cand.Key)
@@ -160,6 +161,11 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			}
 			hl.record(cand.Key, false, 0, res.err.Error())
 			if !res.retryable || i == len(cands)-1 {
+				// A member that went quiet mid-think loses the session, so the
+				// client's retry goes to the next one.
+				if idleMidAnswer(res.err) && i+1 < len(cands) {
+					hl.moveSession(scope, cand.Key, cands[i+1])
+				}
 				break
 			}
 			log.Printf("local model %s failed (%v), trying %s", cand.Key, res.err, cands[i+1].Key)
@@ -172,17 +178,21 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		}
 		var werr error
 		if oreq.Stream {
-			werr = streamResponse(w, responseBody, req.Model)
+			werr = streamResponse(w, responseBody, req.Model, cand.Key)
 		} else {
 			werr = blockingResponse(w, responseBody, req.Model)
 		}
 		res.resp.Body.Close()
 		res.cancel()
 		hl.release(cand.Key)
-		if werr != nil {
-			if tr != nil {
-				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
+		if tr != nil {
+			a := &tr.Attempts[len(tr.Attempts)-1]
+			a.Outcome, a.MaxGap = outcome(r, res, werr), res.watch.MaxGap()
+			if werr != nil {
+				a.Err = werr.Error()
 			}
+		}
+		if werr != nil {
 			// The client went away mid-answer: no failure, and the session stays.
 			if r.Context().Err() != nil {
 				return
@@ -213,6 +223,22 @@ type attemptResult struct {
 	detail     string
 	retryable  bool
 	clientGone bool
+	watch      *bodyWatch // nil when no body arrived
+}
+
+// outcome names how an attempt ended, for the history.
+func outcome(r *http.Request, res attemptResult, err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case r.Context().Err() != nil:
+		return "client_closed"
+	case errors.Is(err, errUpstreamIdle):
+		return "upstream_idle"
+	case res.status >= 400 || errors.Is(err, errCodexIncomplete):
+		return "upstream_error"
+	}
+	return "upstream_closed"
 }
 
 func (a attemptResult) errMsg() string {
@@ -314,8 +340,10 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		}
 		return res
 	}
-	original := resp.Body
-	body := original
+	// The watch sits on the raw body: Codex reasoning summaries are bytes
+	// from a live model even though no chat event comes of them.
+	original := watchBody(resp.Body, cfg.startTimeout, cfg.idleTimeout, func(error) { cancel() })
+	var body io.ReadCloser = original
 	if stream && cand.Provider.Type == "codex" {
 		body = codexChatStream(original)
 	}
@@ -335,15 +363,18 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		original.Close()
 		cancel()
 		if r.Context().Err() != nil {
-			return attemptResult{err: err, clientGone: true}
+			return attemptResult{err: err, clientGone: true, watch: original}
 		}
 		if slow.Load() {
 			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
 		}
-		return attemptResult{err: err, ttfb: time.Since(t0), retryable: true}
+		// Silence before the start is retried; silence after the model began
+		// is not: another member would make the client wait out a second
+		// idle bound.
+		return attemptResult{err: err, ttfb: time.Since(t0), retryable: !idleMidAnswer(err), watch: original}
 	}
 	resp.Body = &responseReader{Reader: ready, close: func() error { body.Close(); return original.Close() }}
-	return attemptResult{resp: resp, cancel: cancel, ttfb: time.Since(t0)}
+	return attemptResult{resp: resp, cancel: cancel, ttfb: time.Since(t0), watch: original}
 }
 
 func shortDetail(b []byte) string {
@@ -470,6 +501,23 @@ func (s sseWriter) event(name string, payload any) {
 	s.f.Flush()
 }
 
+// failed ends a stream that broke after message_start with an error event
+// of the type Claude Code retries. A client that went away gets nothing.
+func (s sseWriter) failed(member string, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	reason := err.Error()
+	var idle *idleError
+	if errors.As(err, &idle) {
+		reason = idle.Error()
+	}
+	s.event("error", map[string]any{
+		"type":  "error",
+		"error": map[string]any{"type": "overloaded_error", "message": member + ": " + reason},
+	})
+}
+
 type openaiChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -488,7 +536,7 @@ type openaiChunk struct {
 // streamResponse rewrites an OpenAI delta stream as Anthropic SSE. Anthropic
 // keeps at most one content block open at a time, so switching from text to a
 // tool call - or between tool calls - closes the previous block first.
-func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
+func streamResponse(w http.ResponseWriter, body io.Reader, model, member string) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming unsupported")
@@ -631,10 +679,12 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	readErr := scanner.Err()
 	if readErr != nil {
 		log.Printf("stream read: %v", readErr)
+		s.failed(member, readErr)
 		return fmt.Errorf("stream read: %w", readErr)
 	}
 
 	if !completed {
+		s.failed(member, io.ErrUnexpectedEOF)
 		return io.ErrUnexpectedEOF
 	}
 

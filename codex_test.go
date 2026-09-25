@@ -105,7 +105,7 @@ func TestCodexRequestAndResponse(t *testing.T) {
 	sw := httptest.NewRecorder()
 	pipe := codexChatStream(strings.NewReader(stream))
 	defer pipe.Close()
-	if err := streamResponse(sw, pipe, "gpt-test"); err != nil {
+	if err := streamResponse(sw, pipe, "gpt-test", "codex/gpt-test"); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(sw.Body.String(), "event: message_stop") || !strings.Contains(sw.Body.String(), `"partial_json":"{\"cmd\":\"ls\"}"`) {
@@ -119,7 +119,7 @@ func TestCodexRequestAndResponse(t *testing.T) {
 		`data: {"type":"response.completed","response":{"status":"completed"}}`,
 	}, "\n\n")
 	toolOut := httptest.NewRecorder()
-	if err := streamResponse(toolOut, codexChatStream(strings.NewReader(toolStream)), "gpt-test"); err != nil {
+	if err := streamResponse(toolOut, codexChatStream(strings.NewReader(toolStream)), "gpt-test", "codex/gpt-test"); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(toolOut.Body.String(), `"type":"input_json_delta"`) != 2 || !strings.Contains(toolOut.Body.String(), `"name":"shell"`) {
