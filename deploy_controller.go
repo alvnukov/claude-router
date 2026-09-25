@@ -114,8 +114,25 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 		newSlot = "green"
 	}
 	current, err := d.ops.state(ctx, old)
-	if err != nil || current.Mode != modeActive {
-		return fmt.Errorf("old slot is not active: %w", err)
+	if err != nil {
+		return fmt.Errorf("slot %s, which Caddy routes to, does not answer: %w", old, err)
+	}
+	// A deploy interrupted before the switch left the old slot quiesced. The
+	// candidate goes first, since it may have been activated; then the old
+	// slot is the only writer again.
+	if current.Mode == modeQuiesced {
+		if err = d.retire(ctx, newSlot); err != nil {
+			return err
+		}
+		if err = d.ops.admin(ctx, old, "activate"); err != nil {
+			return err
+		}
+		if current, err = d.ops.state(ctx, old); err != nil {
+			return err
+		}
+	}
+	if current.Mode != modeActive {
+		return fmt.Errorf("slot %s, which Caddy routes to, is %s, not active", old, current.Mode)
 	}
 	// Whatever an interrupted deploy left on the other slot goes first: a
 	// draining old slot finishes its requests, a stale candidate is unloaded.

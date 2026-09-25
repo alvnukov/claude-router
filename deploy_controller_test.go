@@ -359,6 +359,38 @@ func TestDeployRejectsReservedPortsInTests(t *testing.T) {
 	}
 }
 
+// A deploy interrupted between quiesce and the switch leaves Caddy on a
+// quiesced old slot; the next run puts it back to work and deploys again.
+func TestDeployResumesAfterInterruptionBeforeTheSwitch(t *testing.T) {
+	for _, green := range []deploySlotState{{Mode: modeStandby, PID: 40}, {Mode: modeActive, PID: 40}, {Mode: modeStandby}} {
+		t.Run(fmt.Sprintf("green %s pid %d", green.Mode, green.PID), func(t *testing.T) {
+			f := newDeployFixture(t)
+			f.slots["blue"].Mode = modeQuiesced
+			f.slots["green"] = &green
+			if err := f.controller.deploy(t.Context(), "new", false); err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Join(f.calls, ",")
+			stop, activate, start := strings.Index(got, "stop:green"), strings.Index(got, "activate:blue"), strings.Index(got, "start:green")
+			if stop < 0 || activate < stop || start < activate {
+				t.Fatalf("old slot reactivated while the candidate could still write: %s", got)
+			}
+			if f.active != "green" || f.slots["blue"].PID != 0 {
+				t.Fatalf("deploy did not finish: active=%s blue=%+v", f.active, *f.slots["blue"])
+			}
+		})
+	}
+}
+
+func TestDeployNamesTheModeOfAnOldSlotItCannotUse(t *testing.T) {
+	f := newDeployFixture(t)
+	f.slots["blue"].Mode = modeDraining
+	err := f.controller.deploy(t.Context(), "new", false)
+	if err == nil || strings.Contains(err.Error(), "%!") || !strings.Contains(err.Error(), "draining") {
+		t.Fatalf("unclear refusal: %v", err)
+	}
+}
+
 // History is compacted only once no other slot can append to it.
 func TestDeployCompactsHistoryOnceTheOldSlotIsGone(t *testing.T) {
 	f := newDeployFixture(t)
