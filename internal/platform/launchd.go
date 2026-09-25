@@ -2,11 +2,90 @@ package platform
 
 import (
 	"bytes"
+	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
+	"strings"
+	"testing"
 	"time"
 )
+
+// Launchd is the Service of macOS: a user agent per label, defined by
+// Dir/<label>.plist and loaded into Domain.
+type Launchd struct {
+	Dir    string // usually ~/Library/LaunchAgents
+	Domain string // usually LaunchdDomain()
+	// Run runs launchctl; tests replace it so they never touch the user's
+	// launchd.
+	Run func(ctx context.Context, args ...string) error
+}
+
+// LaunchdDomain is the GUI domain of the current user, gui/<uid>.
+func LaunchdDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
+
+// RunLaunchctl runs launchctl with args and returns its output in the error.
+// It refuses in a test binary.
+func RunLaunchctl(ctx context.Context, args ...string) error {
+	if testing.Testing() {
+		return fmt.Errorf("launchctl %s: refused in a test binary", strings.Join(args, " "))
+	}
+	output, err := exec.CommandContext(ctx, "launchctl", args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("launchctl %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(output))
+	}
+	return nil
+}
+
+var _ Service = Launchd{}
+
+func (l Launchd) plist(label string) string { return filepath.Join(l.Dir, label+".plist") }
+
+func (l Launchd) target(label string) string { return l.Domain + "/" + label }
+
+func (l Launchd) Install(_ context.Context, spec ServiceSpec) error {
+	if err := os.MkdirAll(l.Dir, 0o755); err != nil {
+		return err
+	}
+	return WriteFileAtomic(l.plist(spec.Label), LaunchdPlist(spec), 0o644)
+}
+
+// Uninstall keeps the plist of an agent it could not unload, so the agent
+// stays described and a retry finds it.
+func (l Launchd) Uninstall(ctx context.Context, label string) error {
+	if err := l.Stop(ctx, label); err != nil && l.loaded(ctx, label) {
+		return err
+	}
+	if err := os.Remove(l.plist(label)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (l Launchd) Start(ctx context.Context, label string) error {
+	return l.Run(ctx, "bootstrap", l.Domain, l.plist(label))
+}
+
+func (l Launchd) Stop(ctx context.Context, label string) error {
+	return l.Run(ctx, "bootout", l.target(label))
+}
+
+func (l Launchd) Status(ctx context.Context, label string) (Status, error) {
+	_, err := os.Stat(l.plist(label))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return Status{}, err
+	}
+	return Status{Installed: err == nil, Loaded: l.loaded(ctx, label)}, nil
+}
+
+func (l Launchd) loaded(ctx context.Context, label string) bool {
+	return l.Run(ctx, "print", l.target(label)) == nil
+}
 
 // LaunchdPlist renders spec as a launchd agent definition. The agent starts
 // at load and runs as a background process; keys whose value is unset are

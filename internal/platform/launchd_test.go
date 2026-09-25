@@ -2,7 +2,12 @@ package platform
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -46,5 +51,142 @@ func TestLaunchdPlistWritesOptionalKeysOnlyWhenSet(t *testing.T) {
 		if strings.Contains(bare, absent) {
 			t.Fatalf("unset %s was written:\n%s", absent, bare)
 		}
+	}
+}
+
+// fakeLaunchctl records launchctl calls; fail names the verbs that exit
+// non-zero.
+type fakeLaunchctl struct {
+	calls [][]string
+	fail  map[string]bool
+}
+
+func (f *fakeLaunchctl) run(_ context.Context, args ...string) error {
+	f.calls = append(f.calls, args)
+	if f.fail[args[0]] {
+		return errors.New("launchctl " + args[0] + " failed")
+	}
+	return nil
+}
+
+func newFakeLaunchd(t *testing.T, fail ...string) (Launchd, *fakeLaunchctl) {
+	fake := &fakeLaunchctl{fail: map[string]bool{}}
+	for _, verb := range fail {
+		fake.fail[verb] = true
+	}
+	return Launchd{Dir: filepath.Join(t.TempDir(), "LaunchAgents"), Domain: "gui/501", Run: fake.run}, fake
+}
+
+func TestLaunchdInstallWritesPlistWithoutLoading(t *testing.T) {
+	l, fake := newFakeLaunchd(t)
+	spec := ServiceSpec{Label: "com.example.svc", Exe: "/bin/svc", Dir: "/d", LogPath: "/d/log", KeepAlive: true}
+	if err := l.Install(t.Context(), spec); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(l.Dir, "com.example.svc.plist")
+	got, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, LaunchdPlist(spec)) {
+		t.Fatalf("plist %s = %q, %v", path, got, err)
+	}
+	if runtime.GOOS != "windows" {
+		for p, want := range map[string]os.FileMode{path: 0o644, l.Dir: 0o755 | os.ModeDir} {
+			if info, err := os.Stat(p); err != nil || info.Mode() != want {
+				t.Fatalf("%s mode = %v, %v; want %v", p, info.Mode(), err, want)
+			}
+		}
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("Install ran launchctl: %v", fake.calls)
+	}
+}
+
+func TestLaunchdStartStopAndStatusCallLaunchctl(t *testing.T) {
+	l, fake := newFakeLaunchd(t)
+	ctx := t.Context()
+	if err := l.Start(ctx, "svc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Stop(ctx, "svc"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := l.Status(ctx, "svc")
+	if err != nil || st != (Status{Loaded: true}) {
+		t.Fatalf("Status = %+v, %v; want loaded, not installed", st, err)
+	}
+	want := [][]string{
+		{"bootstrap", "gui/501", filepath.Join(l.Dir, "svc.plist")},
+		{"bootout", "gui/501/svc"},
+		{"print", "gui/501/svc"},
+	}
+	if !reflect.DeepEqual(fake.calls, want) {
+		t.Fatalf("launchctl calls = %v; want %v", fake.calls, want)
+	}
+}
+
+func TestLaunchdStatusReportsInstalledButNotLoaded(t *testing.T) {
+	l, _ := newFakeLaunchd(t, "print")
+	if err := l.Install(t.Context(), ServiceSpec{Label: "svc", Exe: "/bin/svc"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := l.Status(t.Context(), "svc")
+	if err != nil || st != (Status{Installed: true}) {
+		t.Fatalf("Status = %+v, %v; want installed, not loaded", st, err)
+	}
+}
+
+func TestLaunchdUninstall(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fail      []string
+		wantCalls []string
+		wantErr   bool
+	}{
+		{"loaded", nil, []string{"bootout"}, false},
+		{"not loaded", []string{"bootout", "print"}, []string{"bootout", "print"}, false},
+		{"stuck loaded", []string{"bootout"}, []string{"bootout", "print"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, fake := newFakeLaunchd(t, tc.fail...)
+			if err := l.Install(t.Context(), ServiceSpec{Label: "svc", Exe: "/bin/svc"}); err != nil {
+				t.Fatal(err)
+			}
+			err := l.Uninstall(t.Context(), "svc")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Uninstall error = %v; want error %t", err, tc.wantErr)
+			}
+			var verbs []string
+			for _, call := range fake.calls {
+				verbs = append(verbs, call[0])
+			}
+			if !reflect.DeepEqual(verbs, tc.wantCalls) {
+				t.Fatalf("launchctl verbs = %v; want %v", verbs, tc.wantCalls)
+			}
+			// A plist whose agent could not be unloaded stays, so a retry
+			// finds it; otherwise it is gone.
+			_, statErr := os.Stat(filepath.Join(l.Dir, "svc.plist"))
+			if kept := statErr == nil; kept != tc.wantErr {
+				t.Fatalf("plist kept = %t after %s", kept, tc.name)
+			}
+		})
+	}
+}
+
+func TestLaunchdUninstallWithoutPlist(t *testing.T) {
+	l, _ := newFakeLaunchd(t, "bootout", "print")
+	if err := l.Uninstall(t.Context(), "svc"); err != nil {
+		t.Fatalf("Uninstall of an absent agent = %v", err)
+	}
+}
+
+func TestRunLaunchctlRefusesUnderTest(t *testing.T) {
+	bin := t.TempDir()
+	ran := filepath.Join(bin, "ran")
+	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte("#!/bin/sh\n/usr/bin/touch "+ran+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	err := RunLaunchctl(t.Context(), "bootout", "gui/0/com.claude-local-router.blue")
+	if _, statErr := os.Stat(ran); err == nil || statErr == nil {
+		t.Fatalf("launchctl ran under test: err=%v", err)
 	}
 }
