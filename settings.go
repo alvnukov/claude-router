@@ -71,6 +71,39 @@ func (s *configStore) reloadFailures() []reloadFailure {
 	return out
 }
 
+func (s *configStore) reloadFailing(file string) bool {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	_, ok := s.reloadErrs[file]
+	return ok
+}
+
+// wroteProviders records the router's own write of the providers file and its
+// profiles, so the watcher skips it. While a hand edit stands rejected the
+// watcher reads them back once instead: the write replaced the rejected file,
+// and the banner goes unless a file the write did not touch is still bad.
+func (s *configStore) wroteProviders() {
+	s.provMtime = mtime(s.provPath)
+	s.wroteProfiles()
+}
+
+// wroteProfiles is wroteProviders for a write that leaves the providers file
+// alone, such as a profile switch or delete.
+func (s *configStore) wroteProfiles() {
+	s.profileMtime = profilesMtime(s.provPath)
+	if s.reloadFailing(s.provPath) {
+		s.provMtime = time.Time{}
+	}
+}
+
+// wroteEnv is wroteProviders for the env file.
+func (s *configStore) wroteEnv() {
+	s.envMtime = mtime(s.envPath)
+	if s.reloadFailing(s.envPath) {
+		s.envMtime = time.Time{}
+	}
+}
+
 // envFilePath is ROUTER_ENV_FILE or the env file beside the binary.
 func envFilePath() string {
 	if p := os.Getenv("ROUTER_ENV_FILE"); p != "" {
@@ -263,7 +296,7 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 		if err := writeEnv(s.envPath, updates); err != nil {
 			return fmt.Errorf("запись %s: %w", s.envPath, err)
 		}
-		s.envMtime = mtime(s.envPath)
+		s.wroteEnv()
 	}
 	s.c = next
 	return nil
@@ -309,8 +342,7 @@ func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile
 		if err := writeProviders(s.provPath, l); err != nil {
 			return fmt.Errorf("запись %s: %w", s.provPath, err)
 		}
-		s.provMtime = mtime(s.provPath)
-		s.profileMtime = profilesMtime(s.provPath)
+		s.wroteProviders()
 	}
 	s.c = next
 	return nil

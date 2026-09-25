@@ -321,3 +321,61 @@ func TestCodexProviderPaneImportNamesProvider(t *testing.T) {
 		t.Fatal("import did not reach work's file")
 	}
 }
+
+// A save from the UI writes the router's snapshot over a rejected hand edit.
+// The banner describes a file no longer on disk, so it goes; a bad file the
+// save did not replace keeps it.
+func TestReloadErrorClearedByUISave(t *testing.T) {
+	t.Setenv("ROUTER_ENV_FILE", filepath.Join(t.TempDir(), "router.env"))
+	cs, _, path := profileFixture(t)
+	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	good, _ := os.ReadFile(path)
+	writeRaw(t, path, withBadProvider(t, good))
+	future := time.Now().Add(2 * time.Second)
+	os.Chtimes(path, future, future)
+	cs.pollOnce()
+	if len(u.settingsView().ReloadErrors) != 1 {
+		t.Fatal("bad providers file not reported")
+	}
+	if err := cs.applyLocal(cs.get().local, true); err != nil {
+		t.Fatal(err)
+	}
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 0 {
+		t.Fatalf("banner outlived the save: %+v", left)
+	}
+
+	writeRaw(t, cs.envPath, "ROUTER_LOCAL_BALANCE=many\n")
+	os.Chtimes(cs.envPath, future, future)
+	cs.pollOnce()
+	if len(u.settingsView().ReloadErrors) != 1 {
+		t.Fatal("bad env file not reported")
+	}
+	if err := cs.apply(inputFromConfig(cs.get()), true); err != nil {
+		t.Fatal(err)
+	}
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 0 {
+		t.Fatalf("env banner outlived the save: %+v", left)
+	}
+
+	stray := filepath.Join(path+".profiles", "stray.json")
+	if err := cs.ensureProfiles(); err != nil {
+		t.Fatal(err)
+	}
+	writeRaw(t, stray, "{")
+	later := future.Add(2 * time.Second)
+	os.Chtimes(stray, later, later)
+	os.Chtimes(path+".profiles", later, later)
+	cs.pollOnce()
+	if len(u.settingsView().ReloadErrors) != 1 {
+		t.Fatal("bad profile file not reported")
+	}
+	if err := cs.applyLocal(cs.get().local, true); err != nil {
+		t.Fatal(err)
+	}
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 1 {
+		t.Fatalf("save hid a bad file it did not replace: %+v", left)
+	}
+}

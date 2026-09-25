@@ -147,8 +147,7 @@ func (s *configStore) updatePoolSettings(name string, merge func(old poolSetting
 	if err := writeProviders(s.provPath, l); err != nil {
 		return err
 	}
-	s.provMtime = mtime(s.provPath)
-	s.profileMtime = profilesMtime(s.provPath)
+	s.wroteProviders()
 	s.c.local = l
 	return nil
 }
