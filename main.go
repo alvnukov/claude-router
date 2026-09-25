@@ -77,9 +77,10 @@ func loadConfigChecked() (config, error) {
 	if err != nil {
 		return config{}, err
 	}
-	if assigned {
+	if assigned && !routerStartsStandby() {
 		// One-time migration: persist the new auth_id values before the other
-		// startup migrations read or rewrite the file.
+		// startup migrations read or rewrite the file. A standby slot writes
+		// them when it is activated.
 		if err := saveConfigurationMigration(providersPath(), local, ".before-codex-ids"); err != nil {
 			return config{}, fmt.Errorf("codex id migration: %w", err)
 		}

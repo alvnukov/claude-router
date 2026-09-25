@@ -104,3 +104,48 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 		t.Fatalf("migrated routes not saved and served: %v", err)
 	}
 }
+
+// A Codex connection without auth_id gets one at start, but a standby slot
+// only writes it once activation makes it the only writer.
+func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "providers.json")
+	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + codexBaseURL + `"}]}`
+	writeRaw(t, path, raw)
+	t.Setenv("ROUTER_PROVIDERS_FILE", path)
+	t.Setenv("ROUTER_STANDBY", "1")
+	c, err := loadConfigChecked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != raw {
+		t.Fatal("standby start rewrote providers.json")
+	}
+	if _, err := os.Stat(path + ".before-codex-ids"); !os.IsNotExist(err) {
+		t.Fatal("standby start made a backup")
+	}
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(statePath, []byte(`{"stats":{},"sessions":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	standby := newConfigStore(c, path)
+	r := &routerServer{cs: standby, health: newHealth(""), life: newLifecycle(true)}
+	w := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	r.runtimeAdmin(statePath).ServeHTTP(w, request)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("standby activation: %d %s", w.Code, w.Body.String())
+	}
+	saved, err := readProviders(path)
+	if err != nil {
+		t.Fatalf("activation left providers.json without auth_id: %v", err)
+	}
+	onDisk, _ := saved.provider("work")
+	served, _ := standby.get().local.provider("work")
+	if !authIDOK(onDisk.AuthID) || served.AuthID != onDisk.AuthID {
+		t.Fatalf("auth_id on disk %q, served %q", onDisk.AuthID, served.AuthID)
+	}
+	if backup, _ := os.ReadFile(path + ".before-codex-ids"); string(backup) != raw {
+		t.Fatalf("backup missing or not the original: %q", backup)
+	}
+}

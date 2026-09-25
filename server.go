@@ -74,10 +74,13 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	admin := newRuntimeAdmin(r.life, r.health, state)
 	admin.activate = func() error {
 		if r.life.mode() == modeStandby {
+			// The old slot is quiesced, so this one is the only writer now.
+			if err := saveCodexIDs(r.cs.provPath); err != nil {
+				return fmt.Errorf("codex id migration: %w", err)
+			}
 			if err := r.cs.reloadProfiles(r.health); err != nil {
 				return err
 			}
-			// The old slot is quiesced, so this one is the only writer now.
 			if err := r.cs.migrate(); err != nil {
 				return fmt.Errorf("config migration: %w", err)
 			}
@@ -93,6 +96,19 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	}
 	admin.compact = r.st.compactAfterDrain
 	return admin
+}
+
+// saveCodexIDs writes the auth_id values the start of an active router would
+// have written; a standby slot assigned them only in memory.
+func saveCodexIDs(path string) error {
+	if path == "" {
+		return nil
+	}
+	local, assigned, err := loadLocalSetupChecked(path)
+	if err != nil || !assigned {
+		return err
+	}
+	return saveConfigurationMigration(path, local, ".before-codex-ids")
 }
 
 func (r *routerServer) serve(api, ui net.Listener) error {
