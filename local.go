@@ -252,7 +252,7 @@ func (a attemptResult) errMsg() string {
 // cfg.firstByte. On success the caller owns resp.Body and must call cancel.
 func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, stream bool) attemptResult {
 	model := cand.Key
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(markStream(r.Context(), stream))
 	endpoint := cand.Provider.BaseURL + "/chat/completions"
 	if cand.Provider.Type == "codex" {
 		endpoint = codexBaseURL + "/responses"
@@ -341,8 +341,13 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		return res
 	}
 	// The watch sits on the raw body: Codex reasoning summaries are bytes
-	// from a live model even though no chat event comes of them.
-	original := watchBody(resp.Body, cfg.startTimeout, cfg.idleTimeout, func(error) { cancel() })
+	// from a live model even though no chat event comes of them. A whole
+	// answer may keep quiet until it is done, so it only has its gaps measured.
+	start, idle := cfg.startTimeout, cfg.idleTimeout
+	if !stream {
+		start, idle = 0, 0
+	}
+	original := watchBody(resp.Body, start, idle, func(error) { cancel() })
 	var body io.ReadCloser = original
 	if stream && cand.Provider.Type == "codex" {
 		body = codexChatStream(original)

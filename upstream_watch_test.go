@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -406,5 +407,232 @@ func TestProxyUpgradeIsNotWatched(t *testing.T) {
 	_, _ = io.WriteString(conn, "ping\n")
 	if line, err := br.ReadString('\n'); line != "ping\n" {
 		t.Fatalf("echo %q, %v; want ping", line, err)
+	}
+}
+
+// A client that did not ask for a stream waits for the whole answer, and its
+// headers or any byte may come only when the answer is done. None of the
+// bounds on a silent upstream may cut it: before them it worked however long
+// it took. The whole answer here keeps silent past the header bound, and past
+// the start and then the idle bound; each time a streamed request, cut at the
+// same bound, is the clock that shows the silence outlasted it.
+func TestNonStreamNotBoundedByStart(t *testing.T) {
+	t.Run("headers", func(t *testing.T) {
+		arrived, release := make(chan struct{}, 1), make(chan struct{})
+		free := sync.OnceFunc(func() { close(release) })
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body) // net/http notices a gone client only after the body
+			if r.URL.Path == "/stream" {
+				<-r.Context().Done()
+				return
+			}
+			arrived <- struct{}{}
+			select {
+			case <-release:
+				_, _ = io.WriteString(w, `{}`)
+			case <-r.Context().Done():
+			}
+		}))
+		defer upstream.Close()
+		defer free()
+		tr := upstreamTransport()
+		tr.ResponseHeaderTimeout = 50 * time.Millisecond
+		rt := byStream(tr)
+
+		type result struct {
+			resp *http.Response
+			err  error
+		}
+		whole := make(chan result, 1)
+		go func() {
+			req, _ := http.NewRequest("POST", upstream.URL+"/whole", strings.NewReader(`{}`))
+			resp, err := rt.RoundTrip(req)
+			whole <- result{resp, err}
+		}()
+		<-arrived
+		req, _ := http.NewRequestWithContext(markStream(context.Background(), true), "POST", upstream.URL+"/stream", strings.NewReader(`{}`))
+		resp, err := rt.RoundTrip(req)
+		if err == nil {
+			resp.Body.Close()
+			t.Fatal("streamed request got headers that were never sent")
+		}
+		if !strings.Contains(err.Error(), "timeout awaiting response headers") {
+			t.Fatalf("streamed request failed, but not at the header bound: %v", err)
+		}
+		free()
+		got := <-whole
+		if got.err != nil {
+			t.Fatalf("whole answer slower than the header bound: %v", got.err)
+		}
+		body, err := readAllWithin(t, got.resp.Body)
+		got.resp.Body.Close()
+		if got.resp.StatusCode != http.StatusOK || err != nil || string(body) != `{}` {
+			t.Fatalf("whole answer: status %d, %q, %v", got.resp.StatusCode, body, err)
+		}
+	})
+
+	t.Run("anthropic", func(t *testing.T) {
+		captureLog(t)
+		const head, tail = `{"type":`, `"message"}`
+		first, rest := make(chan struct{}), make(chan struct{})
+		freeFirst, freeRest := sync.OnceFunc(func() { close(first) }), sync.OnceFunc(func() { close(rest) })
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			stream := strings.Contains(string(body), `"stream":true`)
+			if stream {
+				w.Header().Set("Content-Type", "text/event-stream")
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+			}
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			if stream {
+				<-r.Context().Done()
+				return
+			}
+			select {
+			case <-first:
+			case <-r.Context().Done():
+				return
+			}
+			_, _ = io.WriteString(w, head)
+			w.(http.Flusher).Flush()
+			select {
+			case <-rest:
+				_, _ = io.WriteString(w, tail)
+			case <-r.Context().Done():
+			}
+		}))
+		defer upstream.Close()
+		defer freeRest()
+		defer freeFirst()
+		marks := recordStreamMarks(t)
+		const bound = 50 * time.Millisecond
+		_, handler := limitsRouterStore(t, upstream.URL, "", newStore(10, ""), func(c *config) {
+			c.startTimeout, c.idleTimeout = bound, bound
+		})
+		router := httptest.NewServer(handler)
+		defer router.Close()
+		client := &http.Client{Transport: &http.Transport{}}
+		post := func(stream bool) *http.Response {
+			t.Helper()
+			body := fmt.Sprintf(`{"model":"claude-sonnet-5","stream":%t,"messages":[{"role":"user","content":"hi"}]}`, stream)
+			resp, err := client.Post(router.URL+"/v1/messages", "application/json", strings.NewReader(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return resp
+		}
+
+		clock := func() {
+			t.Helper()
+			began := time.Now()
+			resp := post(true)
+			defer resp.Body.Close()
+			if _, err := readAllWithin(t, resp.Body); err == nil || time.Since(began) < bound {
+				t.Fatalf("streamed answer not cut at the bound: %v after %s", err, time.Since(began))
+			}
+		}
+
+		whole := post(false)
+		defer whole.Body.Close()
+		clock()
+		freeFirst()
+		got, err := readAllWithin(t, io.LimitReader(whole.Body, int64(len(head))))
+		if string(got) != head || err != nil {
+			t.Fatalf("whole answer cut before its first byte: %q, %v", got, err)
+		}
+		clock()
+		freeRest()
+		body, err := readAllWithin(t, whole.Body)
+		if whole.StatusCode != http.StatusOK || err != nil || string(body) != tail {
+			t.Fatalf("whole answer cut after its first byte: status %d, %q, %v", whole.StatusCode, body, err)
+		}
+		if got := marks(); !slices.Equal(got, []bool{false, true, true}) {
+			t.Fatalf("requests through upstreamHTTP marked as streamed: %v, want [false true true]", got)
+		}
+	})
+
+	t.Run("codex", func(t *testing.T) {
+		seedTwoConnections(t)
+		cfg, hl := twoCodexPool(), newHealth("")
+		cfg.startTimeout, cfg.idleTimeout = 50*time.Millisecond, 50*time.Millisecond
+		split := strings.Index(codexStreamOK, "\n\n") + 2
+		head, tail := codexStreamOK[:split], codexStreamOK[split:]
+		arrived, spoke := make(chan struct{}), make(chan struct{})
+		first, rest := make(chan struct{}), make(chan struct{})
+		freeFirst, freeRest := sync.OnceFunc(func() { close(first) }), sync.OnceFunc(func() { close(rest) })
+		defer freeRest()
+		defer freeFirst()
+		var n atomic.Int32
+		scriptedCodex(t, map[string]func(*io.PipeWriter){
+			"acct-a": func(w *io.PipeWriter) {
+				if n.Add(1) != 1 { // only the first is the whole answer; the clocks keep silent
+					return
+				}
+				close(arrived)
+				<-first
+				_, _ = io.WriteString(w, head) // returns once the router has read it
+				close(spoke)
+				<-rest
+				_, _ = io.WriteString(w, tail)
+				w.Close()
+			},
+			"acct-b": func(*io.PipeWriter) {},
+		})
+		marks := recordStreamMarks(t)
+		clock := func(session string) {
+			t.Helper()
+			if _, tr := runLocalRequest(t, context.Background(), cfg, hl, session, true); len(tr.Attempts) == 0 || tr.Attempts[0].Outcome != "upstream_idle" {
+				t.Fatalf("streamed request not cut at the bound: %+v", tr.Attempts)
+			}
+		}
+
+		type run struct {
+			w  *httptest.ResponseRecorder
+			tr *localTrace
+		}
+		whole := make(chan run, 1)
+		go func() {
+			w, tr := runLocalRequest(t, context.Background(), cfg, hl, "s1", false)
+			whole <- run{w, tr}
+		}()
+		<-arrived
+		clock("s2")
+		freeFirst()
+		<-spoke
+		clock("s3")
+		freeRest()
+		got := <-whole
+		if got.w.Code != http.StatusOK || len(got.tr.Attempts) != 1 {
+			t.Fatalf("whole answer: status %d, attempts %+v\n%s", got.w.Code, got.tr.Attempts, got.w.Body.String())
+		}
+		if a := got.tr.Attempts[0]; a.Outcome != "ok" || a.MaxGap <= cfg.startTimeout {
+			t.Fatalf("whole answer attempt: %+v; want ok with a gap past the %s bound", a, cfg.startTimeout)
+		}
+		if got := marks(); len(got) < 2 || got[0] || slices.Contains(got[1:], false) {
+			t.Fatalf("requests through upstreamHTTP marked as streamed: %v, want false then true", got)
+		}
+	})
+}
+
+// readAllWithin reads r to its end, failing the test if that takes 5s.
+func readAllWithin(t *testing.T, r io.Reader) ([]byte, error) {
+	t.Helper()
+	type read struct {
+		b   []byte
+		err error
+	}
+	done := make(chan read, 1)
+	go func() {
+		b, err := io.ReadAll(r)
+		done <- read{b, err}
+	}()
+	select {
+	case got := <-done:
+		return got.b, got.err
+	case <-time.After(5 * time.Second):
+		t.Fatal("body still open after 5s")
+		return nil, nil
 	}
 }

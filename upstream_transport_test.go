@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"os"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,8 +23,11 @@ func (followDefault) RoundTrip(r *http.Request) (*http.Response, error) {
 	return http.DefaultTransport.RoundTrip(r)
 }
 
+// shippedUpstreamHTTP is upstreamHTTP as the router starts with it.
+var shippedUpstreamHTTP http.RoundTripper
+
 func TestMain(m *testing.M) {
-	upstreamHTTP = followDefault{}
+	shippedUpstreamHTTP, upstreamHTTP = upstreamHTTP, followDefault{}
 	os.Exit(m.Run())
 }
 
@@ -32,21 +38,56 @@ func useUpstreamHTTP(t *testing.T, rt http.RoundTripper) {
 	upstreamHTTP = rt
 }
 
+// recordStreamMarks returns, in order, whether each request through
+// upstreamHTTP went as streamed.
+func recordStreamMarks(t *testing.T) func() []bool {
+	t.Helper()
+	var mu sync.Mutex
+	var marks []bool
+	next := upstreamHTTP
+	useUpstreamHTTP(t, usageTransport(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		marks = append(marks, streamed(r.Context()))
+		mu.Unlock()
+		return next.RoundTrip(r)
+	}))
+	return func() []bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(marks)
+	}
+}
+
+// The router ships with both transports: a streamed request waits 30s for
+// headers, any other as long as it takes; the rest is the same.
 func TestUpstreamTransportSettings(t *testing.T) {
-	tr := upstreamTransport()
-	if tr.Proxy == nil || tr.DialContext == nil || !tr.ForceAttemptHTTP2 {
-		t.Fatalf("proxy, dialer or HTTP/2 missing: %+v", tr)
+	shipped, ok := shippedUpstreamHTTP.(streamOrWhole)
+	if !ok {
+		t.Fatalf("upstreamHTTP is %T, want byStream(upstreamTransport())", shippedUpstreamHTTP)
 	}
-	if tr.TLSHandshakeTimeout != 10*time.Second || tr.ResponseHeaderTimeout != 30*time.Second || tr.IdleConnTimeout != 90*time.Second {
-		t.Fatalf("timeouts: tls %s headers %s idle %s", tr.TLSHandshakeTimeout, tr.ResponseHeaderTimeout, tr.IdleConnTimeout)
-	}
-	if tr.HTTP2 == nil || tr.HTTP2.SendPingTimeout != 30*time.Second || tr.HTTP2.PingTimeout != 15*time.Second {
-		t.Fatalf("HTTP/2 pings: %+v", tr.HTTP2)
+	for _, leg := range []struct {
+		name    string
+		rt      http.RoundTripper
+		headers time.Duration
+	}{{"streamed", shipped.stream, 30 * time.Second}, {"whole", shipped.whole, 0}} {
+		tr, ok := leg.rt.(*http.Transport)
+		if !ok {
+			t.Fatalf("%s: %T, want *http.Transport", leg.name, leg.rt)
+		}
+		if tr.Proxy == nil || tr.DialContext == nil || !tr.ForceAttemptHTTP2 {
+			t.Fatalf("%s: proxy, dialer or HTTP/2 missing: %+v", leg.name, tr)
+		}
+		if tr.TLSHandshakeTimeout != 10*time.Second || tr.ResponseHeaderTimeout != leg.headers || tr.IdleConnTimeout != 90*time.Second {
+			t.Fatalf("%s: timeouts: tls %s headers %s idle %s", leg.name, tr.TLSHandshakeTimeout, tr.ResponseHeaderTimeout, tr.IdleConnTimeout)
+		}
+		if tr.HTTP2 == nil || tr.HTTP2.SendPingTimeout != 30*time.Second || tr.HTTP2.PingTimeout != 15*time.Second {
+			t.Fatalf("%s: HTTP/2 pings: %+v", leg.name, tr.HTTP2)
+		}
 	}
 }
 
 // What Anthropic receives through the proxy is byte for byte what it got
-// over the default transport.
+// over the default transport, streamed or not.
 func TestUpstreamTransportKeepsProxiedRequests(t *testing.T) {
 	captureLog(t)
 	dumps := make(chan string, 1)
@@ -61,8 +102,7 @@ func TestUpstreamTransportKeepsProxiedRequests(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	const body = `{"model":"claude-sonnet-5","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
-	send := func(rt http.RoundTripper) string {
+	send := func(rt http.RoundTripper, body string) string {
 		t.Helper()
 		out := &countingTransport{next: rt}
 		useUpstreamHTTP(t, out)
@@ -81,27 +121,30 @@ func TestUpstreamTransportKeepsProxiedRequests(t *testing.T) {
 		}
 		return <-dumps
 	}
-	before := send(http.DefaultTransport)
-	after := send(upstreamTransport())
+	for _, stream := range []bool{true, false} {
+		body := fmt.Sprintf(`{"model":"claude-sonnet-5","stream":%t,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`, stream)
+		before := send(http.DefaultTransport, body)
+		after := send(byStream(upstreamTransport()), body)
 
-	want := `POST /v1/messages?beta=true HTTP/1.1
+		want := fmt.Sprintf(`POST /v1/messages?beta=true HTTP/1.1
 Host: UPSTREAM
 Accept-Encoding: gzip
 Anthropic-Beta: interleaved-thinking-2025-05-14
 Anthropic-Version: 2023-06-01
 Authorization: Bearer client-token
-Content-Length: 101
+Content-Length: %d
 Content-Type: application/json
 User-Agent: claude-cli/2.1 (external, cli)
 X-Forwarded-For: 192.0.2.1
 X-Stainless-Retry-Count: 0
 
-` + body
-	if before != want {
-		t.Fatalf("default transport, upstream got:\n%s\nwant:\n%s", before, want)
-	}
-	if after != before {
-		t.Fatalf("upstream transport changed the request:\n%s\nwas:\n%s", after, before)
+`, len(body)) + body
+		if before != want {
+			t.Fatalf("stream %t, default transport, upstream got:\n%s\nwant:\n%s", stream, before, want)
+		}
+		if after != before {
+			t.Fatalf("stream %t, upstream transport changed the request:\n%s\nwas:\n%s", stream, after, before)
+		}
 	}
 }
 

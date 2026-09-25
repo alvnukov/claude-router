@@ -216,6 +216,11 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 				return err
 			}
 		}
+		// Only a streamed answer is watched: a whole one may keep quiet until
+		// it is done.
+		if resp.Request == nil || !streamed(resp.Request.Context()) {
+			return nil
+		}
 		// An upgraded connection may keep quiet, and the proxy needs its
 		// read-write body as is.
 		if resp.StatusCode == http.StatusSwitchingProtocols {
@@ -288,7 +293,7 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 			if cfg.uiListen != "" {
 				r.Header.Del("Accept-Encoding")
 			}
-			pass(rw, r, body)
+			pass(rw, r.WithContext(markStream(r.Context(), probe.Stream)), body)
 			return
 		}
 		handleLocal(rw, r, cfg.forModel(probe.Model, probe.OutputConfig.Effort), body, tr, hl, st)
