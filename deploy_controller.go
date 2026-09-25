@@ -13,9 +13,12 @@ import (
 )
 
 type deployConfig struct {
-	PublicAPI, PublicUI string
-	BlueAPI, BlueUI     string
-	GreenAPI, GreenUI   string
+	PublicAPI string `json:"public_api"`
+	PublicUI  string `json:"public_ui"`
+	BlueAPI   string `json:"blue_api"`
+	BlueUI    string `json:"blue_ui"`
+	GreenAPI  string `json:"green_api"`
+	GreenUI   string `json:"green_ui"`
 }
 
 // validate accepts distinct loopback host:port addresses. A test binary may

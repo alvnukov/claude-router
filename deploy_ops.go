@@ -26,13 +26,14 @@ type systemDeployOps struct {
 	home     string
 	agents   string
 	binary   string
+	caddy    string
 	client   *http.Client
 	// launchctl is replaced in tests so they never touch the user's launchd.
 	launchctl func(context.Context, ...string) error
 }
 
 func newSystemDeployOps(config deployConfig, adminURL, home, agents, binary string) *systemDeployOps {
-	return &systemDeployOps{config: config, adminURL: adminURL, home: home, agents: agents, binary: binary, client: &http.Client{Timeout: 5 * time.Second}, launchctl: runLaunchctl}
+	return &systemDeployOps{config: config, adminURL: adminURL, home: home, agents: agents, binary: binary, caddy: "caddy", client: &http.Client{Timeout: 5 * time.Second}, launchctl: runLaunchctl}
 }
 
 func runLaunchctl(ctx context.Context, args ...string) error {
@@ -124,7 +125,8 @@ func (o *systemDeployOps) current(ctx context.Context) (string, error) {
 
 // caddyfile names each public listener by port and binds it to its loopback
 // host: a host in the site address would bind every interface and add a Host
-// matcher, and the UI is opened as localhost as well as 127.0.0.1.
+// matcher, and the UI is opened as localhost as well as 127.0.0.1. This file
+// is the only saved config: Caddy's own autosave stays off.
 func (o *systemDeployOps) caddyfile(slot string) string {
 	site := func(public, upstream string) string {
 		host, port, _ := net.SplitHostPort(public)
@@ -137,7 +139,7 @@ func (o *systemDeployOps) caddyfile(slot string) string {
 }
 `, port, host, upstream)
 	}
-	return fmt.Sprintf("{\n    admin %s\n}\n", strings.TrimPrefix(o.adminURL, "http://")) +
+	return fmt.Sprintf("{\n    admin %s\n    persist_config off\n}\n", strings.TrimPrefix(o.adminURL, "http://")) +
 		site(o.config.PublicAPI, o.address(slot, false)) + site(o.config.PublicUI, o.address(slot, true))
 }
 
@@ -258,7 +260,7 @@ func (o *systemDeployOps) admin(ctx context.Context, slot, action string) error 
 }
 
 func (o *systemDeployOps) adapt(ctx context.Context, path string) ([]byte, error) {
-	output, err := exec.CommandContext(ctx, "caddy", "adapt", "--config", path, "--adapter", "caddyfile").Output()
+	output, err := exec.CommandContext(ctx, o.caddy, "adapt", "--config", path, "--adapter", "caddyfile").Output()
 	if err != nil {
 		return nil, fmt.Errorf("adapt Caddy config: %w", err)
 	}

@@ -288,6 +288,12 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "cutover" {
+		if err := runCutover(context.Background(), os.Args[2:], os.Stdin, os.Stdout, newCutoverOps); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	loadEnvFile()
 	codexAuth = newCodexAuthStore()
 	cfg := loadConfig()

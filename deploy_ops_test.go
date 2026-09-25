@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func TestCaddyConfigKeepsBothLoopbackPortsAndStreams(t *testing.T) {
 	text := ops.caddyfile("green")
 	_, apiPort, _ := net.SplitHostPort(cfg.PublicAPI)
 	_, uiPort, _ := net.SplitHostPort(cfg.PublicUI)
-	for _, expected := range []string{"http://:" + apiPort + " ", "http://:" + uiPort + " ", "bind 127.0.0.1", cfg.GreenAPI, cfg.GreenUI, "flush_interval -1", "stream_close_delay 16m"} {
+	for _, expected := range []string{"http://:" + apiPort + " ", "http://:" + uiPort + " ", "bind 127.0.0.1", cfg.GreenAPI, cfg.GreenUI, "flush_interval -1", "stream_close_delay 16m", "persist_config off"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("Caddy config missing %s", expected)
 		}
@@ -68,6 +69,19 @@ func TestRealAdminEndpointsFollowLoopbackOnly(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent || life.mode() != modeQuiesced {
 		t.Fatalf("admin quiesce: %d %s", resp.StatusCode, life.mode())
+	}
+}
+
+func TestDeployOpsRunTheCaddyNamedInDeployFile(t *testing.T) {
+	home := t.TempDir()
+	caddy := filepath.Join(home, "caddy")
+	if err := os.WriteFile(caddy, []byte("#!/bin/sh\necho '{\"from\":\"configured\"}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ops := newDeployOps(deployFile{CaddyAdmin: "127.0.0.1:1", Caddy: caddy, deployConfig: testDeployConfig(t)}, home, filepath.Join(home, "agents"), filepath.Join(home, "binary")).(*systemDeployOps)
+	out, err := ops.adapt(t.Context(), filepath.Join(home, "Caddyfile"))
+	if err != nil || !strings.Contains(string(out), "configured") {
+		t.Fatalf("adapt ran another caddy: %q %v", out, err)
 	}
 }
 
