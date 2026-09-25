@@ -240,3 +240,73 @@ func TestClientCancelKeepsBinding(t *testing.T) {
 		})
 	}
 }
+
+// codexPoolSetup routes local-model to a failover pool of the given Codex
+// members, over the two connections of seedTwoConnections.
+func codexPoolSetup(members ...string) localSetup {
+	l := localSetup{
+		Providers: []provider{
+			{Name: "codex", Type: "codex", BaseURL: codexBaseURL},
+			{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB},
+		},
+		Routes:     map[string]map[string]modelRoute{"local-model": {"default": {Mode: "pool", Pool: "gpt"}}},
+		ModelPools: map[string][]poolTarget{"gpt": nil},
+	}
+	seen := map[string]bool{}
+	for _, key := range members {
+		if !seen[key] {
+			seen[key] = true
+			p, m, _ := strings.Cut(key, "/")
+			l.Models = append(l.Models, localModel{Provider: p, Model: m})
+		}
+		l.ModelPools["gpt"] = append(l.ModelPools["gpt"], poolTarget{Model: key})
+	}
+	return l
+}
+
+func codexPoolOf(members ...string) config {
+	c := config{local: codexPoolSetup(members...), failover: true, balance: 3, firstByte: 5 * time.Second}
+	return c.forModel("local-model", "")
+}
+
+func TestCodexSignedOutMemberFailsOver(t *testing.T) {
+	served := func(t *testing.T, cfg config, hl *health, session, want string) {
+		t.Helper()
+		w, tr := runLocalSession(t, cfg, hl, session)
+		if w.Code != 200 || tr.Served != want || len(tr.Attempts) != 1 {
+			t.Fatalf("%s: %d served %q after %d attempts, want %s in one", session, w.Code, tr.Served, len(tr.Attempts), want)
+		}
+	}
+	t.Run("no credential", func(t *testing.T) {
+		useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+		seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
+		codexStatusByAccount(t, map[string]int{})
+		cfg, hl := codexPoolOf("work/gpt", "codex/gpt"), newHealth("")
+		served(t, cfg, hl, "s1", "codex/gpt")
+		served(t, cfg, hl, "s1", "codex/gpt")
+		// Signing in brings the connection back for new sessions only.
+		seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
+		served(t, cfg, hl, "n1", "work/gpt")
+		served(t, cfg, hl, "s1", "codex/gpt")
+	})
+	t.Run("token rejected", func(t *testing.T) {
+		seedTwoConnections(t)
+		codexStatusByAccount(t, map[string]int{"acct-b": 401})
+		cfg, hl := codexPoolOf("work/gpt", "codex/gpt"), newHealth("")
+		w, tr := runLocalSession(t, cfg, hl, "s1")
+		if w.Code != 200 || tr.Served != "codex/gpt" || len(tr.Attempts) != 2 {
+			t.Fatalf("rejected first member: %d served %q after %d attempts", w.Code, tr.Served, len(tr.Attempts))
+		}
+		served(t, cfg, hl, "s1", "codex/gpt")
+		served(t, cfg, hl, "s2", "codex/gpt")
+	})
+	t.Run("everyone signed out", func(t *testing.T) {
+		useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+		codexStatusByAccount(t, map[string]int{})
+		cfg, hl := codexPoolOf("work/gpt", "codex/gpt"), newHealth("")
+		w, _ := runLocalSession(t, cfg, hl, "s1")
+		if w.Code == 200 || !strings.Contains(w.Body.String(), "войдите") {
+			t.Fatalf("all signed out: %d %s", w.Code, w.Body.String())
+		}
+	})
+}

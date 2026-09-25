@@ -261,6 +261,21 @@ func (s *codexAuthStore) connected() bool {
 	return err == nil
 }
 
+// signedIn reports whether the store can authorize a request without a new
+// sign-in: a credential is loaded or on disk, and it was not rejected.
+func (s *codexAuthStore) signedIn() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.authProblem != "" {
+		return false
+	}
+	if s.loaded {
+		return true
+	}
+	_, err := readCodexCredential(s.path)
+	return err == nil
+}
+
 func (s *codexAuthStore) authorize(ctx context.Context, req *http.Request) error {
 	// Subscription tokens must never be sent to a configurable third-party URL.
 	if req.URL.Scheme != "https" || req.URL.Host != "chatgpt.com" || !strings.HasPrefix(req.URL.EscapedPath(), "/backend-api/codex/") || req.URL.User != nil {

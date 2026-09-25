@@ -32,6 +32,25 @@ func writeAnthropicError(w http.ResponseWriter, status int, kind, msg string) {
 	})
 }
 
+// withoutSignedOut drops Codex members that cannot authorize until someone
+// signs in again. If every member is signed out the list is kept, so the
+// client still gets the sign-in error.
+func withoutSignedOut(cands []candidate) []candidate {
+	var out []candidate
+	for _, c := range cands {
+		if c.Provider.Type == "codex" {
+			if s, err := codexStoreFor(c.Provider); err != nil || !s.signedIn() {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return cands
+	}
+	return out
+}
+
 // handleLocal serves one /v1/messages call from the OpenAI-compatible endpoint.
 // The caller's Anthropic credentials are deliberately not forwarded: the local
 // endpoint gets ROUTER_LOCAL_API_KEY and nothing else.
@@ -67,7 +86,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	// against its score.
 	pickCfg := cfg
 	pickCfg.failover = true
-	cands := hl.pick(pickCfg)
+	cands := withoutSignedOut(hl.pick(pickCfg))
 	scope := affinityKey(cfg, body, req)
 	cands = hl.bindCandidates(scope, cands)
 	if !cfg.failover && len(cands) > 1 {
@@ -225,7 +244,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		}
 		if err := store.authorize(ctx, up); err != nil {
 			cancel()
-			return attemptResult{err: err}
+			return attemptResult{err: err, retryable: true}
 		}
 	} else if cand.Provider.APIKey != "" {
 		up.Header.Set("Authorization", "Bearer "+cand.Provider.APIKey)
@@ -261,7 +280,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
 		}
 		if errors.Is(err, errCodexSignIn) {
-			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb}
+			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb, retryable: true}
 		}
 		return attemptResult{err: err, ttfb: ttfb, retryable: true}
 	}
@@ -285,6 +304,10 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		switch resp.StatusCode {
 		case 404, 408, 429:
 			res.retryable = true
+		case 401:
+			// A Codex 401 is a sign-in problem of that connection; an
+			// OpenAI-compatible 401 is a bad key in the config.
+			res.retryable = cand.Provider.Type == "codex"
 		default:
 			res.retryable = resp.StatusCode >= 500
 		}
