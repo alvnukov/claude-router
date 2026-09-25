@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,21 +58,28 @@ func seedTwoConnections(t *testing.T) {
 	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
 }
 
-// runLocalSession is runLocal with a Claude Code session id, so affinity binds.
-func runLocalSession(t *testing.T, cfg config, hl *health, session string) (*httptest.ResponseRecorder, *localTrace) {
+// runLocalRequest is runLocal with a Claude Code session id, so affinity
+// binds, and the client's context, so a test can go away mid-answer.
+func runLocalRequest(t *testing.T, ctx context.Context, cfg config, hl *health, session string, stream bool) (*httptest.ResponseRecorder, *localTrace) {
 	t.Helper()
 	uid, _ := json.Marshal(map[string]string{"session_id": session})
 	body, _ := json.Marshal(map[string]any{
 		"model":      "local-model",
 		"max_tokens": 10,
+		"stream":     stream,
 		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
 		"metadata":   map[string]string{"user_id": string(uid)},
 	})
-	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))).WithContext(ctx)
 	w := httptest.NewRecorder()
 	tr := &localTrace{}
 	handleLocal(w, r, cfg, body, tr, hl)
 	return w, tr
+}
+
+func runLocalSession(t *testing.T, cfg config, hl *health, session string) (*httptest.ResponseRecorder, *localTrace) {
+	t.Helper()
+	return runLocalRequest(t, context.Background(), cfg, hl, session, false)
 }
 
 func TestCodexFailoverNewSessionSkipsLimitedFirst(t *testing.T) {
@@ -160,5 +169,70 @@ func TestCodexAll429KeepsBehavior(t *testing.T) {
 	hl.mu.Unlock()
 	if last := tr.Attempts[len(tr.Attempts)-1].Model; pinned != last {
 		t.Fatalf("session pinned to %s, last tried %s", pinned, last)
+	}
+}
+
+// cancelAfterFirstEvent sends one delta, then acts as the client pressing Esc:
+// it cancels the client's context and fails the read once the cancel lands.
+type cancelAfterFirstEvent struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	sent   bool
+}
+
+func (b *cancelAfterFirstEvent) Read(p []byte) (int, error) {
+	if !b.sent {
+		b.sent = true
+		return copy(p, `data: {"type":"response.output_text.delta","delta":"ok"}`+"\n\n"), nil
+	}
+	b.cancel()
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (b *cancelAfterFirstEvent) Close() error { return nil }
+
+func TestClientCancelKeepsBinding(t *testing.T) {
+	for _, stream := range []bool{true, false} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			seedTwoConnections(t)
+			cfg, hl := twoCodexPool(), newHealth("")
+			calls := &sync.Map{}
+			var cancelNext context.CancelFunc
+			old := http.DefaultTransport
+			t.Cleanup(func() { http.DefaultTransport = old })
+			http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+				n, _ := calls.LoadOrStore(r.Header.Get("ChatGPT-Account-Id"), new(int))
+				*n.(*int)++
+				if cancelNext != nil {
+					resp := usageResponse(200, "")
+					resp.Body = &cancelAfterFirstEvent{ctx: r.Context(), cancel: cancelNext}
+					cancelNext = nil
+					return resp, nil
+				}
+				return usageResponse(200, codexStreamOK), nil
+			})
+			if _, tr := runLocalRequest(t, context.Background(), cfg, hl, "s1", stream); tr.Served != "codex/gpt" {
+				t.Fatalf("first request served by %q", tr.Served)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			cancelNext = cancel
+			runLocalRequest(t, ctx, cfg, hl, "s1", stream)
+
+			if st := hl.snapshot("codex/gpt"); st.Fail != 0 || st.Cooling() {
+				t.Fatalf("client cancel counted as a failure: %+v", st)
+			}
+			if n := hl.load("codex/gpt"); n != 0 {
+				t.Fatalf("in-flight count leaked: %d", n)
+			}
+			if _, ok := calls.Load("acct-b"); ok {
+				t.Fatal("cancelled request was retried on the other connection")
+			}
+			_, tr := runLocalSession(t, cfg, hl, "s1")
+			if tr.Served != "codex/gpt" || len(tr.Attempts) != 1 {
+				t.Fatalf("cancelled session moved: %s after %d attempts", tr.Served, len(tr.Attempts))
+			}
+		})
 	}
 }

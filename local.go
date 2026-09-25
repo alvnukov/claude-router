@@ -121,6 +121,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			res.cancel()
 			if err != nil {
 				res.err, res.retryable = err, true
+				// A read cut short by the client (Esc) is not the model's fault.
+				res.clientGone = r.Context().Err() != nil
 			}
 			responseBody = bytes.NewReader(codexAsChatResponse(result))
 		} else if res.err == nil {
@@ -158,12 +160,16 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		res.cancel()
 		hl.release(cand.Key)
 		if werr != nil {
+			if tr != nil {
+				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
+			}
+			// The client went away mid-answer: no failure, and the session stays.
+			if r.Context().Err() != nil {
+				return
+			}
 			hl.record(cand.Key, false, 0, werr.Error())
 			if cfg.failover && i+1 < len(cands) {
 				hl.moveSession(scope, cand.Key, cands[i+1])
-			}
-			if tr != nil {
-				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
 			}
 			return
 		}
