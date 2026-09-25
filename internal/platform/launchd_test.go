@@ -13,17 +13,28 @@ import (
 	"time"
 )
 
-// The installed legacy agent was written by the shell script; an update that
-// renders it from Go must leave it unchanged.
-func TestLaunchdPlistMatchesLegacyAgent(t *testing.T) {
+// The installed agents were written before this renderer: the legacy one by
+// the shell script, the slot and Caddy ones by the deploy command. An update
+// that renders them from Go must leave them unchanged.
+func TestLaunchdPlistMatchesInstalledAgents(t *testing.T) {
 	home := "/home/router/.claude/local-router"
-	spec := ServiceSpec{Label: "com.claude-local-router", Exe: home + "/localrouter", Dir: home, LogPath: home + "/router.log", KeepAlive: true, ThrottleInterval: 10 * time.Second}
-	want, err := os.ReadFile("testdata/launchd-com.claude-local-router.plist")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := LaunchdPlist(spec); !bytes.Equal(got, want) {
-		t.Fatalf("legacy plist differs:\n--- got\n%s\n--- want\n%s", got, want)
+	for _, tc := range []struct {
+		golden string
+		spec   ServiceSpec
+	}{
+		{"launchd-com.claude-local-router.plist", ServiceSpec{Label: "com.claude-local-router", Exe: home + "/localrouter", Dir: home, LogPath: home + "/router.log", KeepAlive: true, ThrottleInterval: 10 * time.Second}},
+		{"launchd-com.claude-local-router.green.plist", ServiceSpec{Label: "com.claude-local-router.green", Exe: home + "/localrouter.green", Dir: home, LogPath: home + "/router.green.log", KeepAlive: true, ExitTimeout: 960 * time.Second,
+			Env: map[string]string{"ROUTER_SLOT": "green", "ROUTER_ACTIVE_SLOT_FILE": home + "/active-slot", "ROUTER_LISTEN": "127.0.0.1:18792", "ROUTER_PUBLIC_LISTEN": "127.0.0.1:18787", "ROUTER_UI_LISTEN": "127.0.0.1:18794", "ROUTER_PROVIDERS_FILE": home + "/providers.json", "ROUTER_ANTHROPIC_LIMITS_FILE": home + "/limits.json", "ROUTER_ENV_FILE": home + "/env", "ROUTER_STATE_FILE": home + "/state.json", "ROUTER_UI_HISTORY_FILE": home + "/history.jsonl"}}},
+		{"launchd-com.claude-local-router.caddy.plist", ServiceSpec{Label: "com.claude-local-router.caddy", Exe: "/opt/homebrew/bin/caddy", Args: []string{"run", "--config", home + "/Caddyfile", "--adapter", "caddyfile"}, Dir: home, LogPath: home + "/caddy.log", KeepAlive: true, ExitTimeout: 30 * time.Second,
+			Env: map[string]string{"XDG_DATA_HOME": home + "/caddy/data", "XDG_CONFIG_HOME": home + "/caddy/config"}}},
+	} {
+		want, err := os.ReadFile(filepath.Join("testdata", tc.golden))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := LaunchdPlist(tc.spec); !bytes.Equal(got, want) {
+			t.Fatalf("%s differs:\n--- got\n%s\n--- want\n%s", tc.golden, got, want)
+		}
 	}
 }
 

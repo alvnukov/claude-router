@@ -422,3 +422,25 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 		t.Fatalf("deploy.json does not round-trip: %+v %v", saved, err)
 	}
 }
+
+// The slot and Caddy agents a cutover already installed must stay byte for
+// byte what the next deploy writes. The fixed paths and addresses match the
+// goldens that platform's renderer test keeps.
+func TestSlotAndCaddyPlistsMatchGolden(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
+	home := "/home/router/.claude/local-router"
+	cfg := deployConfig{PublicAPI: "127.0.0.1:18787", PublicUI: "127.0.0.1:18788", BlueAPI: "127.0.0.1:18791", BlueUI: "127.0.0.1:18793", GreenAPI: "127.0.0.1:18792", GreenUI: "127.0.0.1:18794"}
+	ops := newSystemCutoverOps(deployFile{CaddyAdmin: "127.0.0.1:12019", deployConfig: cfg}, home, "/home/router/Library/LaunchAgents", home+"/localrouter.candidate", "/opt/homebrew/bin/caddy")
+	for golden, got := range map[string][]byte{
+		"launchd-com.claude-local-router.green.plist": platform.LaunchdPlist(ops.slotSpec("green")),
+		"launchd-com.claude-local-router.caddy.plist": platform.LaunchdPlist(ops.caddySpec()),
+	} {
+		want, err := os.ReadFile(filepath.Join("internal", "platform", "testdata", golden))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s differs:\n--- got\n%s\n--- want\n%s", golden, got, want)
+		}
+	}
+}
