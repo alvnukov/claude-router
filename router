@@ -100,7 +100,8 @@ stop_manual() {
     rm -f "$PIDFILE"
   fi
   # Also catch an instance started by claude-local, which writes no pidfile.
-  pkill -f "$DIR/localrouter" 2>/dev/null || true
+  # Anchored: the slot binaries localrouter.blue and .green share the prefix.
+  pkill -f "$DIR/localrouter( |\$)" 2>/dev/null || true
 }
 
 slot_label() {
@@ -199,6 +200,7 @@ case "${1:-status}" in
   install)
     shift
     if [ "${1:-}" = "--cutover" ]; then shift; install_cutover "$@"
+    elif [ "$SLOT_MODE" = 1 ]; then echo "cutover already installed; use 'router deploy'" >&2; exit 1
     elif [ "$#" = 0 ]; then install_agent
     else echo "usage: router install [--cutover]" >&2; exit 2; fi ;;
   uninstall) if [ "$SLOT_MODE" = 1 ]; then echo "slot-based uninstall requires a maintenance window" >&2; exit 1; else uninstall_agent; fi ;;

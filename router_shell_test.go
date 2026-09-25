@@ -38,6 +38,7 @@ chmod +x "$1"`)
 	stub("launchctl", `printf 'launchctl %s\n' "$*" >> "$CALLS"; [ "$1" != print ]`)
 	stub("curl", `printf 'curl %s\n' "$*" >> "$CALLS"; exit 0`)
 	stub("caddy", `printf 'caddy %s\n' "$*" >> "$CALLS"`)
+	stub("pkill", `printf 'pkill %s\n' "$*" >> "$CALLS"; exit 1`)
 	ports := make([]string, 7)
 	for i := range ports {
 		listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -89,6 +90,29 @@ func TestRouterInstallCutoverPassesConfiguredAddressesAndCaddyPath(t *testing.T)
 	}
 	if strings.Contains(calls, "launchctl") || strings.Contains(calls, "curl") {
 		t.Fatalf("shell took a public port before cutover confirmation: %s", calls)
+	}
+}
+
+// After cutover the legacy agent would race Caddy for the public ports and
+// write shared state beside the active slot.
+func TestRouterRefusesLegacyInstallAfterCutover(t *testing.T) {
+	output, calls, err := routerScript(t, "install", true)
+	if err == nil || !strings.Contains(output, "router deploy") {
+		t.Fatalf("legacy install after cutover was not refused: %v %s", err, output)
+	}
+	if strings.Contains(calls, "go build") || strings.Contains(calls, "launchctl") || strings.Contains(calls, "pkill") {
+		t.Fatalf("refused install still acted: %s", calls)
+	}
+}
+
+// localrouter.blue, .green and .candidate share the legacy binary's prefix.
+func TestRouterStopsOnlyTheLegacyBinaryByName(t *testing.T) {
+	output, calls, err := routerScript(t, "install", false)
+	if err != nil {
+		t.Fatalf("install: %v %s %s", err, output, calls)
+	}
+	if !strings.Contains(calls, "/localrouter( |$)\n") {
+		t.Fatalf("pkill pattern also matches slot binaries: %s", calls)
 	}
 }
 
