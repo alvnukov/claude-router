@@ -3,6 +3,8 @@
 Routes Claude Code requests to Anthropic, OpenAI-compatible providers, or a
 Codex subscription. Configure it at http://127.0.0.1:8788/settings.
 
+Функциональный обзор (на русском): [docs/features.md](docs/features.md).
+
 ```sh
 ./router build
 ./claude-local
