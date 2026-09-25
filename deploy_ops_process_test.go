@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -19,8 +18,7 @@ func TestSystemStartAndStopUsesLaunchdSlotPlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	ops := newSystemDeployOps(cfg, "http://127.0.0.1:1", home, agents, binary)
-	var commands [][]string
-	ops.launchctl = func(_ context.Context, args ...string) error { commands = append(commands, args); return nil }
+	commands := recordLaunchctl(ops)
 	sum := sha256.Sum256([]byte("candidate"))
 	if err := ops.start(t.Context(), "green", hex.EncodeToString(sum[:])); err != nil {
 		t.Fatal(err)
@@ -40,14 +38,14 @@ func TestSystemStartAndStopUsesLaunchdSlotPlist(t *testing.T) {
 	if err := ops.start(t.Context(), "blue", "wrong"); err == nil {
 		t.Fatal("started binary with mismatched digest")
 	}
-	if len(commands) != 1 || len(commands[0]) == 0 || commands[0][0] != "bootstrap" {
-		t.Fatalf("unexpected start commands: %v", commands)
+	if len(*commands) != 1 || !strings.HasPrefix((*commands)[0], "bootstrap ") {
+		t.Fatalf("unexpected start commands: %v", *commands)
 	}
 	if err := ops.stop(t.Context(), "green"); err != nil {
 		t.Fatal(err)
 	}
-	if len(commands) != 2 || commands[1][0] != "bootout" {
-		t.Fatalf("unexpected stop commands: %v", commands)
+	if len(*commands) != 2 || !strings.HasPrefix((*commands)[1], "bootout ") {
+		t.Fatalf("unexpected stop commands: %v", *commands)
 	}
 }
 

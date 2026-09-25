@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"net"
@@ -14,9 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
-	"testing"
 	"time"
 
 	"localrouter/internal/platform"
@@ -31,23 +28,14 @@ type systemDeployOps struct {
 	caddy       string
 	labelPrefix string
 	client      *http.Client
-	// launchctl is replaced in tests so they never touch the user's launchd.
-	launchctl func(context.Context, ...string) error
+	// service holds the slot and Caddy agents; tests replace it so they
+	// never touch the user's launchd.
+	service platform.Service
 }
 
 func newSystemDeployOps(config deployConfig, adminURL, home, agents, binary string) *systemDeployOps {
-	return &systemDeployOps{config: config, adminURL: adminURL, home: home, agents: agents, binary: binary, caddy: "caddy", client: &http.Client{Timeout: 5 * time.Second}, launchctl: runLaunchctl}
-}
-
-func runLaunchctl(ctx context.Context, args ...string) error {
-	if testing.Testing() {
-		return fmt.Errorf("launchctl %s: refused in a test binary", strings.Join(args, " "))
-	}
-	output, err := exec.CommandContext(ctx, "launchctl", args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("launchctl %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(output))
-	}
-	return nil
+	service := platform.Launchd{Dir: agents, Domain: platform.LaunchdDomain(), Run: platform.RunLaunchctl}
+	return &systemDeployOps{config: config, adminURL: adminURL, home: home, agents: agents, binary: binary, caddy: "caddy", client: &http.Client{Timeout: 5 * time.Second}, service: service}
 }
 
 const defaultRouterLabel = "com.claude-local-router"
@@ -65,8 +53,6 @@ func effectiveLabel(prefix, suffix string) string {
 func (o *systemDeployOps) label(suffix string) string {
 	return effectiveLabel(o.labelPrefix, suffix)
 }
-
-func launchdDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
 
 func (o *systemDeployOps) address(slot string, ui bool) string {
 	if slot == "blue" {
@@ -160,71 +146,12 @@ func (o *systemDeployOps) caddyfile(slot string) string {
 		site(o.config.PublicAPI, o.address(slot, false)) + site(o.config.PublicUI, o.address(slot, true))
 }
 
-type launchdSlotPlist struct {
-	Label                string
-	ProgramArguments     []string
-	WorkingDirectory     string
-	RunAtLoad            bool
-	KeepAlive            bool
-	ExitTimeOut          int
-	EnvironmentVariables map[string]string
-	StandardOutPath      string
-	StandardErrorPath    string
-}
-
-func plistEscape(s string) string {
-	var b bytes.Buffer
-	_ = xml.EscapeText(&b, []byte(s)) // a bytes.Buffer does not fail
-	return b.String()
-}
-
-func (p launchdSlotPlist) xml() []byte {
-	var b bytes.Buffer
-	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-`)
-	str := func(key, value string) {
-		fmt.Fprintf(&b, "  <key>%s</key><string>%s</string>\n", key, plistEscape(value))
-	}
-	boolean := func(key string, value bool) {
-		fmt.Fprintf(&b, "  <key>%s</key><%t/>\n", key, value)
-	}
-	str("Label", p.Label)
-	b.WriteString("  <key>ProgramArguments</key>\n  <array>")
-	for _, arg := range p.ProgramArguments {
-		fmt.Fprintf(&b, "<string>%s</string>", plistEscape(arg))
-	}
-	b.WriteString("</array>\n")
-	str("WorkingDirectory", p.WorkingDirectory)
-	boolean("RunAtLoad", p.RunAtLoad)
-	boolean("KeepAlive", p.KeepAlive)
-	fmt.Fprintf(&b, "  <key>ExitTimeOut</key><integer>%d</integer>\n", p.ExitTimeOut)
-	b.WriteString("  <key>ProcessType</key><string>Background</string>\n")
-	b.WriteString("  <key>EnvironmentVariables</key>\n  <dict>\n")
-	keys := make([]string, 0, len(p.EnvironmentVariables))
-	for key := range p.EnvironmentVariables {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		fmt.Fprintf(&b, "    <key>%s</key><string>%s</string>\n", plistEscape(key), plistEscape(p.EnvironmentVariables[key]))
-	}
-	b.WriteString("  </dict>\n")
-	str("StandardOutPath", p.StandardOutPath)
-	str("StandardErrorPath", p.StandardErrorPath)
-	b.WriteString("</dict>\n</plist>\n")
-	return b.Bytes()
-}
-
-// slotPlist runs the slot's own copy of the binary. The slot decides at start
+// slotSpec runs the slot's own copy of the binary. The slot decides at start
 // whether it is active from the active-slot marker, so a KeepAlive restart of
 // the serving slot comes back active and a fresh candidate comes up standby.
-func (o *systemDeployOps) slotPlist(slot string) launchdSlotPlist {
-	log := filepath.Join(o.home, "router."+slot+".log")
-	return launchdSlotPlist{Label: o.label(slot), ProgramArguments: []string{filepath.Join(o.home, "localrouter."+slot)}, WorkingDirectory: o.home, RunAtLoad: true, KeepAlive: true, ExitTimeOut: 960,
-		EnvironmentVariables: map[string]string{"ROUTER_SLOT": slot, "ROUTER_ACTIVE_SLOT_FILE": o.markerPath(), "ROUTER_LISTEN": o.address(slot, false), "ROUTER_PUBLIC_LISTEN": o.config.PublicAPI, "ROUTER_UI_LISTEN": o.address(slot, true), "ROUTER_PROVIDERS_FILE": filepath.Join(o.home, "providers.json"), "ROUTER_ANTHROPIC_LIMITS_FILE": filepath.Join(o.home, "limits.json"), "ROUTER_ENV_FILE": filepath.Join(o.home, "env"), "ROUTER_STATE_FILE": filepath.Join(o.home, "state.json"), "ROUTER_UI_HISTORY_FILE": filepath.Join(o.home, "history.jsonl")}, StandardOutPath: log, StandardErrorPath: log}
+func (o *systemDeployOps) slotSpec(slot string) platform.ServiceSpec {
+	return platform.ServiceSpec{Label: o.label(slot), Exe: filepath.Join(o.home, "localrouter."+slot), Dir: o.home, LogPath: filepath.Join(o.home, "router."+slot+".log"), KeepAlive: true, ExitTimeout: 960 * time.Second,
+		Env: map[string]string{"ROUTER_SLOT": slot, "ROUTER_ACTIVE_SLOT_FILE": o.markerPath(), "ROUTER_LISTEN": o.address(slot, false), "ROUTER_PUBLIC_LISTEN": o.config.PublicAPI, "ROUTER_UI_LISTEN": o.address(slot, true), "ROUTER_PROVIDERS_FILE": filepath.Join(o.home, "providers.json"), "ROUTER_ANTHROPIC_LIMITS_FILE": filepath.Join(o.home, "limits.json"), "ROUTER_ENV_FILE": filepath.Join(o.home, "env"), "ROUTER_STATE_FILE": filepath.Join(o.home, "state.json"), "ROUTER_UI_HISTORY_FILE": filepath.Join(o.home, "history.jsonl")}}
 }
 
 func (o *systemDeployOps) markerPath() string { return filepath.Join(o.home, "active-slot") }
@@ -336,18 +263,14 @@ func (o *systemDeployOps) start(ctx context.Context, slot, digest string) error 
 	if err := platform.WriteFileAtomic(filepath.Join(o.home, "localrouter."+slot), data, 0o700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(o.agents, 0o755); err != nil {
+	if err := o.service.Install(ctx, o.slotSpec(slot)); err != nil {
 		return err
 	}
-	plist := filepath.Join(o.agents, o.label(slot)+".plist")
-	if err := platform.WriteFileAtomic(plist, o.slotPlist(slot).xml(), 0o644); err != nil {
-		return err
-	}
-	return o.launchctl(ctx, "bootstrap", launchdDomain(), plist)
+	return o.service.Start(ctx, o.label(slot))
 }
 
 // stop unloads a slot label. Callers drain the slot first, so launchd's
 // SIGTERM finds no request in flight; ExitTimeOut covers the rest.
 func (o *systemDeployOps) stop(ctx context.Context, slot string) error {
-	return o.launchctl(ctx, "bootout", launchdDomain()+"/"+o.label(slot))
+	return o.service.Stop(ctx, o.label(slot))
 }

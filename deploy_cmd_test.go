@@ -134,19 +134,6 @@ func TestDeployCommandRefusesConcurrentDeploy(t *testing.T) {
 	}
 }
 
-func TestLaunchctlNeverRunsUnderTest(t *testing.T) {
-	bin := t.TempDir()
-	ran := filepath.Join(bin, "ran")
-	if err := os.WriteFile(filepath.Join(bin, "launchctl"), []byte("#!/bin/sh\n/usr/bin/touch "+ran+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin)
-	err := runLaunchctl(t.Context(), "bootout", "gui/0/com.claude-local-router.blue")
-	if _, statErr := os.Stat(ran); err == nil || statErr == nil {
-		t.Fatalf("launchctl ran under test: err=%v", err)
-	}
-}
-
 func TestDeployCommandSaysWhenNothingChanged(t *testing.T) {
 	f := newDeployFixture(t)
 	home := t.TempDir()

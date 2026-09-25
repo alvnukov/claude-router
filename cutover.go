@@ -27,8 +27,8 @@ import (
 
 type cutoverOps interface {
 	deployOps
-	// prepare writes Caddy's config for slot and its launchd plist, loading
-	// neither.
+	// prepare writes and checks Caddy's config for slot without starting
+	// Caddy.
 	prepare(context.Context, string) error
 	// mark names the slot that may start active; any other name keeps both
 	// slots standby.
@@ -321,30 +321,24 @@ func newSystemCutoverOps(file deployFile, home, agents, binary, caddy string) *s
 	return &systemCutoverOps{ops}
 }
 
-// caddyPlist keeps Caddy's data and config under the router home, away from
+// caddySpec keeps Caddy's data and config under the router home, away from
 // any Caddy the user runs.
-func (o *systemCutoverOps) caddyPlist() launchdSlotPlist {
-	log := filepath.Join(o.home, "caddy.log")
-	return launchdSlotPlist{Label: o.label("caddy"), ProgramArguments: []string{o.caddy, "run", "--config", filepath.Join(o.home, "Caddyfile"), "--adapter", "caddyfile"}, WorkingDirectory: o.home, RunAtLoad: true, KeepAlive: true, ExitTimeOut: 30,
-		EnvironmentVariables: map[string]string{"XDG_DATA_HOME": filepath.Join(o.home, "caddy", "data"), "XDG_CONFIG_HOME": filepath.Join(o.home, "caddy", "config")}, StandardOutPath: log, StandardErrorPath: log}
-}
-
-func (o *systemCutoverOps) agentPlist(label string) string {
-	return filepath.Join(o.agents, label+".plist")
+func (o *systemCutoverOps) caddySpec() platform.ServiceSpec {
+	return platform.ServiceSpec{Label: o.label("caddy"), Exe: o.caddy, Args: []string{"run", "--config", filepath.Join(o.home, "Caddyfile"), "--adapter", "caddyfile"}, Dir: o.home, LogPath: filepath.Join(o.home, "caddy.log"), KeepAlive: true, ExitTimeout: 30 * time.Second,
+		Env: map[string]string{"XDG_DATA_HOME": filepath.Join(o.home, "caddy", "data"), "XDG_CONFIG_HOME": filepath.Join(o.home, "caddy", "config")}}
 }
 
 // prepare checks the Caddy config with the configured caddy while the legacy
-// router still serves. The plist waits in the router home: in LaunchAgents
-// it would take the public ports from the legacy router at the next login.
+// router still serves. Caddy's agent is installed only when Caddy starts:
+// installed earlier, it would take the public ports from the legacy router at
+// the next login.
 func (o *systemCutoverOps) prepare(ctx context.Context, slot string) error {
 	file := filepath.Join(o.home, "Caddyfile")
 	if err := platform.WriteFileAtomic(file, []byte(o.caddyfile(slot)), 0o600); err != nil {
 		return err
 	}
-	if _, err := o.adapt(ctx, file); err != nil {
-		return err
-	}
-	return platform.WriteFileAtomic(filepath.Join(o.home, o.label("caddy")+".plist"), o.caddyPlist().xml(), 0o644)
+	_, err := o.adapt(ctx, file)
+	return err
 }
 
 func (o *systemCutoverOps) mark(_ context.Context, slot string) error {
@@ -383,42 +377,31 @@ func (o *systemCutoverOps) legacyPending(ctx context.Context) (int, error) {
 }
 
 func (o *systemCutoverOps) stopLegacy(ctx context.Context) error {
-	return o.launchctl(ctx, "bootout", launchdDomain()+"/"+o.label(""))
+	return o.service.Stop(ctx, o.label(""))
 }
 
 func (o *systemCutoverOps) startLegacy(ctx context.Context) error {
-	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(o.label("")))
+	return o.service.Start(ctx, o.label(""))
 }
 
 func (o *systemCutoverOps) startCaddy(ctx context.Context) error {
-	data, err := os.ReadFile(filepath.Join(o.home, o.label("caddy")+".plist"))
-	if err != nil {
+	if err := o.service.Install(ctx, o.caddySpec()); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(o.agents, 0o755); err != nil {
-		return err
-	}
-	if err := platform.WriteFileAtomic(o.agentPlist(o.label("caddy")), data, 0o644); err != nil {
-		return err
-	}
-	return o.launchctl(ctx, "bootstrap", launchdDomain(), o.agentPlist(o.label("caddy")))
+	return o.service.Start(ctx, o.label("caddy"))
 }
 
 // stopCaddy unloads Caddy and takes its plist out of LaunchAgents, so the
 // legacy router keeps the ports after the next login too.
 func (o *systemCutoverOps) stopCaddy(ctx context.Context) error {
-	err := o.launchctl(ctx, "bootout", launchdDomain()+"/"+o.label("caddy"))
-	if remove := os.Remove(o.agentPlist(o.label("caddy"))); remove != nil && !errors.Is(remove, os.ErrNotExist) {
-		err = errors.Join(err, remove)
-	}
-	return err
+	return o.service.Uninstall(ctx, o.label("caddy"))
 }
 
 // commit moves the legacy plist into the router home, where `launchctl
 // bootstrap` can still load it by hand, and writes deploy.json last: its
 // presence is what marks the cutover done.
 func (o *systemCutoverOps) commit(_ context.Context, file deployFile) error {
-	if err := os.Rename(o.agentPlist(o.label("")), filepath.Join(o.home, "legacy.plist")); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Rename(filepath.Join(o.agents, o.label("")+".plist"), filepath.Join(o.home, "legacy.plist")); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	data, err := json.MarshalIndent(file, "", "  ")

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/platform"
 )
 
 // cutoverFixture puts a fake legacy router on the public ports and lets a
@@ -333,16 +335,12 @@ func TestSystemCutoverUsesConfiguredScratchLabels(t *testing.T) {
 	home := t.TempDir()
 	prefix := "com.claude-local-router.scratch-123"
 	ops := newSystemCutoverOps(deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: prefix, deployConfig: cfg}, home, filepath.Join(home, "agents"), filepath.Join(home, "binary"), "/opt/caddy")
-	if got := ops.caddyPlist().Label; got != prefix+".caddy" {
+	if got := ops.caddySpec().Label; got != prefix+".caddy" {
 		t.Fatalf("Caddy label %q", got)
 	}
-	var calls []string
-	ops.launchctl = func(_ context.Context, args ...string) error {
-		calls = append(calls, strings.Join(args, " "))
-		return nil
-	}
-	if err := ops.stopLegacy(t.Context()); err != nil || len(calls) != 1 || !strings.Contains(calls[0], prefix) {
-		t.Fatalf("stopLegacy touched another label: %v %v", err, calls)
+	calls := recordLaunchctl(ops.systemDeployOps)
+	if err := ops.stopLegacy(t.Context()); err != nil || len(*calls) != 1 || !strings.Contains((*calls)[0], prefix) {
+		t.Fatalf("stopLegacy touched another label: %v %v", err, *calls)
 	}
 }
 
@@ -366,11 +364,7 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 	}
 	file := deployFile{CaddyAdmin: "127.0.0.1:1", Caddy: caddy, deployConfig: cfg}
 	ops := newSystemCutoverOps(file, home, agents, filepath.Join(home, "binary"), caddy)
-	var commands []string
-	ops.launchctl = func(_ context.Context, args ...string) error {
-		commands = append(commands, strings.Join(args, " "))
-		return nil
-	}
+	commands := recordLaunchctl(ops.systemDeployOps)
 	if err := ops.prepare(t.Context(), "blue"); err != nil {
 		t.Fatal(err)
 	}
@@ -404,11 +398,11 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 	if _, err := os.Stat(installed); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stopped Caddy would come back at next login: %v", err)
 	}
-	domain := launchdDomain()
+	domain := platform.LaunchdDomain()
 	want := []string{"bootout " + domain + "/com.claude-local-router", "bootstrap " + domain + " " + legacy,
 		"bootstrap " + domain + " " + installed, "bootout " + domain + "/com.claude-local-router.caddy"}
-	if strings.Join(commands, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("launchctl calls:\n%s\nwant:\n%s", strings.Join(commands, "\n"), strings.Join(want, "\n"))
+	if strings.Join(*commands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("launchctl calls:\n%s\nwant:\n%s", strings.Join(*commands, "\n"), strings.Join(want, "\n"))
 	}
 	if err := ops.commit(t.Context(), file); err != nil {
 		t.Fatal(err)

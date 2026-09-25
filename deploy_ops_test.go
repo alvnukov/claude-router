@@ -9,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"localrouter/internal/platform"
 )
 
 func TestCaddyAdminReadsBothUpstreamsAndRejectsDisagreement(t *testing.T) {
@@ -50,17 +53,17 @@ func TestLaunchdSlotConfigSetsExitTimeoutAndSharedPaths(t *testing.T) {
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	ops := newSystemDeployOps(cfg, "http://127.0.0.1:1", home, filepath.Join(home, "agents"), filepath.Join(home, "binary"))
-	p := ops.slotPlist("green")
-	if p.ExitTimeOut < 960 || p.EnvironmentVariables["ROUTER_LISTEN"] != cfg.GreenAPI || p.EnvironmentVariables["ROUTER_UI_LISTEN"] != cfg.GreenUI || p.EnvironmentVariables["ROUTER_ACTIVE_SLOT_FILE"] != filepath.Join(home, "active-slot") || p.EnvironmentVariables["ROUTER_STANDBY"] != "" {
+	p := ops.slotSpec("green")
+	if p.ExitTimeout < 960*time.Second || p.Env["ROUTER_LISTEN"] != cfg.GreenAPI || p.Env["ROUTER_UI_LISTEN"] != cfg.GreenUI || p.Env["ROUTER_ACTIVE_SLOT_FILE"] != filepath.Join(home, "active-slot") || p.Env["ROUTER_STANDBY"] != "" {
 		t.Fatalf("unsafe launchd slot: %+v", p)
 	}
-	if p.EnvironmentVariables["ROUTER_PROVIDERS_FILE"] != filepath.Join(home, "providers.json") {
+	if p.Env["ROUTER_PROVIDERS_FILE"] != filepath.Join(home, "providers.json") {
 		t.Fatal("slot lost shared config")
 	}
-	if p.EnvironmentVariables["ROUTER_ANTHROPIC_LIMITS_FILE"] != filepath.Join(home, "limits.json") {
+	if p.Env["ROUTER_ANTHROPIC_LIMITS_FILE"] != filepath.Join(home, "limits.json") {
 		t.Fatal("slot lost shared Anthropic limits")
 	}
-	if p.EnvironmentVariables["ROUTER_PUBLIC_LISTEN"] != cfg.PublicAPI {
+	if p.Env["ROUTER_PUBLIC_LISTEN"] != cfg.PublicAPI {
 		t.Fatal("slot does not know the public address clients use")
 	}
 }
@@ -84,17 +87,24 @@ func TestDeployOpsUseConfiguredScratchLabels(t *testing.T) {
 	home := t.TempDir()
 	file := deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: "com.claude-local-router.scratch-123", deployConfig: cfg}
 	ops := newDeployOps(file, home, filepath.Join(home, "agents"), filepath.Join(home, "binary")).(*systemDeployOps)
-	if got := ops.slotPlist("blue").Label; got != file.LabelPrefix+".blue" {
+	if got := ops.slotSpec("blue").Label; got != file.LabelPrefix+".blue" {
 		t.Fatalf("blue label %q", got)
 	}
-	var calls []string
-	ops.launchctl = func(_ context.Context, args ...string) error {
-		calls = append(calls, strings.Join(args, " "))
+	calls := recordLaunchctl(ops)
+	if err := ops.stop(t.Context(), "green"); err != nil || len(*calls) != 1 || !strings.Contains((*calls)[0], file.LabelPrefix+".green") {
+		t.Fatalf("stop touched another label: %v %v", err, *calls)
+	}
+}
+
+// recordLaunchctl points ops at a launchd in its agents directory whose
+// launchctl only records the calls.
+func recordLaunchctl(ops *systemDeployOps) *[]string {
+	calls := new([]string)
+	ops.service = platform.Launchd{Dir: ops.agents, Domain: platform.LaunchdDomain(), Run: func(_ context.Context, args ...string) error {
+		*calls = append(*calls, strings.Join(args, " "))
 		return nil
-	}
-	if err := ops.stop(t.Context(), "green"); err != nil || len(calls) != 1 || !strings.Contains(calls[0], file.LabelPrefix+".green") {
-		t.Fatalf("stop touched another label: %v %v", err, calls)
-	}
+	}}
+	return calls
 }
 
 func TestDeployOpsRunTheCaddyNamedInDeployFile(t *testing.T) {

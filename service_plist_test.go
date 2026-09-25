@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"localrouter/internal/platform"
+)
 
 // goldenCutoverOps renders with fixed paths and addresses, so the golden
 // files do not depend on the machine or on free ports.
@@ -15,6 +19,6 @@ func goldenCutoverOps() *systemCutoverOps {
 func TestSlotAndCaddyPlistsMatchGolden(t *testing.T) {
 	skipDarwinOnlyDeploy(t)
 	ops := goldenCutoverOps()
-	assertGolden(t, "testdata/launchd-com.claude-local-router.green.plist", ops.slotPlist("green").xml())
-	assertGolden(t, "testdata/launchd-com.claude-local-router.caddy.plist", ops.caddyPlist().xml())
+	assertGolden(t, "testdata/launchd-com.claude-local-router.green.plist", platform.LaunchdPlist(ops.slotSpec("green")))
+	assertGolden(t, "testdata/launchd-com.claude-local-router.caddy.plist", platform.LaunchdPlist(ops.caddySpec()))
 }
