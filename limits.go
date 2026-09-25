@@ -200,7 +200,7 @@ func (l *anthropicLimits) observe(h http.Header, at time.Time) {
 	} else {
 		next.WithoutAt = at
 	}
-	merged := l.state.merge(next, at)
+	merged := l.state.merge(next, time.Now())
 	if merged != l.state {
 		l.state = merged
 		l.schedule()

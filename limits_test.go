@@ -326,6 +326,27 @@ func TestAnthropicLimitsIgnoresOlderObservation(t *testing.T) {
 	}
 }
 
+// A slow streaming response may reach the hook minutes after a newer one.
+// Its timestamp must not make the newer observation look like an invalid
+// future timestamp just because it was used as the clock for the comparison.
+func TestAnthropicLimitsSlowOlderResponseDoesNotRegress(t *testing.T) {
+	captureLog(t)
+	now := time.Now()
+	l := newAnthropicLimits("", anthropicLimitsMaxAge)
+	l.observe(limitsHeader("Anthropic-Ratelimit-New", "1"), now)
+	l.observe(limitsHeader("Anthropic-Ratelimit-Old", "1"), now.Add(-5*time.Minute))
+	if v := l.view(now); !v.ObservedAt.Equal(now) || strings.Join(v.Headers, ",") != "anthropic-ratelimit-new" {
+		t.Fatalf("slow response replaced newer headers: %+v", v)
+	}
+
+	l2 := newAnthropicLimits("", anthropicLimitsMaxAge)
+	l2.observe(http.Header{}, now)
+	l2.observe(http.Header{}, now.Add(-5*time.Minute))
+	if v := l2.view(now); !v.ObservedAt.Equal(now) {
+		t.Fatalf("slow response moved no-headers time back: %+v", v)
+	}
+}
+
 // A timestamp from the future (clock moved back, hand-edited file) must
 // neither look current nor block real observations.
 func TestAnthropicLimitsFutureTimestamp(t *testing.T) {
