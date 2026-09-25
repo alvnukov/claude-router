@@ -153,3 +153,31 @@ func TestListCountsAndSessions(t *testing.T) {
 		t.Fatalf("route filter: %s", firstLine(body))
 	}
 }
+
+func TestSettingsPoolShowsMemberStats(t *testing.T) {
+	u, h := testUI(t)
+	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	get(t, h, "POST", "/settings/pools", url.Values{"op": {"create"}, "name": {"work"}})
+	get(t, h, "POST", "/settings/pools", url.Values{"op": {"add"}, "name": {"work"}, "key": {"p/m1"}})
+	u.hl.recordProbe("p/m1", true, time.Second, "")
+	u.hl.record("p/m1", true, 1500*time.Millisecond, "")
+	u.hl.record("p/m1", false, 0, "boom")
+	u.hl.noteFailover("p/m1", "p/m2")
+	s := u.hl.snapshot("p/m1")
+
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	i := strings.Index(body, `data-pool="work"`)
+	if i < 0 {
+		t.Fatal("pool card not rendered")
+	}
+	card := body[i:]
+	for _, want := range []string{
+		"1 ответов", "1 сбоев", "подряд 1",
+		fmt.Sprintf("рейтинг %d%%", s.ScorePct()),
+		"пауза ещё", "ушла дальше 1", "проверки 1/0", "boom",
+	} {
+		if !strings.Contains(card, want) {
+			t.Errorf("pool member stats missing %q", want)
+		}
+	}
+}

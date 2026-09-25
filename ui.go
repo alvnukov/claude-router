@@ -486,6 +486,7 @@ type poolKeyRow struct {
 	Options     []string
 	Unconfirmed bool
 	First, Last bool
+	Stat        modelStat
 }
 
 type codexLoginView struct {
@@ -543,7 +544,7 @@ func (u *uiServer) settingsView() settingsView {
 		present := map[string]bool{}
 		for i, target := range targets {
 			options := modelEffortOptions(c.local, target.Model, info)
-			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1})
+			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1, Stat: u.hl.snapshot(target.Model)})
 			present[target.Model] = true
 		}
 		for _, m := range c.local.Models {

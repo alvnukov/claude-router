@@ -43,6 +43,8 @@ type modelStat struct {
 
 func (m modelStat) Cooling() bool           { return time.Now().Before(m.CoolUntil) }
 func (m modelStat) CoolLeft() time.Duration { return time.Until(m.CoolUntil).Truncate(time.Second) }
+func (m modelStat) ScorePct() int           { return int(m.Score*100 + 0.5) }
+func (m modelStat) TTFB() time.Duration     { return time.Duration(m.TTFBMs * float64(time.Millisecond)) }
 
 type health struct {
 	sessions map[string]sessionBinding
