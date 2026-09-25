@@ -26,6 +26,12 @@ func TestConfigWatchPausesInQuiesceAndResumesOnRollback(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ROUTER_LOCAL_BALANCE=5\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The watch sees an edit by its mtime, and Windows' clock can give both
+	// writes the same one.
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(path, future, future); err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(80 * time.Millisecond)
 	if got := cs.get().balance; got != 1 {
 		t.Fatalf("quiesced config watch changed balance to %d", got)
