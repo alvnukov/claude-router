@@ -166,18 +166,31 @@ func TestSettingsPoolShowsMemberStats(t *testing.T) {
 	s := u.hl.snapshot("p/m1")
 
 	body := get(t, h, "GET", "/settings", nil).Body.String()
-	i := strings.Index(body, `data-pool="work"`)
-	if i < 0 {
-		t.Fatal("pool card not rendered")
-	}
-	card := body[i:]
+	// The model catalog further down shows answers and failures too, so
+	// look only at this member's row inside the pool card.
+	card := between(t, body, `data-pool="work"`, "pool-behavior")
+	member := between(t, card, "<code>p/m1</code>", "</div>")
 	for _, want := range []string{
 		"1 ответов", "1 сбоев", "подряд 1",
 		fmt.Sprintf("рейтинг %d%%", s.ScorePct()),
 		"пауза ещё", "ушла дальше 1", "проверки 1/0", "boom",
 	} {
-		if !strings.Contains(card, want) {
+		if !strings.Contains(member, want) {
 			t.Errorf("pool member stats missing %q", want)
 		}
 	}
+}
+
+// between returns s from the first start up to the first end after it.
+func between(t *testing.T, s, start, end string) string {
+	t.Helper()
+	i := strings.Index(s, start)
+	if i < 0 {
+		t.Fatalf("%q not rendered", start)
+	}
+	j := strings.Index(s[i:], end)
+	if j < 0 {
+		t.Fatalf("no %q after %q", end, start)
+	}
+	return s[i : i+j]
 }
