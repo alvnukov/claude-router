@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -118,6 +119,9 @@ func (s *store) compactAfterDrain() error {
 	}
 	return withFileLock(context.Background(), s.path+".lock", func() error {
 		f, err := os.Open(s.path)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // nothing was served yet
+		}
 		if err != nil {
 			return err
 		}

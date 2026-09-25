@@ -40,6 +40,18 @@ func TestHistoryCompactionReadsBothWritersAfterDrain(t *testing.T) {
 	}
 }
 
+// A router that never served a request has no history file; cutover and
+// deploy compact it all the same.
+func TestHistoryCompactionWithoutAFileHasNothingToDo(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	if err := newStore(3, path).compactAfterDrain(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("compaction created the history: %v", err)
+	}
+}
+
 // A router compacts as it goes only while nothing else appends to the file,
 // and then from the file, so lines another router appended survive.
 func TestHistoryCompactsInlineOnlyWhenAlone(t *testing.T) {
