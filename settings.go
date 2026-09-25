@@ -92,6 +92,22 @@ func (s *configStore) reloadProviders() error {
 	return s.applyLocal(setup, false)
 }
 
+// migrate runs the config migrations a standby slot skipped at start.
+func (s *configStore) migrate() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.provPath == "" {
+		return nil
+	}
+	c, err := migrateConfig(s.c, s.provPath)
+	if err != nil {
+		return err
+	}
+	s.c = c
+	s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
+	return nil
+}
+
 func (s *configStore) get() config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

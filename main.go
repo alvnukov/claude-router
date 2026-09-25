@@ -87,22 +87,28 @@ func loadConfigChecked() (config, error) {
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
 	if routerStartsStandby() {
-		return c, nil // standby reads config but never runs a migration that writes it
+		return c, nil // standby migrates when it is activated, as the only writer
 	}
+	return migrateConfig(c, providersPath())
+}
+
+// migrateConfig brings providers.json at path to the current schema, keeping
+// a backup of each step.
+func migrateConfig(c config, path string) (config, error) {
 	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
-		if err := savePoolMigration(providersPath(), migrated); err != nil {
+		if err := savePoolMigration(path, migrated); err != nil {
 			return config{}, fmt.Errorf("pool migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migrateFamilyRoutes(c.local); changed {
-		if err := saveConfigurationMigration(providersPath(), migrated, ".before-families"); err != nil {
+		if err := saveConfigurationMigration(path, migrated, ".before-families"); err != nil {
 			return config{}, fmt.Errorf("family migration: %w", err)
 		}
 		c.local = migrated
 	}
 	if migrated, changed := migratePoolSettings(c); changed {
-		if err := saveConfigurationMigration(providersPath(), migrated, ".before-pool-settings"); err != nil {
+		if err := saveConfigurationMigration(path, migrated, ".before-pool-settings"); err != nil {
 			return config{}, fmt.Errorf("pool settings migration: %w", err)
 		}
 		c.local = migrated

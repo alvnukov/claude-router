@@ -76,6 +76,13 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 			if err := r.cs.reloadProfiles(r.health); err != nil {
 				return err
 			}
+			// The old slot is quiesced, so this one is the only writer now.
+			if err := r.cs.migrate(); err != nil {
+				return fmt.Errorf("config migration: %w", err)
+			}
+			if err := r.cs.ensureProfiles(); err != nil {
+				return fmt.Errorf("profile migration: %w", err)
+			}
 		}
 		if r.background != nil {
 			r.startBackground()

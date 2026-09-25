@@ -69,3 +69,38 @@ func TestStandbyActivationReloadsSeparateProfilePointerWithoutWritingConfig(t *t
 		t.Fatalf("slot changed migration backup: %v", err)
 	}
 }
+
+// A standby slot skips the config migrations at start; they run once it is
+// the only writer.
+func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "providers.json")
+	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"p","base_url":"http://h/v1"}],"models":[{"provider":"p","model":"a"}],"pools":{"opus":["p/a"]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := readProviders(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(statePath, []byte(`{"stats":{},"sessions":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	standby := newConfigStore(config{local: legacy}, path)
+	r := &routerServer{cs: standby, health: newHealth(""), life: newLifecycle(true)}
+	w := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
+	request.RemoteAddr = "127.0.0.1:1234"
+	r.runtimeAdmin(statePath).ServeHTTP(w, request)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("standby activation: %d %s", w.Code, w.Body.String())
+	}
+	for _, suffix := range []string{".before-pools", ".active-profile"} {
+		if _, err := os.Stat(path + suffix); err != nil {
+			t.Fatalf("activation skipped a migration: %v", err)
+		}
+	}
+	saved, err := readProviders(path)
+	if err != nil || saved.Pools != nil || saved.Routes == nil || standby.get().local.Routes == nil {
+		t.Fatalf("migrated routes not saved and served: %v", err)
+	}
+}
