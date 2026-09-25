@@ -31,7 +31,8 @@
 <button class="btn" name="op" value="effort" type="submit">Сохранить</button>
 {{if not .First}}<button class="btn" name="op" value="up" aria-label="Поднять {{.Key}}" type="submit">↑</button>{{end}}
 {{if not .Last}}<button class="btn" name="op" value="down" aria-label="Опустить {{.Key}}" type="submit">↓</button>{{end}}
-<button class="link" name="op" value="remove" type="submit">Убрать</button></form></div>
+<button class="link" name="op" value="remove" type="submit">Убрать</button></form>
+{{with .Stat}}<span class="help pool-stats">{{.OK}} ответов · {{if .Fail}}<span class="err">{{.Fail}} сбоев</span>{{else}}0 сбоев{{end}} · {{if .Consecutive}}<span class="err">подряд {{.Consecutive}}</span>{{else}}подряд 0{{end}} · рейтинг {{.ScorePct}}% · первый байт {{if .TTFBMs}}{{dur .TTFB}}{{else}}—{{end}} · {{if .Cooling}}<span class="warn">пауза ещё {{dur .CoolLeft}}</span>{{else}}доступна{{end}} · ушла дальше {{.Failovers}} · подхватила {{.ServedAfter}} · проверки {{.ProbeOK}}/{{.ProbeFail}}{{if not .LastOKAt.IsZero}} · успех {{ago .LastOKAt}}{{end}}{{with .LastErr}}<br><span class="err last-err" title="{{.}}">{{.}}</span>{{end}}</span>{{end}}</div>
 {{else}}<p class="note warn">В пуле нет моделей — назначенные ему запросы не выполняются.</p>{{end}}
 {{if .Available}}{{template "pool-add" .Add}}{{else}}<p class="help">Другие модели можно добавить в разделе «Подключения».</p>{{end}}
 <details class="settings-extra pool-behavior"><summary>Сессии и таймауты</summary><p class="help">Внутри сессии каждый маршрут закрепляется за выбранной моделью. При сбое до начала ответа роутер пробует следующую модель этого пула и запоминает новый выбор. Начавшийся ответ передаётся потоком; переключение посреди ответа не выполняется.</p>
