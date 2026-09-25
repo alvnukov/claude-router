@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -300,5 +301,60 @@ func TestWatchBodyCloseRacesTimer(t *testing.T) {
 		b.Close()
 		<-done
 		_ = b.MaxGap()
+	}
+}
+
+// On the Anthropic path the router adds no event of its own: an upstream
+// that goes silent after message_start is cut off, and the client's
+// connection closes right after the last byte it got.
+func TestAnthropicIdleClosesClientConnection(t *testing.T) {
+	captureLog(t)
+	upstreamGone := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "event: message_start\ndata: {}\n\n")
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+		close(upstreamGone)
+	}))
+	defer upstream.Close()
+	_, handler := limitsRouterStore(t, upstream.URL, "", newStore(10, ""), func(c *config) {
+		c.startTimeout, c.idleTimeout = 0, 50*time.Millisecond
+	})
+	router := httptest.NewServer(handler)
+	defer router.Close()
+
+	body := `{"model":"claude-sonnet-5","stream":true,"messages":[{"role":"user","content":"hi"}]}`
+	resp, err := (&http.Client{Transport: &http.Transport{}}).Post(router.URL+"/v1/messages", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	type read struct {
+		body []byte
+		err  error
+	}
+	done := make(chan read, 1)
+	go func() {
+		b, err := io.ReadAll(resp.Body)
+		done <- read{b, err}
+	}()
+	var got read
+	select {
+	case got = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client stream still open 5s after the upstream went silent")
+	}
+	if resp.StatusCode != http.StatusOK || string(got.body) != "event: message_start\ndata: {}\n\n" {
+		t.Fatalf("status %d, client got %q; want message_start and nothing after", resp.StatusCode, got.body)
+	}
+	if got.err == nil {
+		t.Fatal("stream ended cleanly; want the connection cut")
+	}
+	select {
+	case <-upstreamGone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream request still open")
 	}
 }

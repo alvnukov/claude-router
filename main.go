@@ -210,8 +210,17 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 	}
 	// FlushInterval -1 streams SSE through without buffering.
 	proxy.FlushInterval = -1
-	if u != nil {
-		proxy.ModifyResponse = u.limits.observeResponse
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if u != nil {
+			if err := u.limits.observeResponse(resp); err != nil {
+				return err
+			}
+		}
+		// A silent upstream is cut off; the copy to the client then fails and
+		// net/http drops the client's connection without an event.
+		orig := resp.Body
+		resp.Body = watchBody(orig, cfg.startTimeout, cfg.idleTimeout, func(error) { orig.Close() })
+		return nil
 	}
 
 	pass := func(w http.ResponseWriter, r *http.Request, body []byte) {

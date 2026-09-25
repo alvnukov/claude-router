@@ -178,11 +178,14 @@ func limitsRouter(t *testing.T, upstream, local string) (*uiServer, http.Handler
 	return limitsRouterStore(t, upstream, local, newStore(10, ""))
 }
 
-func limitsRouterStore(t *testing.T, upstream, local string, st *store) (*uiServer, http.Handler) {
+func limitsRouterStore(t *testing.T, upstream, local string, st *store, tune ...func(*config)) (*uiServer, http.Handler) {
 	t.Helper()
 	cs, h, _ := profileFixture(t)
 	up, _ := url.Parse(upstream)
 	cs.c.upstream = up
+	for _, f := range tune {
+		f(&cs.c)
+	}
 	l := cs.get().local.clone()
 	l.FamilyRoutes["sonnet"] = map[string]modelRoute{"default": {Mode: "anthropic"}}
 	if local != "" {
