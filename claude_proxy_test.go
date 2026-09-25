@@ -5,10 +5,57 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+// TestRouterEnvPointsClaudeAtTheRouter runs the built binary as the router
+// script does, with nothing faked: Claude Code's settings.json gains the
+// router's address, other settings stay, and the command prints the address.
+func TestRouterEnvPointsClaudeAtTheRouter(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "localrouter")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	home, config := filepath.Join(dir, "home"), filepath.Join(dir, "claude")
+	for _, d := range []string{home, config} {
+		if err := os.Mkdir(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := filepath.Join(config, "settings.json")
+	if err := os.WriteFile(settings, []byte(`{"env":{"OTHER":"keep"},"model":"opus"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "env", "-home", home)
+	// The last value of a key wins: no inherited listen address, and no way
+	// to reach the real ~/.claude.
+	cmd.Env = append(os.Environ(), "ROUTER_LISTEN=", "HOME="+dir, "CLAUDE_CONFIG_DIR="+config)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("localrouter env: %v", err)
+	}
+	if string(out) != "ANTHROPIC_BASE_URL=http://127.0.0.1:8787\n" {
+		t.Fatalf("stdout = %q", out)
+	}
+	data, err := os.ReadFile(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Env   map[string]string
+		Model string
+	}
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Env["ANTHROPIC_BASE_URL"] != "http://127.0.0.1:8787" || got.Env["OTHER"] != "keep" || got.Model != "opus" {
+		t.Fatalf("settings.json = %s", data)
+	}
+}
 
 func TestClaudeProxyRestoresEndpointAndPreservesOtherEdits(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
