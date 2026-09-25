@@ -13,7 +13,8 @@ type runtimeAdmin struct {
 	life     *lifecycle
 	health   *health
 	state    string
-	activate func() error
+	activate func() error // runs before the switch; an error keeps the mode
+	started  func()       // runs once the slot is active
 	compact  func() error
 }
 
@@ -56,6 +57,9 @@ func (a *runtimeAdmin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if err == nil {
 			err = a.life.activate()
+		}
+		if err == nil && a.started != nil {
+			a.started()
 		}
 	case "/admin/drain":
 		a.life.drain()

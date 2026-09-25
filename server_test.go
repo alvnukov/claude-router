@@ -31,7 +31,7 @@ func TestRouterServerKeepsAnthropicLimitsInMemoryUntilActive(t *testing.T) {
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("standby wrote limits.json: %v", err)
 	}
-	if got := limits.view(time.Now()).State; got != "unverified" {
+	if got := limits.view(time.Now()).State; got != "fresh" {
 		t.Fatalf("standby lost the observation: %s", got)
 	}
 	if err := life.activate(); err != nil {

@@ -11,6 +11,22 @@ import (
 	"time"
 )
 
+// Background loops refuse to write while the slot is standby, so they may only
+// start once the switch to active has happened.
+func TestRuntimeAdminStartsBackgroundAfterTheSwitch(t *testing.T) {
+	life := newLifecycle(true)
+	admin := newRuntimeAdmin(life, newHealth(""), filepath.Join(t.TempDir(), "state.json"))
+	var seen lifecycleMode
+	admin.started = func() { seen = life.mode() }
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
+	r.RemoteAddr = "127.0.0.1:12345"
+	admin.ServeHTTP(w, r)
+	if w.Code != http.StatusNoContent || seen != modeActive {
+		t.Fatalf("background started in %q mode: %d", seen, w.Code)
+	}
+}
+
 func TestRuntimeAdminTransitionsAndRollback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	old := newLifecycle(false)

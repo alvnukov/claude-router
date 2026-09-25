@@ -68,7 +68,9 @@ func uiTemplates() (*template.Template, error) {
 		"dur":    fmtDur,
 		"ago":    fmtAgo,
 		"pct":    func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) },
-		"score":  func(f float64) string { return strconv.FormatFloat(f*100, 'f', 0, 64) + "%" },
+		// percent drops a zero fraction: 77, 4.5.
+		"percent": func(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) },
+		"score":   func(f float64) string { return strconv.FormatFloat(f*100, 'f', 0, 64) + "%" },
 		"ms": func(f float64) string {
 			if f == 0 {
 				return "—"
@@ -491,6 +493,7 @@ type poolKeyRow struct {
 	Options     []string
 	Unconfirmed bool
 	First, Last bool
+	Stat        modelStat
 }
 
 type codexLoginView struct {
@@ -548,7 +551,7 @@ func (u *uiServer) settingsView() settingsView {
 		present := map[string]bool{}
 		for i, target := range targets {
 			options := modelEffortOptions(c.local, target.Model, info)
-			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1})
+			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1, Stat: u.hl.snapshot(target.Model)})
 			present[target.Model] = true
 		}
 		for _, m := range c.local.Models {

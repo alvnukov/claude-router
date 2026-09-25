@@ -66,6 +66,7 @@ func (r *routerServer) startBackground() {
 		r.cs.watch(r.background, 2*time.Second, r.life)
 		startChecker(r.background, r.cs, r.health, r.life)
 		r.ui.startCatalogUpdates(r.background)
+		r.ui.startCodexUsageUpdates(r.background)
 	})
 }
 
@@ -84,10 +85,11 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 				return fmt.Errorf("profile migration: %w", err)
 			}
 		}
-		if r.background != nil {
-			r.startBackground()
-		}
 		return nil
+	}
+	// Background loops write shared state, so they start only after the switch.
+	if r.background != nil {
+		admin.started = r.startBackground
 	}
 	admin.compact = r.st.compactAfterDrain
 	return admin

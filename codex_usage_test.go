@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -181,7 +183,8 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 		u.handler().ServeHTTP(w, r)
 		return w.Code, w.Body.String()
 	}
-	if code, html := request("GET", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || strings.Contains(html, "every 60s") {
+	if code, html := request("GET", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || strings.Contains(html, "every 60s") ||
+		!strings.Contains(html, "при старте роутера, раз в 10 минут и по кнопке") {
 		t.Fatalf("GET panel: %d %s", code, html)
 	}
 	if code, _ := request("POST", "https://other.test"); code != 403 || calls != 0 {
@@ -189,5 +192,78 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 	}
 	if code, html := request("POST", "http://localhost:8788"); code != 200 || calls != 1 || !strings.Contains(html, "80%") || !strings.Contains(html, "Доступно сбросов лимита: <b>0</b>") || strings.Contains(html, "private-refresh") {
 		t.Fatalf("POST panel: %d %s", code, html)
+	}
+}
+
+// The background refresh sends the refresh button's request once at start and
+// once per tick. A failed request is not retried before the next tick, keeps
+// the last good numbers and does not stop the loop.
+func TestCodexUsageBackgroundRefresh(t *testing.T) {
+	auth := &codexAuthStore{loaded: true, credential: usageCredential("acct")}
+	calls := make(chan struct{}, 100)
+	var fail atomic.Bool
+	cache := &codexUsageCache{client: &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
+		calls <- struct{}{}
+		if r.URL.String() != codexUsageURL {
+			t.Errorf("request to %s", r.URL)
+		}
+		if fail.Load() {
+			return usageResponse(503, "private-body"), nil
+		}
+		return usageResponse(200, `{"rate_limit":{"primary_window":{"used_percent":25}}}`), nil
+	})}}
+	ticks := make(chan time.Time)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { cache.refreshEvery(ctx, auth, ticks); close(done) }()
+	// A request holds the cache until its answer is stored, so a read right
+	// after it sees the result. Each expected request is taken from calls
+	// here; anything left there at the end is a request too many.
+	request := func() codexUsageView {
+		t.Helper()
+		select {
+		case <-calls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("no request")
+		}
+		return cache.get(t.Context(), auth, false)
+	}
+	tick := func() { ticks <- time.Now() }
+
+	v := request()
+	if v.Updated.IsZero() || len(v.Limits) != 1 || v.Limits[0].Remaining != 75 {
+		t.Fatalf("start: %+v", v)
+	}
+	updated := v.Updated
+
+	fail.Store(true)
+	tick()
+	if v = request(); v.Error == "" || !v.Updated.Equal(updated) || len(v.Limits) != 1 || strings.Contains(v.Error, "private-body") {
+		t.Fatalf("failed refresh: %+v", v)
+	}
+	tick()
+	request()
+
+	fail.Store(false)
+	tick()
+	if v = request(); v.Error != "" || !v.Updated.After(updated) {
+		t.Fatalf("recovery: %+v", v)
+	}
+
+	// Without a Codex login there is nothing to ask for.
+	auth.mu.Lock()
+	auth.loaded, auth.path = false, filepath.Join(t.TempDir(), "missing.json")
+	auth.mu.Unlock()
+	tick()
+	tick()
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("refresh loop did not stop")
+	}
+	if n := len(calls); n != 0 {
+		t.Fatalf("%d requests beyond one at start and one per tick", n)
 	}
 }
