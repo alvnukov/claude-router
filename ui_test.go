@@ -1,12 +1,16 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -197,4 +201,181 @@ func between(t *testing.T, s, start, end string) string {
 		t.Fatalf("no %q after %q", end, start)
 	}
 	return s[i : i+j]
+}
+
+// withBadProvider returns the providers file with a Codex connection that the
+// strict reader rejects: a second connection without auth_id.
+func withBadProvider(t *testing.T, good []byte) string {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(good, &doc); err != nil {
+		t.Fatal(err)
+	}
+	providers, _ := doc["providers"].([]any)
+	doc["providers"] = append([]any{map[string]any{"name": "work", "type": "codex", "base_url": codexBaseURL}}, providers...)
+	bad, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(bad)
+}
+
+func TestReloadErrorBanner(t *testing.T) {
+	cs, _, path := profileFixture(t)
+	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	good, _ := os.ReadFile(path)
+	bad := withBadProvider(t, good)
+	writeRaw(t, path, bad)
+	future := time.Now().Add(2 * time.Second)
+	os.Chtimes(path, future, future)
+	cs.pollOnce()
+	v := u.settingsView()
+	if len(v.ReloadErrors) != 1 || !strings.Contains(v.ReloadErrors[0].Err, "auth_id") || v.ReloadErrors[0].Snapshot.IsZero() {
+		t.Fatalf("banner: %+v", v.ReloadErrors)
+	}
+	if _, ok := cs.get().local.provider("work"); ok {
+		t.Fatal("rejected file was applied")
+	}
+	if data, _ := os.ReadFile(path); string(data) != bad {
+		t.Fatal("rejected file was rewritten")
+	}
+	cs.pollOnce()
+	if again := u.settingsView().ReloadErrors; len(again) != 1 || !again[0].At.Equal(v.ReloadErrors[0].At) {
+		t.Fatal("same error re-stamped or duplicated")
+	}
+	writeRaw(t, path, string(good))
+	later := future.Add(2 * time.Second)
+	os.Chtimes(path, later, later)
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 0 {
+		t.Fatalf("banner not cleared: %+v", left)
+	}
+}
+
+func TestReloadErrorBannerRenders(t *testing.T) {
+	u, h := testUI(t)
+	u.cs.noteReload("/x/providers.json", errors.New("boom"))
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	if !strings.Contains(body, "файл providers.json не применён: boom; действует снимок от") {
+		t.Fatal("banner not rendered")
+	}
+}
+
+func TestCodexSectionPerConnection(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	var calls atomic.Int32
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	// Connection cards probe model lists on render; only a usage request
+	// spends the subscription and must wait for the button.
+	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() == codexUsageURL {
+			calls.Add(1)
+		}
+		return usageResponse(500, ""), nil
+	})
+	_, h := codexUI(t)
+	work, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if err := work.save(usageCredential("work-account")); err != nil {
+		t.Fatal(err)
+	}
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	for _, want := range []string{`<h4>codex</h4>`, `<h4>work</h4>`, `hx-get="/settings/codex/usage?provider=work"`, `hx-get="/settings/codex/status?provider=work"`, `name="provider" value="work"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if strings.Contains(body, `id="codex-login"`) {
+		t.Error("one element id repeated per connection")
+	}
+	if strings.Contains(body, "access_token") || strings.Contains(body, "private-refresh") {
+		t.Fatal("token leaked into the page")
+	}
+	usage := get(t, h, "GET", "/settings/codex/usage?provider=work", nil).Body.String()
+	for _, want := range []string{`class="codex-usage"`, `"provider":"work"`, `hx-target="closest .codex-usage"`} {
+		if !strings.Contains(usage, want) {
+			t.Errorf("usage fragment missing %s", want)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("page load asked for usage %d times", calls.Load())
+	}
+}
+
+// The provider pane's "import from Codex CLI" button names its provider;
+// without it the import handler answers 400 after Task 3.
+func TestCodexProviderPaneImportNamesProvider(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	_, h := codexUI(t)
+	pane := get(t, h, "GET", "/settings/provider?name=work", nil).Body.String()
+	if !strings.Contains(pane, `hx-post="/settings/codex/import" hx-vals='{"provider":"work"}'`) {
+		t.Fatalf("import button without provider:\n%s", pane)
+	}
+	data, _ := json.Marshal(usageCredential("work-account"))
+	writeRaw(t, codexAuth.cliPath, string(data))
+	if code := get(t, h, "POST", "/settings/codex/import", url.Values{"provider": {"work"}}).Code; code != 200 {
+		t.Fatalf("import: %d", code)
+	}
+	work, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if !work.connected() || codexAuth.connected() {
+		t.Fatal("import did not reach work's file")
+	}
+}
+
+// A save from the UI writes the router's snapshot over a rejected hand edit.
+// The banner describes a file no longer on disk, so it goes; a bad file the
+// save did not replace keeps it.
+func TestReloadErrorClearedByUISave(t *testing.T) {
+	t.Setenv("ROUTER_ENV_FILE", filepath.Join(t.TempDir(), "router.env"))
+	cs, _, path := profileFixture(t)
+	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	good, _ := os.ReadFile(path)
+	writeRaw(t, path, withBadProvider(t, good))
+	future := time.Now().Add(2 * time.Second)
+	os.Chtimes(path, future, future)
+	cs.pollOnce()
+	if len(u.settingsView().ReloadErrors) != 1 {
+		t.Fatal("bad providers file not reported")
+	}
+	if err := cs.applyLocal(cs.get().local, true); err != nil {
+		t.Fatal(err)
+	}
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 0 {
+		t.Fatalf("banner outlived the save: %+v", left)
+	}
+
+	writeRaw(t, cs.envPath, "ROUTER_LOCAL_BALANCE=many\n")
+	os.Chtimes(cs.envPath, future, future)
+	cs.pollOnce()
+	if len(u.settingsView().ReloadErrors) != 1 {
+		t.Fatal("bad env file not reported")
+	}
+	if err := cs.apply(inputFromConfig(cs.get()), true); err != nil {
+		t.Fatal(err)
+	}
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 0 {
+		t.Fatalf("env banner outlived the save: %+v", left)
+	}
+
+	stray := filepath.Join(path+".profiles", "stray.json")
+	if err := cs.ensureProfiles(); err != nil {
+		t.Fatal(err)
+	}
+	writeRaw(t, stray, "{")
+	later := future.Add(2 * time.Second)
+	os.Chtimes(stray, later, later)
+	os.Chtimes(path+".profiles", later, later)
+	cs.pollOnce()
+	if len(u.settingsView().ReloadErrors) != 1 {
+		t.Fatal("bad profile file not reported")
+	}
+	if err := cs.applyLocal(cs.get().local, true); err != nil {
+		t.Fatal(err)
+	}
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 1 {
+		t.Fatalf("save hid a bad file it did not replace: %+v", left)
+	}
 }

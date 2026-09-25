@@ -32,6 +32,25 @@ func writeAnthropicError(w http.ResponseWriter, status int, kind, msg string) {
 	})
 }
 
+// withoutSignedOut drops Codex members that cannot authorize until someone
+// signs in again. If every member is signed out the list is kept, so the
+// client still gets the sign-in error.
+func withoutSignedOut(cands []candidate) []candidate {
+	var out []candidate
+	for _, c := range cands {
+		if c.Provider.Type == "codex" {
+			if s, err := codexStoreFor(c.Provider); err != nil || !s.signedIn() {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	if len(out) == 0 {
+		return cands
+	}
+	return out
+}
+
 // handleLocal serves one /v1/messages call from the OpenAI-compatible endpoint.
 // The caller's Anthropic credentials are deliberately not forwarded: the local
 // endpoint gets ROUTER_LOCAL_API_KEY and nothing else.
@@ -67,9 +86,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	// against its score.
 	pickCfg := cfg
 	pickCfg.failover = true
-	cands := hl.pick(pickCfg)
+	cands := withoutSignedOut(hl.pick(pickCfg))
 	scope := affinityKey(cfg, body, req)
-	cands = hl.bindCandidates(scope, cands)
+	cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
 	if !cfg.failover && len(cands) > 1 {
 		cands = cands[:1]
 	}
@@ -121,6 +140,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			res.cancel()
 			if err != nil {
 				res.err, res.retryable = err, true
+				// A read cut short by the client (Esc) is not the model's fault.
+				res.clientGone = r.Context().Err() != nil
 			}
 			responseBody = bytes.NewReader(codexAsChatResponse(result))
 		} else if res.err == nil {
@@ -158,12 +179,16 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		res.cancel()
 		hl.release(cand.Key)
 		if werr != nil {
+			if tr != nil {
+				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
+			}
+			// The client went away mid-answer: no failure, and the session stays.
+			if r.Context().Err() != nil {
+				return
+			}
 			hl.record(cand.Key, false, 0, werr.Error())
 			if cfg.failover && i+1 < len(cands) {
 				hl.moveSession(scope, cand.Key, cands[i+1])
-			}
-			if tr != nil {
-				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
 			}
 			return
 		}
@@ -211,10 +236,15 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		return attemptResult{err: err}
 	}
 	up.Header.Set("Content-Type", "application/json")
+	var store *codexAuthStore
 	if cand.Provider.Type == "codex" {
-		if err := codexAuth.authorize(ctx, up); err != nil {
+		if store, err = codexStoreFor(cand.Provider); err != nil {
 			cancel()
 			return attemptResult{err: err}
+		}
+		if err := store.authorize(ctx, up); err != nil {
+			cancel()
+			return attemptResult{err: err, retryable: true}
 		}
 	} else if cand.Provider.APIKey != "" {
 		up.Header.Set("Authorization", "Bearer "+cand.Provider.APIKey)
@@ -236,7 +266,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	var resp *http.Response
 	if cand.Provider.Type == "codex" {
-		resp, err = codexAuth.doWithReauth(client, up)
+		resp, err = store.doWithReauth(client, up)
 	} else {
 		resp, err = client.Do(up)
 	}
@@ -250,7 +280,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
 		}
 		if errors.Is(err, errCodexSignIn) {
-			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb}
+			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb, retryable: true}
 		}
 		return attemptResult{err: err, ttfb: ttfb, retryable: true}
 	}
@@ -274,6 +304,10 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		switch resp.StatusCode {
 		case 404, 408, 429:
 			res.retryable = true
+		case 401:
+			// A Codex 401 is a sign-in problem of that connection; an
+			// OpenAI-compatible 401 is a bad key in the config.
+			res.retryable = cand.Provider.Type == "codex"
 		default:
 			res.retryable = resp.StatusCode >= 500
 		}

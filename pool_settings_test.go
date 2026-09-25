@@ -34,12 +34,12 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.firstByte, c.balance, c.probeEvery, c.maxInputChars = time.Second, 99, time.Hour, 1
+	c.firstByte, c.probeEvery, c.maxInputChars = time.Second, time.Hour, 1
 	old, zero := c.forModel("claude-opus-5", "high"), c.forModel("claude-opus-5", "low")
-	if old.firstByte != 45*time.Second || !old.failover || old.balance != 3 || old.probeEvery != 30*time.Second || old.maxInputChars != 9000 {
+	if old.firstByte != 45*time.Second || !old.failover || old.probeEvery != 30*time.Second || old.maxInputChars != 9000 {
 		t.Fatal("saved pool settings overridden by globals")
 	}
-	if zero.firstByte != 0 || zero.failover || zero.balance != 0 || zero.probeEvery != 0 || zero.maxInputChars != 0 {
+	if zero.firstByte != 0 || zero.failover || zero.probeEvery != 0 || zero.maxInputChars != 0 {
 		t.Fatal("explicit zeros did not disable settings")
 	}
 }
@@ -59,7 +59,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 		}
 		return w.Body.String()
 	}
-	values := url.Values{"name": {"a"}, "failover": {"1"}, "first_byte": {"7"}, "balance": {"2"}, "probe_every": {"0"}, "max_input_chars": {"20000"}}
+	values := url.Values{"name": {"a"}, "failover": {"1"}, "first_byte": {"7"}, "probe_every": {"0"}, "max_input_chars": {"20000"}}
 	html := post(values)
 	if !strings.Contains(html, "Настройки пула сохранены") || strings.Count(html, `class="behavior-form"`) != 2 || strings.Contains(html, `id="behavior"`) {
 		t.Fatal("pool forms not rendered independently")
@@ -68,7 +68,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := poolSettings{Failover: true, FirstByteSec: 7, Balance: 2, MaxInputChars: 20000}
+	want := poolSettings{Failover: true, FirstByteSec: 7, MaxInputChars: 20000}
 	if saved.PoolSettings["a"] != want || saved.PoolSettings["b"].FirstByteSec != 45 {
 		t.Fatal("settings leaked to other pool")
 	}

@@ -271,6 +271,26 @@ func (s *codexAuthStore) connected() bool {
 	return err == nil
 }
 
+// signedIn reports whether the store can authorize a request without a new
+// sign-in: a credential is loaded or on disk, and it was not rejected. Pool
+// selection asks this of every member, so it never waits for the lock: a
+// holder is loading or refreshing the token, which can take seconds, and the
+// member stays a candidate whose own request finds out.
+func (s *codexAuthStore) signedIn() bool {
+	if !s.mu.TryLock() {
+		return true
+	}
+	defer s.mu.Unlock()
+	if s.authProblem != "" {
+		return false
+	}
+	if s.loaded {
+		return true
+	}
+	_, err := readCodexCredential(s.path)
+	return err == nil
+}
+
 func (s *codexAuthStore) authorize(ctx context.Context, req *http.Request) error {
 	// Subscription tokens must never be sent to a configurable third-party URL.
 	if req.URL.Scheme != "https" || req.URL.Host != "chatgpt.com" || !strings.HasPrefix(req.URL.EscapedPath(), "/backend-api/codex/") || req.URL.User != nil {

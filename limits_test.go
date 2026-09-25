@@ -736,7 +736,7 @@ func TestAnthropicLimitsViewJSON(t *testing.T) {
 		"Anthropic-Ratelimit-Unified-Representative-Claim", "five_hour",
 	), now)
 	report := func(l *anthropicLimits, at time.Time) string {
-		got, _ := json.Marshal(limitsReportOf(l.view(at), codexUsageView{}, at))
+		got, _ := json.Marshal(limitsReportOf(l.view(at), nil, at))
 		return string(got)
 	}
 	const noCodex = `{"source":"codex","state":"not_connected","max_age_seconds":1800}`
@@ -793,7 +793,7 @@ func TestLimitsReportCodex(t *testing.T) {
 	at := updated.Format(time.RFC3339)
 	fresh := decodeCodexUsage(payload, codexAccount{ID: "acct"}, updated)
 	codex := func(v codexUsageView, at time.Time) string {
-		r := limitsReportOf(anthropicLimitsView{State: "unavailable", MaxAgeSeconds: 1800}, v, at)
+		r := limitsReportOf(anthropicLimitsView{State: "unavailable", MaxAgeSeconds: 1800}, []codexUsageView{v}, at)
 		sources, _ := json.Marshal(r.Sources[1])
 		windows, _ := json.Marshal(r.Windows)
 		return string(sources) + " " + string(windows)
@@ -984,6 +984,8 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 
 	// Codex is connected and its last refresh failed: its source says so and
 	// the Anthropic part is unaffected.
+	codex := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
+	u.cs.c.local.Providers = append(u.cs.c.local.Providers, codex)
 	oldAuth := codexAuth
 	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("acct")}
 	t.Cleanup(func() { codexAuth = oldAuth })
@@ -992,7 +994,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 		codexCalls.Add(1)
 		return usageResponse(503, "private-body"), nil
 	})}
-	u.codexUsage.get(t.Context(), codexAuth, true)
+	u.usageCache(codex).get(t.Context(), codexAuth, true)
 
 	w := get(t, h, "GET", "/api/limits", nil)
 	if n := out.n.Load(); n != 0 || codexCalls.Load() != 1 {
@@ -1005,7 +1007,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := limitsReportOf(u.limits.view(now), u.codexUsage.get(t.Context(), codexAuth, false), now)
+	want := limitsReportOf(u.limits.view(now), nil, now)
 	gotWindows, _ := json.Marshal(got.Windows)
 	wantWindows, _ := json.Marshal(want.Windows)
 	if len(got.Sources) != 2 || got.Sources[0].Source != "anthropic" || got.Sources[0].State != "fresh" || !got.Sources[0].ObservedAt.Equal(want.Sources[0].ObservedAt) ||
@@ -1013,7 +1015,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 		string(gotWindows) != string(wantWindows) || len(got.Windows) != 1 {
 		t.Fatalf("JSON %s, store %+v", w.Body.String(), want)
 	}
-	if c := got.Sources[1]; c.Source != "codex" || c.State != "unavailable" || c.Error == "" || strings.Contains(w.Body.String(), "private-body") {
+	if c := got.Sources[1]; c.Source != "codex" || c.Provider != "codex" || c.State != "unavailable" || c.Error == "" || strings.Contains(w.Body.String(), "private-body") {
 		t.Fatalf("codex source: %s", w.Body.String())
 	}
 	if s := limitsSection(t, h); !strings.Contains(s, "77% <span>осталось</span>") || !strings.Contains(s, "five_hour") {
@@ -1031,7 +1033,56 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
 	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "missing.json")}
 	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body,
+		`{"sources":[{"source":"anthropic","state":"unavailable","max_age_seconds":1800},{"source":"codex","provider":"codex","state":"not_connected","max_age_seconds":1800}],"windows":[]}`) {
+		t.Fatalf("signed out: %s", body)
+	}
+	// With no Codex connection at all the report still has one codex source.
+	u.cs.c.local.Providers = u.cs.c.local.Providers[:len(u.cs.c.local.Providers)-1]
+	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body,
 		`{"sources":[{"source":"anthropic","state":"unavailable","max_age_seconds":1800},{"source":"codex","state":"not_connected","max_age_seconds":1800}],"windows":[]}`) {
 		t.Fatalf("nothing observed: %s", body)
+	}
+}
+
+// Every Codex connection is its own codex source in /api/limits, named by
+// provider and listed in providers order; its windows carry the same name.
+func TestCodexLimitsPerConnection(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
+	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
+	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
+	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
+	used := map[string]string{"acct-a": "20", "acct-b": "70"}
+	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
+		return usageResponse(200, `{"rate_limit":{"primary_window":{"used_percent":`+used[r.Header.Get("ChatGPT-Account-Id")]+`}}}`), nil
+	})}
+	for _, p := range providers {
+		store, err := codexStoreFor(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u.usageCache(p).get(t.Context(), store, true)
+	}
+
+	body := get(t, u.handler(), "GET", "/api/limits", nil).Body.Bytes()
+	var got limitsReport
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	var sources, windows []string
+	for _, s := range got.Sources {
+		sources = append(sources, s.Source+"/"+s.Provider+"/"+s.State)
+	}
+	for _, w := range got.Windows {
+		percent := "-"
+		if w.UsedPercent != nil {
+			percent = fmt.Sprint(*w.UsedPercent)
+		}
+		windows = append(windows, w.Source+"/"+w.Provider+"/"+w.Name+"/"+percent)
+	}
+	if strings.Join(sources, ",") != "anthropic//unavailable,codex/codex/fresh,codex/work/fresh" ||
+		strings.Join(windows, ",") != "codex/codex/primary/20,codex/work/primary/70" {
+		t.Fatalf("sources %v, windows %v\n%s", sources, windows, body)
 	}
 }

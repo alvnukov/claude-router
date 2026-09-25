@@ -18,7 +18,7 @@ func TestCodexUsageRefreshStartsWhenASlotActivates(t *testing.T) {
 	defer func() { codexAuth = oldAuth }()
 	dir := t.TempDir()
 	providers := filepath.Join(dir, "providers.json")
-	if err := os.WriteFile(providers, []byte(`{"providers":[],"models":[]}`), 0600); err != nil {
+	if err := os.WriteFile(providers, []byte(`{"providers":[{"name":"codex","type":"codex","base_url":"`+codexBaseURL+`"}],"models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
 	local, err := readProviders(providers)

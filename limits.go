@@ -83,7 +83,8 @@ type anthropicLimitsView struct {
 // response carried is set: percentages from utilization, or from remaining
 // and limit when utilization is absent.
 type limitWindow struct {
-	Source           string    `json:"source,omitempty"` // set in limitsReport
+	Source           string    `json:"source,omitempty"`   // set in limitsReport
+	Provider         string    `json:"provider,omitempty"` // Codex connection name
 	Name             string    `json:"name"`
 	RemainingPercent *float64  `json:"remaining_percent,omitempty"`
 	UsedPercent      *float64  `json:"used_percent,omitempty"`
@@ -105,8 +106,9 @@ type limitsReport struct {
 }
 
 type limitSource struct {
-	Source        string            `json:"source"` // anthropic | codex
-	State         string            `json:"state"`  // fresh | no_headers | unavailable | not_connected
+	Source        string            `json:"source"`             // anthropic | codex
+	Provider      string            `json:"provider,omitempty"` // Codex connection name
+	State         string            `json:"state"`              // fresh | no_headers | unavailable | not_connected
 	ObservedAt    time.Time         `json:"observed_at,omitzero"`
 	AgeSeconds    *int64            `json:"age_seconds,omitempty"`
 	MaxAgeSeconds int64             `json:"max_age_seconds"`
@@ -114,10 +116,12 @@ type limitSource struct {
 	Error         string            `json:"error,omitempty"`
 }
 
-// limitsReportOf puts both sources in one report. Codex windows come from the
-// last successful usage request and are shown while it is at most
+// limitsReportOf puts Anthropic and every Codex connection in one report, a
+// codex source per connection named by provider; with no Codex connection
+// there is one codex source, not_connected. Codex windows come from the last
+// successful usage request and are shown while it is at most
 // codexUsageMaxAge old; a later failure is reported next to them.
-func limitsReportOf(a anthropicLimitsView, c codexUsageView, now time.Time) limitsReport {
+func limitsReportOf(a anthropicLimitsView, codex []codexUsageView, now time.Time) limitsReport {
 	r := limitsReport{Windows: []limitWindow{}}
 	r.Sources = append(r.Sources, limitSource{Source: "anthropic", State: a.State, ObservedAt: a.ObservedAt,
 		AgeSeconds: a.AgeSeconds, MaxAgeSeconds: a.MaxAgeSeconds, Raw: a.Raw})
@@ -126,7 +130,17 @@ func limitsReportOf(a anthropicLimitsView, c codexUsageView, now time.Time) limi
 		r.Windows = append(r.Windows, w)
 	}
 
-	s := limitSource{Source: "codex", State: "not_connected", MaxAgeSeconds: int64(codexUsageMaxAge / time.Second), Error: c.Error}
+	if len(codex) == 0 {
+		codex = []codexUsageView{{}}
+	}
+	for _, c := range codex {
+		r.codexSource(c, now)
+	}
+	return r
+}
+
+func (r *limitsReport) codexSource(c codexUsageView, now time.Time) {
+	s := limitSource{Source: "codex", Provider: c.Provider, State: "not_connected", MaxAgeSeconds: int64(codexUsageMaxAge / time.Second), Error: c.Error}
 	if c.Connected {
 		s.State = "unavailable"
 	}
@@ -138,7 +152,7 @@ func limitsReportOf(a anthropicLimitsView, c codexUsageView, now time.Time) limi
 		if age >= -limitsClockSkew && age <= codexUsageMaxAge {
 			s.State = "fresh"
 			for _, row := range c.Limits {
-				w := limitWindow{Source: "codex", Name: row.ID, WindowSeconds: row.Seconds, ObservedAt: c.Updated}
+				w := limitWindow{Source: "codex", Provider: c.Provider, Name: row.ID, WindowSeconds: row.Seconds, ObservedAt: c.Updated}
 				if row.Known {
 					remaining, used := row.Remaining, row.Used
 					w.RemainingPercent, w.UsedPercent = &remaining, &used
@@ -154,7 +168,6 @@ func limitsReportOf(a anthropicLimitsView, c codexUsageView, now time.Time) limi
 		}
 	}
 	r.Sources = append(r.Sources, s)
-	return r
 }
 
 // Low marks a window the page highlights: a tenth or less left, or refused.
@@ -497,9 +510,11 @@ func (l *anthropicLimits) view(now time.Time) anthropicLimitsView {
 // limitsAPI is GET /api/limits: what the settings page shows, from the
 // stores only; nothing here reaches Anthropic or Codex.
 func (u *uiServer) limitsAPI(w http.ResponseWriter, r *http.Request) {
-	var codex codexUsageView
-	if codexAuth != nil {
-		codex = u.codexUsage.get(r.Context(), codexAuth, false)
+	var codex []codexUsageView
+	for _, t := range u.codexUsageTargets() {
+		v := t.cache.get(r.Context(), t.auth, false)
+		v.Provider = t.provider
+		codex = append(codex, v)
 	}
 	now := time.Now()
 	w.Header().Set("Content-Type", "application/json")

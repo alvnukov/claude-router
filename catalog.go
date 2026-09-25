@@ -188,8 +188,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 		if err := writeProviders(u.cs.provPath, next); err != nil {
 			return err
 		}
-		u.cs.provMtime = mtime(u.cs.provPath)
-		u.cs.profileMtime = profilesMtime(u.cs.provPath)
+		u.cs.wroteProviders()
 	}
 	u.cs.c.local = next
 	log.Printf("model catalogs refreshed: anthropic=%d providers=%d notes=%d", len(next.Catalog.Anthropic), len(results), len(next.Catalog.Notes))
