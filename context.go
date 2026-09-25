@@ -170,7 +170,7 @@ func buildContext(body []byte, re *regexp.Regexp) *ctxView {
 
 	if raw := top["tools"]; len(raw) > 0 {
 		var tools []map[string]json.RawMessage
-		json.Unmarshal(raw, &tools)
+		_ = json.Unmarshal(raw, &tools) // best effort: what does not parse counts as empty
 		for i, t := range tools {
 			name, _ := jsonString(t["name"])
 			desc, _ := jsonString(t["description"])
@@ -189,7 +189,7 @@ func buildContext(body []byte, re *regexp.Regexp) *ctxView {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	}
-	json.Unmarshal(top["messages"], &msgs)
+	_ = json.Unmarshal(top["messages"], &msgs) // best effort: what does not parse counts as empty
 	for i, m := range msgs {
 		mv := msgView{Index: i, Role: m.Role, Anchor: fmt.Sprintf("m-%d", i)}
 		var s string
@@ -197,7 +197,7 @@ func buildContext(body []byte, re *regexp.Regexp) *ctxView {
 			mv.Blocks = append(mv.Blocks, b.text(m.Role, "text", s, fmt.Sprintf("m-%d-0", i)))
 		} else {
 			var blocks []map[string]json.RawMessage
-			json.Unmarshal(m.Content, &blocks)
+			_ = json.Unmarshal(m.Content, &blocks) // best effort: what does not parse counts as empty
 			for j, blk := range blocks {
 				mv.Blocks = append(mv.Blocks, b.block(m.Role, blk, fmt.Sprintf("m-%d-%d", i, j)))
 			}
@@ -241,7 +241,7 @@ func (b *ctxBuilder) block(role string, blk map[string]json.RawMessage, anchor s
 		bv = blockView{Kind: "tool_result", Label: "tool_result", Anchor: anchor}
 		bv.ToolUseID, _ = jsonString(blk["tool_use_id"])
 		var isErr bool
-		json.Unmarshal(blk["is_error"], &isErr)
+		_ = json.Unmarshal(blk["is_error"], &isErr) // best effort: what does not parse counts as empty
 		bv.IsError = isErr
 		var s string
 		if json.Unmarshal(blk["content"], &s) == nil {
@@ -249,7 +249,7 @@ func (b *ctxBuilder) block(role string, blk map[string]json.RawMessage, anchor s
 			bv.Children = append(bv.Children, c)
 		} else {
 			var inner []map[string]json.RawMessage
-			json.Unmarshal(blk["content"], &inner)
+			_ = json.Unmarshal(blk["content"], &inner) // best effort: what does not parse counts as empty
 			for j, ib := range inner {
 				ik, _ := jsonString(ib["type"])
 				var c blockView
@@ -286,7 +286,7 @@ func (b *ctxBuilder) media(kind string, blk map[string]json.RawMessage, anchor s
 		Data      string `json:"data"`
 		URL       string `json:"url"`
 	}
-	json.Unmarshal(blk["source"], &src)
+	_ = json.Unmarshal(blk["source"], &src) // best effort: what does not parse counts as empty
 	n := len(src.Data) + len(src.URL)
 	note := fmt.Sprintf("[%s %s %s, %s base64]", kind, src.Type, src.MediaType, fmtChars(n))
 	if src.URL != "" {
@@ -305,7 +305,7 @@ func cacheMark(raw json.RawMessage) string {
 		Type string `json:"type"`
 		TTL  string `json:"ttl"`
 	}
-	json.Unmarshal(raw, &cc)
+	_ = json.Unmarshal(raw, &cc) // best effort: what does not parse counts as empty
 	if cc.TTL != "" {
 		return cc.Type + " " + cc.TTL
 	}
@@ -341,7 +341,7 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 	}
 
 	var tools []openaiTool
-	json.Unmarshal(top["tools"], &tools)
+	_ = json.Unmarshal(top["tools"], &tools) // best effort: what does not parse counts as empty
 	for i, t := range tools {
 		schema := prettyJSON(t.Function.Parameters)
 		n := len(t.Function.Name) + len(t.Function.Description) + len(t.Function.Parameters)
@@ -360,7 +360,7 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 		ToolCalls  []openaiToolCall `json:"tool_calls"`
 		ToolCallID string           `json:"tool_call_id"`
 	}
-	json.Unmarshal(top["messages"], &msgs)
+	_ = json.Unmarshal(top["messages"], &msgs) // best effort: what does not parse counts as empty
 	for i, m := range msgs {
 		anchor := fmt.Sprintf("m-%d", i)
 		if m.Role == "system" {
@@ -384,7 +384,7 @@ func buildOpenAIContext(body []byte, re *regexp.Regexp) *ctxView {
 			}
 		} else if len(m.Content) > 0 {
 			var parts []map[string]json.RawMessage
-			json.Unmarshal(m.Content, &parts)
+			_ = json.Unmarshal(m.Content, &parts) // best effort: what does not parse counts as empty
 			for j, p := range parts {
 				pt, _ := jsonString(p["type"])
 				if pt == "text" {

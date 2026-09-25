@@ -33,7 +33,7 @@ func TestCatchAllLogsOneLine(t *testing.T) {
 		seen <- r.Method + " " + r.URL.RequestURI() + " " + r.Header.Get("Authorization") + " " + string(b)
 		w.Header().Set("X-Upstream", "resp-header-secret")
 		w.WriteHeader(http.StatusTeapot)
-		io.WriteString(w, "resp-body-secret")
+		_, _ = io.WriteString(w, "resp-body-secret")
 	}))
 	defer upstream.Close()
 	_, handler := limitsRouter(t, upstream.URL, "")
@@ -91,13 +91,13 @@ func TestCatchAllStreams(t *testing.T) {
 	release := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, "data: one\n\n")
+		_, _ = io.WriteString(w, "data: one\n\n")
 		w.(http.Flusher).Flush()
 		select {
 		case <-release:
 		case <-time.After(5 * time.Second):
 		}
-		io.WriteString(w, "data: two\n\n")
+		_, _ = io.WriteString(w, "data: two\n\n")
 	}))
 	defer upstream.Close()
 	_, handler := limitsRouter(t, upstream.URL, "")

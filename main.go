@@ -235,7 +235,7 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 			return
 		}
 		var probe anthropicRequest
-		json.Unmarshal(body, &probe)
+		_ = json.Unmarshal(body, &probe) // for the log line; routing parses the body itself
 		_, target, routeErr := configuredRequestRoute(cfg, body)
 		local := target.Mode == "pool" || target.Mode == "model"
 		route := "cloud"
@@ -291,7 +291,7 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 		// The local endpoint has no token-count API. Claude Code uses this only
 		// for budget display, so a length-based estimate is honest enough.
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4})
+		_ = json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4}) // the client may be gone
 	})
 
 	// Everything else goes to Anthropic as is. One log line per request says

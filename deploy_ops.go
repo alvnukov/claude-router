@@ -172,7 +172,7 @@ type launchdSlotPlist struct {
 
 func plistEscape(s string) string {
 	var b bytes.Buffer
-	xml.EscapeText(&b, []byte(s))
+	_ = xml.EscapeText(&b, []byte(s)) // a bytes.Buffer does not fail
 	return b.String()
 }
 

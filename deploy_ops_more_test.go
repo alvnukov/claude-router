@@ -23,7 +23,7 @@ func TestSystemStateReportsSlotAndInstalledBinaryDigest(t *testing.T) {
 	}
 	cfg.BlueAPI = ""
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"slot": "blue", "pid": 101, "mode": "active", "pending": 3})
+		_ = json.NewEncoder(w).Encode(map[string]any{"slot": "blue", "pid": 101, "mode": "active", "pending": 3})
 	}))
 	defer backend.Close()
 	cfg.BlueAPI = backend.Listener.Addr().String()
@@ -87,7 +87,7 @@ func TestCaddyAdaptedConfigListensOnLoopbackAndResolvesSlot(t *testing.T) {
 	if strings.Contains(string(adapted), `"host"`) {
 		t.Fatalf("Caddy config matches on Host: %s", adapted)
 	}
-	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(adapted) }))
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(adapted) }))
 	defer admin.Close()
 	ops.adminURL = admin.URL
 	if slot, err := ops.current(context.Background()); err != nil || slot != "green" {

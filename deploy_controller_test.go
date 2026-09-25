@@ -35,7 +35,7 @@ func newDeployFixture(t *testing.T) *deployFixture {
 		if r.URL.Path == "/healthz" {
 			f.calls = append(f.calls, "public-ready:"+f.active)
 			if f.fail == "public-ready" {
-				http.Error(w, "not ready", 503)
+				http.Error(w, "not ready", http.StatusServiceUnavailable)
 				return
 			}
 			s := f.slots[f.active]
@@ -90,7 +90,7 @@ func (f *deployFixture) admin(_ context.Context, slot, action string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, action+":"+slot)
-	if f.fail == action && !(action == "activate" && slot == "blue") {
+	if f.fail == action && (action != "activate" || slot != "blue") {
 		return errors.New(action + " failed")
 	}
 	s := f.slots[slot]

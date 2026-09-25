@@ -207,13 +207,13 @@ func TestAnthropicLimitsProxyIsTransparent(t *testing.T) {
 		w.Header().Set("Anthropic-Ratelimit-Requests-Remaining", "41")
 		w.Header().Set("Request-Id", "req_upstream")
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, "event: message_start\ndata: {}\n\n")
+		_, _ = io.WriteString(w, "event: message_start\ndata: {}\n\n")
 		w.(http.Flusher).Flush()
 		select {
 		case <-release:
 		case <-time.After(5 * time.Second):
 		}
-		io.WriteString(w, "event: message_stop\ndata: {}\n\n")
+		_, _ = io.WriteString(w, "event: message_stop\ndata: {}\n\n")
 	}))
 	defer upstream.Close()
 	out := countOutbound(t)
@@ -286,7 +286,7 @@ func TestAnthropicLimitsIgnoresLocalAndOtherPaths(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Anthropic-Ratelimit-Example-Status", "allowed")
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, `{"input_tokens":1}`)
+		_, _ = io.WriteString(w, `{"input_tokens":1}`)
 	}))
 	defer upstream.Close()
 	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -500,7 +500,9 @@ func TestAnthropicLimitsSaveWaitsForOtherWriter(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("written while another writer held the lock")
 	}
-	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
 	if err := <-saved; err != nil {
 		t.Fatal(err)
 	}
@@ -522,7 +524,7 @@ func TestAnthropicLimitsBadFile(t *testing.T) {
 	}
 
 	path := filepath.Join(dir, "limits.json")
-	os.WriteFile(path, []byte("{not json"), 0o600)
+	writeRaw(t, path, "{not json")
 	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
 	t.Cleanup(l.close)
 	if v := l.view(time.Now()); v.State != "unavailable" {
@@ -541,7 +543,7 @@ func TestAnthropicLimitsBadFile(t *testing.T) {
 
 	// A hand-edited file cannot smuggle other headers or unbounded names in.
 	edited := filepath.Join(dir, "edited.json")
-	os.WriteFile(edited, []byte(`{"with_headers":{"at":"`+time.Now().Format(time.RFC3339Nano)+`","headers":{"authorization":"x","anthropic-ratelimit-ok":"1","anthropic-ratelimit-`+strings.Repeat("n", 500)+`":"1"}}}`), 0o600)
+	writeRaw(t, edited, `{"with_headers":{"at":"`+time.Now().Format(time.RFC3339Nano)+`","headers":{"authorization":"x","anthropic-ratelimit-ok":"1","anthropic-ratelimit-`+strings.Repeat("n", 500)+`":"1"}}}`)
 	if v := newAnthropicLimits(edited, anthropicLimitsMaxAge).view(time.Now()); limitKeys(v) != "anthropic-ratelimit-ok" {
 		t.Fatalf("file headers not filtered: %+v", v)
 	}
@@ -550,7 +552,7 @@ func TestAnthropicLimitsBadFile(t *testing.T) {
 func TestAnthropicLimitsSaveErrorKeepsMemory(t *testing.T) {
 	buf := captureLog(t)
 	notDir := filepath.Join(t.TempDir(), "file")
-	os.WriteFile(notDir, nil, 0o600)
+	writeRaw(t, notDir, "")
 	l := newAnthropicLimits(filepath.Join(notDir, "limits.json"), anthropicLimitsMaxAge)
 	t.Cleanup(l.close)
 	l.observe(limitsHeader("Anthropic-Ratelimit-A", "secret-value"), time.Now())
@@ -618,7 +620,7 @@ func TestAnthropicLimitsConcurrentUse(t *testing.T) {
 				}
 				l.view(at)
 				if i%50 == 0 {
-					l.save()
+					_ = l.save() // racing writers; the view below is what counts
 				}
 			}
 		}(g)
@@ -841,7 +843,7 @@ func TestAnthropicLimitsValuesStayOutOfHistoryAndLog(t *testing.T) {
 		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Utilization", "0.4242")
 		w.Header().Set("Anthropic-Ratelimit-Unified-5h-Reset", "1790348417")
 		w.Header().Set("Anthropic-Ratelimit-Unified-Representative-Claim", "claim-value-7931")
-		io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
 	}))
 	defer upstream.Close()
 	history := filepath.Join(t.TempDir(), "history.jsonl")

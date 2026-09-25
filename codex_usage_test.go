@@ -50,7 +50,9 @@ func TestCodexUsageWindowsAndUnknowns(t *testing.T) {
 	}
 	for _, raw := range []string{`{}`, `{"rate_limit":null}`, `{"rate_limit":{"primary_window":{"used_percent":null}},"rate_limit_reset_credits":{"available_count":"private-body"}}`} {
 		var p codexUsagePayload
-		json.Unmarshal([]byte(raw), &p)
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			t.Fatal(err)
+		}
 		got := decodeCodexUsage(p, account, time.Now())
 		if got.ResetsKnown {
 			t.Fatal("missing reset count became zero")
@@ -62,7 +64,9 @@ func TestCodexUsageWindowsAndUnknowns(t *testing.T) {
 		}
 	}
 	var zero codexUsagePayload
-	json.Unmarshal([]byte(`{"rate_limit_reset_credits":{"available_count":0}}`), &zero)
+	if err := json.Unmarshal([]byte(`{"rate_limit_reset_credits":{"available_count":0}}`), &zero); err != nil {
+		t.Fatal(err)
+	}
 	if got := decodeCodexUsage(zero, account, time.Now()); !got.ResetsKnown || got.Resets != 0 {
 		t.Fatal("observed zero resets lost")
 	}

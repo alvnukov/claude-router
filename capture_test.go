@@ -86,7 +86,7 @@ func TestBuildContext(t *testing.T) {
 
 func TestWriteEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
-	os.WriteFile(p, []byte("# comment\nROUTER_LOCAL_MODEL=old\nOTHER=keep\n"), 0o600)
+	writeRaw(t, p, "# comment\nROUTER_LOCAL_MODEL=old\nOTHER=keep\n")
 	err := writeEnv(p, map[string]string{"ROUTER_LOCAL_MODEL": "new", "ROUTER_CLOUD_ONLY": "a,b", "ROUTER_LOCAL_API_KEY": "k y"})
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +102,7 @@ func TestWriteEnv(t *testing.T) {
 func TestParseGzipResponse(t *testing.T) {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
-	zw.Write([]byte(`{"type":"message","model":"m","stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],"usage":{"output_tokens":1}}`))
+	_, _ = zw.Write([]byte(`{"type":"message","model":"m","stop_reason":"end_turn","content":[{"type":"text","text":"hi"}],"usage":{"output_tokens":1}}`))
 	zw.Close()
 	p := parseResponse("application/json", "gzip", buf.Bytes(), false)
 	if p.Note != "" || p.Error != "" || len(p.Blocks) != 1 || p.Blocks[0].Text != "hi" {
@@ -125,7 +125,7 @@ func TestUnassignedBackendIsDisabled(t *testing.T) {
 
 func TestReadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
-	os.WriteFile(p, []byte("# c\nexport A=1\nB=\"x y\"\nC='q'\nD=\nbad line\n"), 0o600)
+	writeRaw(t, p, "# c\nexport A=1\nB=\"x y\"\nC='q'\nD=\nbad line\n")
 	m, err := readEnv(p)
 	if err != nil {
 		t.Fatal(err)
@@ -140,7 +140,7 @@ func TestReadEnv(t *testing.T) {
 
 func TestReloadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
-	os.WriteFile(p, []byte("ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n"), 0o600)
+	writeRaw(t, p, "ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n")
 	cs := &configStore{c: config{failover: true, firstByte: 45 * time.Second}, envPath: p}
 	changed, err := cs.reloadEnv()
 	if err != nil || !changed {
@@ -195,7 +195,7 @@ func TestHistoryPersists(t *testing.T) {
 		rw := newRecorder(httptest.NewRecorder(), 1<<20)
 		rw.Header().Set("Content-Type", "application/json")
 		rw.WriteHeader(200)
-		rw.Write([]byte(`{"type":"message","content":[{"type":"text","text":"hi"}]}`))
+		_, _ = rw.Write([]byte(`{"type":"message","content":[{"type":"text","text":"hi"}]}`))
 		st.finish(r.ID, rw, nil)
 	}
 	st2 := newStore(2, p)

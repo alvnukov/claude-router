@@ -47,14 +47,6 @@ func readEnv(path string) (map[string]string, error) {
 	}
 	return out, nil
 }
-func appendUnique(list []string, v string) []string {
-	for _, x := range list {
-		if x == v {
-			return list
-		}
-	}
-	return append(list, v)
-}
 
 // writeEnv rewrites KEY=VALUE lines in place, keeping comments and every other
 // line as they are, and appends keys the file did not have. The file holds the

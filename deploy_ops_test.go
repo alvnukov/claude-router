@@ -17,7 +17,7 @@ func TestCaddyAdminReadsBothUpstreamsAndRejectsDisagreement(t *testing.T) {
 		return []byte(`{"apps":{"http":{"servers":{"api":{"listen":["` + cfg.PublicAPI + `"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"` + api + `"}]}]}]},"ui":{"listen":["` + cfg.PublicUI + `"],"routes":[{"handle":[{"handler":"reverse_proxy","upstreams":[{"dial":"` + ui + `"}]}]}]}}}}}`)
 	}
 	config := body(cfg.BlueAPI, cfg.BlueUI)
-	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(config) }))
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(config) }))
 	defer admin.Close()
 	ops := newSystemDeployOps(cfg, admin.URL, t.TempDir(), filepath.Join(t.TempDir(), "agents"), filepath.Join(t.TempDir(), "binary"))
 	slot, err := ops.current(t.Context())

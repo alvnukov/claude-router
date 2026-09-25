@@ -134,7 +134,9 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 		PID  int
 		Mode string
 	}
-	json.NewDecoder(resp.Body).Decode(&health)
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		t.Fatal(err)
+	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || health.PID != os.Getpid() || health.Mode != "standby" {
 		t.Fatalf("standby health: %d %+v", resp.StatusCode, health)

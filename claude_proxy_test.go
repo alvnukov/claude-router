@@ -42,7 +42,7 @@ func TestClaudeProxyRestoresEndpointAndPreservesOtherEdits(t *testing.T) {
 	env["ADDED"] = json.RawMessage(`"value"`)
 	root["env"], _ = json.Marshal(env)
 	data, _ := json.Marshal(root)
-	os.WriteFile(path, data, 0600)
+	writeRaw(t, path, string(data))
 	// Simulate a router restart before restoring.
 	p = &claudeProxy{path: path}
 	if err := p.set(target, false); err != nil {
@@ -77,7 +77,7 @@ func TestClaudeProxyAbsentAndInvalidFiles(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "settings.json")
 			p := &claudeProxy{path: path}
 			if input != "missing" {
-				os.WriteFile(path, []byte(input), 0600)
+				writeRaw(t, path, input)
 			}
 			if err := p.set(target, true); err != nil {
 				t.Fatal(err)
@@ -94,8 +94,12 @@ func TestClaudeProxyAbsentAndInvalidFiles(t *testing.T) {
 				return
 			}
 			var got, want any
-			json.Unmarshal(data, &got)
-			json.Unmarshal([]byte(input), &want)
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(input), &want); err != nil {
+				t.Fatal(err)
+			}
 			a, _ := json.Marshal(got)
 			b, _ := json.Marshal(want)
 			if string(a) != string(b) {
@@ -105,7 +109,7 @@ func TestClaudeProxyAbsentAndInvalidFiles(t *testing.T) {
 	}
 	for _, input := range []string{`not JSON`, `null`, `{"env":[]}`} {
 		path := filepath.Join(t.TempDir(), "settings.json")
-		os.WriteFile(path, []byte(input), 0600)
+		writeRaw(t, path, input)
 		p := &claudeProxy{path: path}
 		if err := p.set(target, true); err == nil {
 			t.Fatal("invalid file accepted")
@@ -125,7 +129,7 @@ func TestClaudeProxyDoesNotOverwriteExternalEndpointChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	external := `{"env":{"ANTHROPIC_BASE_URL":"https://other.example"}}`
-	os.WriteFile(path, []byte(external), 0600)
+	writeRaw(t, path, external)
 	if err := p.set(target, false); err == nil {
 		t.Fatal("external change overwritten")
 	}

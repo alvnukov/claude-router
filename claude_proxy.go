@@ -125,7 +125,7 @@ func readClaudeProxyBackup(path string) (*claudeProxyBackup, error) {
 
 func proxyURL(env map[string]json.RawMessage) string {
 	var value string
-	json.Unmarshal(env[claudeBaseURLKey], &value)
+	_ = json.Unmarshal(env[claudeBaseURLKey], &value) // absent or not a string: no proxy
 	return strings.TrimRight(value, "/")
 }
 
@@ -270,7 +270,7 @@ func (u *uiServer) settingsClaudeProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	r.ParseForm()
+	_ = r.ParseForm() // a malformed form reads as empty fields
 	op := r.FormValue("op")
 	target, err := routerClientURL(u.cs.get().clientListen())
 	if err == nil && op != "connect" && op != "restore" {

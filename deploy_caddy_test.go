@@ -25,7 +25,7 @@ func startCaddy(t *testing.T, home, caddyfile string) func() {
 		t.Fatal(err)
 	}
 	var once sync.Once
-	stop := func() { once.Do(func() { cmd.Process.Kill(); cmd.Wait() }) }
+	stop := func() { once.Do(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }) }
 	t.Cleanup(stop)
 	return stop
 }
@@ -62,7 +62,7 @@ func TestRealCaddyFlipRoutesToNewSlotAndSurvivesRestart(t *testing.T) {
 	}
 	cfg := testDeployConfig(t)
 	backend := func(slot string) string {
-		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, slot) }))
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, slot) }))
 		t.Cleanup(s.Close)
 		return s.Listener.Addr().String()
 	}

@@ -155,20 +155,6 @@ func mtime(p string) time.Time {
 	return time.Time{}
 }
 
-func (s *configStore) reloadProviders() error {
-	if s.provPath == "" {
-		return nil
-	}
-	setup, err := readProviders(s.provPath)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return s.applyLocal(setup, false)
-}
-
 // migrate runs the config migrations a standby slot skipped at start.
 func (s *configStore) migrate() error {
 	s.mu.Lock()
