@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -288,7 +291,7 @@ func TestCodexBrowserLogin(t *testing.T) {
 	}
 	s := &codexAuthStore{path: filepath.Join(t.TempDir(), "auth.json"), issuer: issuer.URL, client: issuer.Client()}
 	done := make(chan error, 1)
-	go func() { done <- s.finishBrowserFlow(t.Context(), flow) }()
+	go func() { done <- s.finishBrowserFlow(t.Context(), flow, nil) }()
 	resp, err := http.Get(flow.redirectURI + "?code=one-time-code&state=" + url.QueryEscape(flow.state))
 	if err != nil {
 		t.Fatal(err)
@@ -305,6 +308,117 @@ func TestCodexBrowserLogin(t *testing.T) {
 	}
 	if c, err := readCodexCredential(s.path); err != nil || c.Tokens.AccountID != "account-browser" {
 		t.Fatalf("stored credential: %v", err)
+	}
+}
+
+func codexTestIssuer(t *testing.T) *httptest.Server {
+	t.Helper()
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idData, _ := json.Marshal(map[string]any{"chatgpt_account_id": "account-browser"})
+		idToken := "header." + base64.RawURLEncoding.EncodeToString(idData) + ".signature"
+		fmt.Fprintf(w, `{"access_token":%q,"refresh_token":"refresh-browser","id_token":%q}`, testJWT(time.Now().Add(time.Hour)), idToken)
+	}))
+	t.Cleanup(issuer.Close)
+	return issuer
+}
+
+func postForm(h http.Handler, target string, form url.Values) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("POST", target, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// codexLoginUI points the login handler at a test issuer and a free port.
+func codexLoginUI(t *testing.T) (*uiServer, http.Handler) {
+	t.Helper()
+	issuer := codexTestIssuer(t)
+	useTestCodexHome(t, issuer.URL, issuer.Client())
+	old := codexLoginAddr
+	codexLoginAddr = "127.0.0.1:0"
+	t.Cleanup(func() { codexLoginAddr = old })
+	u, h := codexUI(t)
+	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	return u, h
+}
+
+func completeCodexCallback(t *testing.T, loginURL string) {
+	t.Helper()
+	parsed, err := url.Parse(loginURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := parsed.Query()
+	resp, err := http.Get(q.Get("redirect_uri") + "?code=one-time-code&state=" + url.QueryEscape(q.Get("state")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+}
+
+func waitCodexLogin(t *testing.T, u *uiServer) (status, problem string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		u.oauthMu.Lock()
+		status, problem = u.oauthStatus, u.oauthError
+		u.oauthMu.Unlock()
+		if status != "pending" {
+			return status, problem
+		}
+	}
+	t.Fatal("login did not finish")
+	return "", ""
+}
+
+func TestCodexBrowserLoginTargetsPending(t *testing.T) {
+	u, h := codexLoginUI(t)
+	first := postForm(h, "/settings/codex/login", url.Values{"provider": {"work"}})
+	if first.Code != http.StatusSeeOther {
+		t.Fatalf("login: %d %s", first.Code, first.Body.String())
+	}
+	loginURL := first.Header().Get("Location")
+	if other := postForm(h, "/settings/codex/login", url.Values{"provider": {"codex"}}); other.Code != http.StatusConflict || !strings.Contains(other.Body.String(), "work") {
+		t.Fatalf("second connection while pending: %d %s", other.Code, other.Body.String())
+	}
+	if again := postForm(h, "/settings/codex/login", url.Values{"provider": {"work"}}); again.Code != http.StatusSeeOther || again.Header().Get("Location") != loginURL {
+		t.Fatalf("same connection while pending: %d %q", again.Code, again.Header().Get("Location"))
+	}
+	completeCodexCallback(t, loginURL)
+	if status, problem := waitCodexLogin(t, u); status != "complete" {
+		t.Fatalf("login %s: %s", status, problem)
+	}
+	work, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if !work.connected() || codexAuth.connected() {
+		t.Fatal("login went to the wrong connection")
+	}
+}
+
+func TestCodexLoginForReplacedProviderIsDiscarded(t *testing.T) {
+	u, h := codexLoginUI(t)
+	first := postForm(h, "/settings/codex/login", url.Values{"provider": {"work"}})
+	if first.Code != http.StatusSeeOther {
+		t.Fatalf("login: %d %s", first.Code, first.Body.String())
+	}
+	get(t, h, "POST", "/settings/providers", url.Values{"op": {"remove"}, "name": {"work"}})
+	get(t, h, "POST", "/settings/providers", url.Values{"op": {"add"}, "name": {"work"}, "type": {"codex"}})
+	now, ok := u.cs.get().local.provider("work")
+	if !ok || now.AuthID == testAuthB {
+		t.Fatal("work was not recreated with a new id")
+	}
+	completeCodexCallback(t, first.Header().Get("Location"))
+	if status, problem := waitCodexLogin(t, u); status != "failed" || !strings.Contains(problem, "подключение изменилось") {
+		t.Fatalf("login %s: %s", status, problem)
+	}
+	old, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	fresh, _ := codexStoreFor(now)
+	for _, s := range []*codexAuthStore{old, fresh} {
+		if _, err := os.Stat(s.path); !os.IsNotExist(err) {
+			t.Fatalf("%s written: %v", s.path, err)
+		}
+	}
+	if v := u.codexLoginViewFor(now); v.Error != "" || v.Connected {
+		t.Fatalf("new work shows the discarded login: %+v", v)
 	}
 }
 
@@ -325,5 +439,71 @@ func TestCodexBrowserRejectsWrongState(t *testing.T) {
 	result := <-flow.result
 	if result.err == nil || result.code != "" {
 		t.Fatal("unverified code accepted")
+	}
+}
+
+func TestCodexConcurrentExpiryRefreshesOnce(t *testing.T) {
+	var refreshes atomic.Int32
+	fresh := testJWT(time.Now().Add(2 * time.Hour))
+	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprintf(w, `{"access_token":%q,"refresh_token":"rotated"}`, fresh)
+	}))
+	defer oauth.Close()
+	path := filepath.Join(t.TempDir(), "auth.json")
+	expired := usageCredential("acct")
+	expired.Tokens.AccessToken = testJWT(time.Now().Add(-time.Minute))
+	if err := (&codexAuthStore{path: path}).save(expired); err != nil {
+		t.Fatal(err)
+	}
+	// Two stores on one path stand in for two router processes.
+	one := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client()}
+	two := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client()}
+	var wg sync.WaitGroup
+	for _, s := range []*codexAuthStore{one, two} {
+		wg.Add(1)
+		go func(s *codexAuthStore) {
+			defer wg.Done()
+			if c, err := s.credentialFor(context.Background()); err != nil || c.Tokens.AccessToken != fresh {
+				t.Errorf("credential: %v", err)
+			}
+		}(s)
+	}
+	wg.Wait()
+	if refreshes.Load() != 1 {
+		t.Fatalf("refreshes=%d", refreshes.Load())
+	}
+}
+
+func TestCodexConcurrentRejectedRefreshesOnce(t *testing.T) {
+	var refreshes atomic.Int32
+	fresh := testJWT(time.Now().Add(2 * time.Hour))
+	oauth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes.Add(1)
+		time.Sleep(50 * time.Millisecond)
+		fmt.Fprintf(w, `{"access_token":%q,"refresh_token":"rotated"}`, fresh)
+	}))
+	defer oauth.Close()
+	path := filepath.Join(t.TempDir(), "auth.json")
+	cred := usageCredential("acct")
+	if err := (&codexAuthStore{path: path}).save(cred); err != nil {
+		t.Fatal(err)
+	}
+	one := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client(), loaded: true, credential: cred}
+	two := &codexAuthStore{path: path, issuer: oauth.URL, client: oauth.Client(), loaded: true, credential: cred}
+	var wg sync.WaitGroup
+	for _, s := range []*codexAuthStore{one, two} {
+		wg.Add(1)
+		go func(s *codexAuthStore) {
+			defer wg.Done()
+			if c, err := s.refreshRejected(context.Background(), cred.Tokens.AccessToken, "acct"); err != nil || c.Tokens.AccessToken != fresh {
+				t.Errorf("rejected refresh: %v", err)
+			}
+		}(s)
+	}
+	wg.Wait()
+	if refreshes.Load() != 1 {
+		t.Fatalf("refreshes=%d", refreshes.Load())
 	}
 }

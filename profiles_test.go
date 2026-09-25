@@ -90,7 +90,7 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	cfg := cs.get()
 	req := anthropicRequest{Model: "claude-opus-5"}
 	scope := affinityKey(cfg, []byte(`{"metadata":{"user_id":"{\"session_id\":\"session-1\"}"}}`), req)
-	h.bindCandidates(scope, []candidate{{Key: "p/a"}})
+	h.bindCandidates(scope, poolRoute{}, []candidate{{Key: "p/a"}})
 	if len(h.sessions) == 0 {
 		t.Fatal("binding not created")
 	}
@@ -269,7 +269,7 @@ func TestProfilesHandEditChangesActiveProfileAndClearsAffinity(t *testing.T) {
 	if err := writeProviders(path, l); err != nil {
 		t.Fatal(err)
 	}
-	h.bindCandidates("session", []candidate{{Key: "p/a"}})
+	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
 	if err := cs.reloadProfiles(h); err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err := cs.applyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.savePoolSettings("work", poolSettings{Balance: 4, FirstByteSec: 11}); err != nil {
+	if err := cs.savePoolSettings("work", poolSettings{ProbeSec: 4, FirstByteSec: 11}); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.activateProfile("default", h); err != nil {
@@ -425,7 +425,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.ModelPools["work"][0] != (poolTarget{Model: "p/b", Effort: "xhigh"}) || reloaded.PoolSettings["work"].Balance != 4 {
+	if reloaded.ModelPools["work"][0] != (poolTarget{Model: "p/b", Effort: "xhigh"}) || reloaded.PoolSettings["work"].ProbeSec != 4 {
 		t.Fatalf("copy changes lost on disk: %+v", reloaded)
 	}
 }

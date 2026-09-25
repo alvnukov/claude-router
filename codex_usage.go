@@ -55,6 +55,7 @@ type codexUsageRow struct {
 	Blocked   bool
 }
 type codexUsageView struct {
+	Provider           string
 	Connected          bool
 	Account            codexAccount
 	Plan               string
@@ -324,15 +325,44 @@ const (
 	codexUsageMaxAge  = 30 * time.Minute
 )
 
-// refreshEvery sends the refresh button's request at start and on every tick
-// until ctx ends. A failed request waits for the next tick, and a ticker drops
-// ticks that arrive during a request, so a slow Codex never queues requests.
-func (cache *codexUsageCache) refreshEvery(ctx context.Context, auth *codexAuthStore, ticks <-chan time.Time) {
+// codexUsageTarget is one Codex connection as the background refresh and
+// /api/limits see it: its name, the cache its settings block reads and its
+// credential store.
+type codexUsageTarget struct {
+	provider string
+	cache    *codexUsageCache
+	auth     *codexAuthStore
+}
+
+// codexUsageTargets lists the Codex connections of the current settings in
+// providers order. A connection without a usable store is left out; the
+// settings page shows its error.
+func (u *uiServer) codexUsageTargets() []codexUsageTarget {
+	var targets []codexUsageTarget
+	for _, p := range u.cs.get().local.Providers {
+		if p.Type != "codex" {
+			continue
+		}
+		if auth, err := codexStoreFor(p); err == nil {
+			targets = append(targets, codexUsageTarget{p.Name, u.usageCache(p), auth})
+		}
+	}
+	return targets
+}
+
+// refreshCodexUsageEvery sends the refresh button's request for every Codex
+// connection, one after another, at start and on every tick until ctx ends.
+// The list is read anew each time, so added and removed connections follow
+// the settings. A failed request waits for the next tick, and a ticker drops
+// ticks that arrive during a refresh, so a slow Codex never queues requests.
+func refreshCodexUsageEvery(ctx context.Context, targets func() []codexUsageTarget, ticks <-chan time.Time) {
 	refresh := func() {
-		rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		if v := cache.get(rctx, auth, true); v.Connected && v.Error != "" {
-			log.Printf("codex usage refresh: %s", v.Error)
+		for _, t := range targets() {
+			rctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if v := t.cache.get(rctx, t.auth, true); v.Connected && v.Error != "" {
+				log.Printf("codex usage refresh %s: %s", t.provider, v.Error)
+			}
+			cancel()
 		}
 	}
 	refresh()
@@ -350,7 +380,7 @@ func (u *uiServer) startCodexUsageUpdates(ctx context.Context) {
 	ticker := time.NewTicker(codexUsageRefresh)
 	go func() {
 		defer ticker.Stop()
-		u.codexUsage.refreshEvery(ctx, codexAuth, ticker.C)
+		refreshCodexUsageEvery(ctx, u.codexUsageTargets, ticker.C)
 	}()
 }
 
@@ -374,9 +404,32 @@ func (u *uiServer) settingsCodexUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	p, store, err := u.codexProvider(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	view := u.codexUsage.get(ctx, codexAuth, r.Method == http.MethodPost)
+	view := u.usageCache(p).get(ctx, store, r.Method == http.MethodPost)
+	view.Provider = p.Name
 	w.Header().Set("Cache-Control", "no-store")
 	u.render(w, "codex-usage", view)
+}
+
+// usageCache keeps one connection's usage apart from every other's; a
+// recreated name gets a fresh cache through its new id.
+func (u *uiServer) usageCache(p provider) *codexUsageCache {
+	u.usageMu.Lock()
+	defer u.usageMu.Unlock()
+	if u.codexUsages == nil {
+		u.codexUsages = map[string]*codexUsageCache{}
+	}
+	key := p.Name + "\x00" + p.AuthID
+	c, ok := u.codexUsages[key]
+	if !ok {
+		c = &codexUsageCache{client: u.codexUsage.client}
+		u.codexUsages[key] = c
+	}
+	return c
 }

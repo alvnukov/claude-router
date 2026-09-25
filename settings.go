@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +27,81 @@ type configStore struct {
 	provMtime    time.Time
 	profileMtime time.Time
 	health       *health
+
+	reloadMu   sync.Mutex
+	reloadErrs map[string]reloadFailure
+	appliedAt  time.Time
+}
+
+// reloadFailure is the latest rejected hand edit of one settings file. The
+// previous snapshot keeps serving until the file is fixed.
+type reloadFailure struct {
+	File     string
+	Err      string
+	At       time.Time
+	Snapshot time.Time
+}
+
+func (s *configStore) noteReload(file string, err error) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	if err == nil {
+		delete(s.reloadErrs, file)
+		s.appliedAt = time.Now()
+		return
+	}
+	if s.reloadErrs == nil {
+		s.reloadErrs = map[string]reloadFailure{}
+	}
+	if old, ok := s.reloadErrs[file]; ok && old.Err == err.Error() {
+		return
+	}
+	log.Printf("%s reload: %v", filepath.Base(file), err)
+	s.reloadErrs[file] = reloadFailure{File: file, Err: err.Error(), At: time.Now(), Snapshot: s.appliedAt}
+}
+
+func (s *configStore) reloadFailures() []reloadFailure {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	out := make([]reloadFailure, 0, len(s.reloadErrs))
+	for _, f := range s.reloadErrs {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].File < out[j].File })
+	return out
+}
+
+func (s *configStore) reloadFailing(file string) bool {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	_, ok := s.reloadErrs[file]
+	return ok
+}
+
+// wroteProviders records the router's own write of the providers file and its
+// profiles, so the watcher skips it. While a hand edit stands rejected the
+// watcher reads them back once instead: the write replaced the rejected file,
+// and the banner goes unless a file the write did not touch is still bad.
+func (s *configStore) wroteProviders() {
+	s.provMtime = mtime(s.provPath)
+	s.wroteProfiles()
+}
+
+// wroteProfiles is wroteProviders for a write that leaves the providers file
+// alone, such as a profile switch or delete.
+func (s *configStore) wroteProfiles() {
+	s.profileMtime = profilesMtime(s.provPath)
+	if s.reloadFailing(s.provPath) {
+		s.provMtime = time.Time{}
+	}
+}
+
+// wroteEnv is wroteProviders for the env file.
+func (s *configStore) wroteEnv() {
+	s.envMtime = mtime(s.envPath)
+	if s.reloadFailing(s.envPath) {
+		s.envMtime = time.Time{}
+	}
 }
 
 // envFilePath is ROUTER_ENV_FILE or the env file beside the binary.
@@ -64,6 +140,7 @@ func newConfigStore(c config, provPath string) *configStore {
 	s.envMtime = mtime(p)
 	s.provMtime = mtime(provPath)
 	s.profileMtime = profilesMtime(provPath)
+	s.appliedAt = time.Now()
 	return s
 }
 
@@ -87,31 +164,38 @@ func (s *configStore) get() config {
 func (s *configStore) watch(every time.Duration) {
 	go func() {
 		for range time.Tick(every) {
-			if m := mtime(s.envPath); !m.Equal(s.envMtime) {
-				s.envMtime = m
-				if changed, err := s.reloadEnv(); err != nil {
-					log.Printf("env reload: %v", err)
-				} else if changed {
-					c := s.get()
-					log.Printf("env reloaded: failover=%v first-byte=%s balance=%d probe=%s budget=%d",
-						c.failover, c.firstByte, c.balance, c.probeEvery, c.maxInputChars)
-				}
-			}
-			if s.provPath == "" {
-				continue
-			}
-			if m, p := mtime(s.provPath), profilesMtime(s.provPath); !m.Equal(s.provMtime) || !p.Equal(s.profileMtime) {
-				if err := s.reloadProfiles(s.health); err != nil {
-					if !os.IsNotExist(err) {
-						log.Printf("providers reload: %v", err)
-					}
-				} else {
-					s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
-					log.Printf("providers reloaded: %s", s.get().local.summary())
-				}
-			}
+			s.pollOnce()
 		}
 	}()
+}
+
+// pollOnce applies a hand edit of either file. A rejected edit keeps the
+// previous snapshot and shows on the settings page until a good reload.
+func (s *configStore) pollOnce() {
+	if m := mtime(s.envPath); !m.Equal(s.envMtime) {
+		s.envMtime = m
+		changed, err := s.reloadEnv()
+		s.noteReload(s.envPath, err)
+		if err == nil && changed {
+			c := s.get()
+			log.Printf("env reloaded: failover=%v first-byte=%s balance=%d probe=%s budget=%d",
+				c.failover, c.firstByte, c.balance, c.probeEvery, c.maxInputChars)
+		}
+	}
+	if s.provPath == "" {
+		return
+	}
+	if m, p := mtime(s.provPath), profilesMtime(s.provPath); !m.Equal(s.provMtime) || !p.Equal(s.profileMtime) {
+		if err := s.reloadProfiles(s.health); err != nil {
+			if !os.IsNotExist(err) {
+				s.noteReload(s.provPath, err)
+			}
+		} else {
+			s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
+			s.noteReload(s.provPath, nil)
+			log.Printf("providers reloaded: %s", s.get().local.summary())
+		}
+	}
 }
 
 func (l localSetup) summary() string {
@@ -150,6 +234,7 @@ type settingsInput struct {
 	FirstByte     string // seconds
 	Balance       string // models to spread over
 	ProbeEvery    string // seconds, 0 off
+	Type          string // pool type; "" keeps the stored one
 }
 
 func inputFromConfig(c config) settingsInput {
@@ -211,7 +296,7 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 		if err := writeEnv(s.envPath, updates); err != nil {
 			return fmt.Errorf("запись %s: %w", s.envPath, err)
 		}
-		s.envMtime = mtime(s.envPath)
+		s.wroteEnv()
 	}
 	s.c = next
 	return nil
@@ -257,8 +342,7 @@ func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile
 		if err := writeProviders(s.provPath, l); err != nil {
 			return fmt.Errorf("запись %s: %w", s.provPath, err)
 		}
-		s.provMtime = mtime(s.provPath)
-		s.profileMtime = profilesMtime(s.provPath)
+		s.wroteProviders()
 	}
 	s.c = next
 	return nil

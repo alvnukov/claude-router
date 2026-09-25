@@ -177,7 +177,7 @@ func (s *configStore) ensureProfiles() error {
 		if err := saveConfigurationMigration(s.provPath, s.c.local, ".before-profiles"); err != nil {
 			return err
 		}
-		s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
+		s.wroteProviders()
 		return nil
 	}
 	l := s.c.local.clone()
@@ -190,8 +190,7 @@ func (s *configStore) ensureProfiles() error {
 		if err := saveConfigurationMigration(s.provPath, l, ".before-profiles"); err != nil {
 			return err
 		}
-		s.provMtime = mtime(s.provPath)
-		s.profileMtime = profilesMtime(s.provPath)
+		s.wroteProviders()
 	}
 	s.c.local = l
 	return nil
@@ -247,7 +246,7 @@ func (s *configStore) activateProfile(name string, h *health) error {
 	if err := writeActiveProfile(s.provPath, name); err != nil {
 		return err
 	}
-	s.profileMtime = profilesMtime(s.provPath)
+	s.wroteProfiles()
 	s.c.local = l
 	if h != nil {
 		h.clearSessions()
@@ -273,7 +272,7 @@ func (s *configStore) deleteProfile(name string) error {
 		return err
 	}
 	s.c.local = l
-	s.profileMtime = profilesMtime(s.provPath)
+	s.wroteProfiles()
 	return nil
 }
 
@@ -284,8 +283,7 @@ func (s *configStore) persistLocalLocked(l localSetup) error {
 	if err := writeProviders(s.provPath, l); err != nil {
 		return err
 	}
-	s.provMtime = mtime(s.provPath)
-	s.profileMtime = profilesMtime(s.provPath)
+	s.wroteProviders()
 	return nil
 }
 

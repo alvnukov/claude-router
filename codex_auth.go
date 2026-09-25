@@ -98,10 +98,26 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 	if jwtExpiry(s.credential.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
 		return s.credential, nil
 	}
-	if err := s.refresh(ctx); err != nil {
+	if err := s.refreshLocked(ctx); err != nil {
 		return codexCredential{}, err
 	}
 	return s.credential, nil
+}
+
+func (s *codexAuthStore) refreshLocked(ctx context.Context) error {
+	return withFileLock(ctx, s.path+".lock", func() error {
+		if disk, err := readCodexCredential(s.path); err == nil {
+			if disk.Tokens.RefreshToken != s.credential.Tokens.RefreshToken || disk.Tokens.AccessToken != s.credential.Tokens.AccessToken {
+				s.credential = disk
+				if jwtExpiry(disk.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
+					return nil
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		return s.refresh(ctx)
+	})
 }
 
 func jwtExpiry(token string) time.Time {
@@ -225,17 +241,39 @@ func (s *codexAuthStore) importFromCLI() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.save(c); err != nil {
-		return err
-	}
-	s.credential, s.loaded = c, true
-	s.rejectedToken, s.authProblem = "", ""
-	return nil
+	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if err := s.save(c); err != nil {
+			return err
+		}
+		s.credential, s.loaded = c, true
+		s.rejectedToken, s.authProblem = "", ""
+		return nil
+	})
 }
 
 func (s *codexAuthStore) connected() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.loaded {
+		return true
+	}
+	_, err := readCodexCredential(s.path)
+	return err == nil
+}
+
+// signedIn reports whether the store can authorize a request without a new
+// sign-in: a credential is loaded or on disk, and it was not rejected. Pool
+// selection asks this of every member, so it never waits for the lock: a
+// holder is loading or refreshing the token, which can take seconds, and the
+// member stays a candidate whose own request finds out.
+func (s *codexAuthStore) signedIn() bool {
+	if !s.mu.TryLock() {
+		return true
+	}
+	defer s.mu.Unlock()
+	if s.authProblem != "" {
+		return false
+	}
 	if s.loaded {
 		return true
 	}
@@ -306,7 +344,7 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 		return codexCredential{}, errCodexSignIn
 	}
 	s.rejectedToken, s.rejectedAt = rejected, time.Now()
-	if err := s.refresh(ctx); err != nil {
+	if err := s.refreshLocked(ctx); err != nil {
 		s.authProblem = errCodexSignIn.Error()
 		return codexCredential{}, errCodexSignIn
 	}

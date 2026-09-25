@@ -21,6 +21,7 @@ type provider struct {
 	Type    string `json:"type,omitempty"` // "" (OpenAI chat) or "codex" (ChatGPT subscription)
 	BaseURL string `json:"base_url"`
 	APIKey  string `json:"api_key,omitempty"`
+	AuthID  string `json:"auth_id,omitempty"` // Codex only: names this connection's credential file
 }
 
 type localModel struct {
@@ -119,6 +120,7 @@ func providerNameOK(n string) bool {
 // validate normalises in place and rejects anything the router could not act on.
 func (l *localSetup) validate() error {
 	seen := map[string]bool{}
+	authIDs := map[string]bool{}
 	for i := range l.Providers {
 		p := &l.Providers[i]
 		p.Name = strings.TrimSpace(p.Name)
@@ -133,6 +135,21 @@ func (l *localSetup) validate() error {
 			if p.BaseURL != codexBaseURL || p.APIKey != "" {
 				return fmt.Errorf("provider %q: Codex использует фиксированный адрес и подписку, без API key", p.Name)
 			}
+			if p.AuthID == "" && p.Name != "codex" {
+				return fmt.Errorf("provider %q: у подключения Codex нет auth_id; удалите его и добавьте заново через дашборд", p.Name)
+			}
+			if p.AuthID != "" && !authIDOK(p.AuthID) {
+				return fmt.Errorf("provider %q: неверный auth_id", p.Name)
+			}
+			if len(p.Name) > 64 {
+				return fmt.Errorf("provider %q: имя подключения Codex длиннее 64 байт", p.Name)
+			}
+			if p.AuthID != "" && authIDs[p.AuthID] {
+				return fmt.Errorf("provider %q: auth_id повторяется", p.Name)
+			}
+			authIDs[p.AuthID] = true
+		} else if p.AuthID != "" {
+			return fmt.Errorf("provider %q: auth_id бывает только у Codex", p.Name)
 		}
 		if !providerNameOK(p.Name) {
 			return fmt.Errorf("provider %q: имя без пробелов, «/», запятых и кавычек", p.Name)
@@ -269,6 +286,29 @@ func validProviderEffort(value string) bool {
 }
 
 func readProviders(path string) (localSetup, error) {
+	l, _, err := readProvidersWith(path, nil)
+	return l, err
+}
+
+// readProvidersWith lets prepare change the setup before it is validated; the
+// bool reports whether it did. Only startup passes a prepare, so a manual
+// reload stays strict and never assigns anything.
+func readProvidersWith(path string, prepare func(*localSetup) bool) (localSetup, bool, error) {
+	l, err := readProvidersRaw(path)
+	if err != nil {
+		return l, false, err
+	}
+	changed := false
+	if prepare != nil {
+		changed = prepare(&l)
+	}
+	if err := l.validateProfiles(); err != nil {
+		return l, changed, fmt.Errorf("%s: %w", path, err)
+	}
+	return l, changed, nil
+}
+
+func readProvidersRaw(path string) (localSetup, error) {
 	var l localSetup
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -316,9 +356,6 @@ func readProviders(path string) (localSetup, error) {
 		if err := l.useProfile(l.ActiveProfile); err != nil {
 			return l, fmt.Errorf("%s: %w", path, err)
 		}
-	}
-	if err := l.validateProfiles(); err != nil {
-		return l, fmt.Errorf("%s: %w", path, err)
 	}
 	return l, nil
 }
@@ -420,23 +457,25 @@ func seedFromEnv() localSetup {
 }
 
 // Only a missing file may be seeded from the environment. Existing-file errors
-// must stop startup before any migration can write to disk.
-func loadLocalSetupChecked(path string) (localSetup, error) {
+// must stop startup before any migration can write to disk. assigned reports
+// that a Codex provider without auth_id got a fresh ID in memory; the caller
+// persists it once (startup only). The seed path returns false.
+func loadLocalSetupChecked(path string) (localSetup, bool, error) {
 	if path != "" {
-		l, err := readProviders(path)
+		l, assigned, err := readProvidersWith(path, assignCodexAuthIDs)
 		if err == nil {
-			return l, nil
+			return l, assigned, nil
 		}
 		if !os.IsNotExist(err) {
-			return localSetup{}, err
+			return localSetup{}, false, err
 		}
 		if _, statErr := os.Stat(path); statErr == nil {
-			return localSetup{}, err
+			return localSetup{}, false, err
 		} else if !os.IsNotExist(statErr) {
-			return localSetup{}, statErr
+			return localSetup{}, false, statErr
 		}
 	}
-	return seedFromEnv(), nil
+	return seedFromEnv(), false, nil
 }
 
 // clone copies the slices so an edit never touches the snapshot readers hold.

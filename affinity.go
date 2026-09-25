@@ -12,7 +12,56 @@ import (
 type sessionBinding struct {
 	Model     string
 	Selection string
+	Pool      string // pool name, for the per-pool session count
+	Provider  string // connection of Model
 	Used      time.Time
+}
+
+// poolRoute names the pool a request was routed to and its type. The zero
+// value (a model route, or a caller that does not route) never balances.
+type poolRoute struct{ Name, Type string }
+
+// balanceCriterion scores a connection for a new session of a balance pool.
+// The lowest score wins; a tie keeps pool order. It runs under h.mu.
+type balanceCriterion func(h *health, pool string, p provider) int
+
+// sessionsOnConnection counts the live sessions of this pool bound to p.
+func sessionsOnConnection(h *health, pool string, p provider) int {
+	n := 0
+	for _, b := range h.sessions {
+		if b.Pool == pool && b.Provider == p.Name {
+			n++
+		}
+	}
+	return n
+}
+
+// balanceFirst moves the first member of the best-scored connection to the
+// front. Connections are compared, not models: each is represented by its
+// first member that is not cooling, and a cooling member never leads.
+func (h *health) balanceFirst(pool string, candidates []candidate) []candidate {
+	score := h.balanceBy
+	if score == nil {
+		score = sessionsOnConnection
+	}
+	best, bestScore := -1, 0
+	seen := map[string]bool{}
+	for i, c := range candidates {
+		if c.Stat.Cooling() || seen[c.Provider.Name] {
+			continue
+		}
+		seen[c.Provider.Name] = true
+		if s := score(h, pool, c.Provider); best < 0 || s < bestScore {
+			best, bestScore = i, s
+		}
+	}
+	if best <= 0 {
+		return candidates
+	}
+	lead := candidates[best]
+	copy(candidates[1:best+1], candidates[:best])
+	candidates[0] = lead
+	return candidates
 }
 
 func affinityKey(cfg config, body []byte, req anthropicRequest) string {
@@ -29,9 +78,10 @@ func affinityKey(cfg config, body []byte, req anthropicRequest) string {
 	return hex.EncodeToString(digest[:])
 }
 
-// bindCandidates atomically chooses a first model for new concurrent requests
-// in the same session. Load balancing only applies before this first binding.
-func (h *health) bindCandidates(scope string, candidates []candidate) []candidate {
+// bindCandidates atomically chooses the first member for a session. A bound
+// session keeps its member; in a balance pool (poolRoute) a new session goes
+// to the least-loaded connection, chosen under the same lock that records it.
+func (h *health) bindCandidates(scope string, pool poolRoute, candidates []candidate) []candidate {
 	if scope == "" || len(candidates) == 0 {
 		return candidates
 	}
@@ -51,10 +101,16 @@ func (h *health) bindCandidates(scope string, candidates []candidate) []candidat
 			if cand.Key == binding.Model && candidateSelection(cand) == binding.Selection {
 				copy(candidates[1:i+1], candidates[:i])
 				candidates[0] = cand
-				h.sessions[scope] = sessionBinding{Model: cand.Key, Selection: candidateSelection(cand), Used: now}
+				h.sessions[scope] = sessionBinding{Model: cand.Key, Selection: candidateSelection(cand), Pool: pool.Name, Provider: cand.Provider.Name, Used: now}
 				return candidates
 			}
 		}
+		// The bound member is gone: the stale binding must not count for its
+		// old connection.
+		delete(h.sessions, scope)
+	}
+	if pool.Type == poolBalance {
+		candidates = h.balanceFirst(pool.Name, candidates)
 	}
 	if len(h.sessions) >= 4096 {
 		oldestKey := ""
@@ -66,7 +122,7 @@ func (h *health) bindCandidates(scope string, candidates []candidate) []candidat
 		}
 		delete(h.sessions, oldestKey)
 	}
-	h.sessions[scope] = sessionBinding{Model: candidates[0].Key, Selection: candidateSelection(candidates[0]), Used: now}
+	h.sessions[scope] = sessionBinding{Model: candidates[0].Key, Selection: candidateSelection(candidates[0]), Pool: pool.Name, Provider: candidates[0].Provider.Name, Used: now}
 	return candidates
 }
 
@@ -77,7 +133,7 @@ func (h *health) moveSession(scope, from string, to candidate) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if binding, ok := h.sessions[scope]; ok && binding.Model == from {
-		h.sessions[scope] = sessionBinding{Model: to.Key, Selection: candidateSelection(to), Used: time.Now()}
+		h.sessions[scope] = sessionBinding{Model: to.Key, Selection: candidateSelection(to), Pool: binding.Pool, Provider: to.Provider.Name, Used: time.Now()}
 	}
 }
 

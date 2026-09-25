@@ -3,6 +3,7 @@
 <div class="settings-heading"><div><h1>Настройки роутера</h1><p class="help">Семейство модели → входной effort → Anthropic, модель или пул</p></div><a class="btn" href="/">История запросов</a></div>
 {{with .Flash}}<div class="note ok" role="status">{{.}}</div>{{end}}
 {{with .Err}}<div class="note err" role="alert">{{.}}</div>{{end}}
+{{range .ReloadErrors}}<div class="note err" role="alert">файл {{base .File}} не применён: {{.Err}}; действует снимок от {{.Snapshot.Format "2006-01-02 15:04:05"}}</div>{{end}}
 <section class="settings-section" id="profiles"><h2>Профили маршрутизации</h2><p class="help">Активный профиль: <strong>{{.ActiveProfile}}</strong>. Провайдеры и каталог моделей общие для всех профилей; маршруты и пулы принадлежат выбранному профилю. Переключение применяется к следующему запросу.</p>
 <div class="inline-form">{{range .ProfileNames}}<form hx-post="/settings/profiles/activate" hx-target="#detail"><input type="hidden" name="name" value="{{.}}"><button class="btn" type="submit" {{if eq . $.ActiveProfile}}disabled{{end}}>{{.}}</button></form>{{end}}</div>
 <form class="inline-form" hx-post="/settings/profiles" hx-target="#detail"><input name="name" placeholder="Имя профиля" aria-label="Имя нового профиля" required><button class="btn" type="submit" name="mode" value="clone">Клонировать активный</button><button class="btn" type="submit" name="mode" value="empty">Создать пустой</button></form>
@@ -38,9 +39,9 @@
 <details class="settings-extra pool-behavior"><summary>Сессии и таймауты</summary><p class="help">Внутри сессии каждый маршрут закрепляется за выбранной моделью. При сбое до начала ответа роутер пробует следующую модель этого пула и запоминает новый выбор. Начавшийся ответ передаётся потоком; переключение посреди ответа не выполняется.</p>
 <form hx-post="/settings/pool-settings" hx-target="#detail" class="behavior-form" aria-label="Сессии и таймауты пула {{.Name}}"><input type="hidden" name="profile" value="{{.Profile}}">
 <input type="hidden" name="name" value="{{.Name}}">
+<label>Тип пула <select name="type"><option value="failover" {{if ne .Settings.Type "balance"}}selected{{end}}>failover — новая сессия идёт на первую здоровую модель по порядку</option><option value="balance" {{if eq .Settings.Type "balance"}}selected{{end}}>balance — новые сессии распределяются между подключениями</option></select><small>Смена действует на новые сессии; закреплённые остаются на своей модели.</small></label>
 <label><input type="checkbox" name="failover" value="1" {{if .Settings.Failover}}checked{{end}}> Переключать модель при сбое</label>
 <label>Ожидание начала ответа, сек.<input type="number" name="first_byte" min="0" value="{{.Settings.FirstByteSec}}"><small>0 — без ограничения</small></label>
-<label>Распределять новые сессии между лучшими моделями<input type="number" name="balance" min="0" value="{{.Settings.Balance}}"><small>0 или 1 — первая здоровая модель; закреплённые сессии не перераспределяются</small></label>
 <label>Проверять простаивающие модели каждые, сек.<input type="number" name="probe_every" min="0" value="{{.Settings.ProbeSec}}"><small>0 — отключить. Подписка Codex не расходуется на проверки.</small></label>
 <label>Лимит символов контекста для моделей пула<input type="number" name="max_input_chars" min="0" value="{{.Settings.MaxInputChars}}"><small>0 — без обрезки</small></label>
 <button class="btn primary" type="submit">Сохранить настройки пула</button>
@@ -49,8 +50,8 @@
 <form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.ActiveProfile}}"><input type="hidden" name="op" value="create"><input name="name" aria-label="Название пула" placeholder="Название: быстрый, сложные задачи…" required><button class="btn primary" type="submit">Создать пул</button></form>
 </section>
 <section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
-{{template "codex-login" .Login}}
-<div id="codex-usage" hx-get="/settings/codex/usage" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>
+{{range .Logins}}<div class="codex-connection"><h4>{{.Provider}}</h4>{{template "codex-login" .}}
+<div class="codex-usage" hx-get="/settings/codex/usage?provider={{.Provider}}" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div></div>{{end}}
 </section>
 <section class="settings-section" id="anthropic-limits"><h2>Лимиты Anthropic</h2>
 {{with .Limits}}{{if eq .State "fresh"}}<div class="quota-grid">{{range $w := .Windows}}<article class="quota-card{{if $w.Low}} quota-low{{end}}"><h4>{{$w.Name}}</h4>
@@ -78,12 +79,13 @@
 </div>
 {{end}}
 {{define "codex-login"}}
-<div id="codex-login" hx-get="/settings/codex/status" hx-trigger="every 2s" hx-swap="outerHTML">
+<div class="codex-login" hx-get="/settings/codex/status?provider={{.Provider}}" hx-trigger="every 2s" hx-swap="outerHTML">
   {{if .Pending}}<span class="muted">Ожидаем вход в браузере…</span>
   {{else if .Error}}<span class="err">{{.Error}}</span>
   {{else if .Connected}}<span class="ok">● Подписка подключена</span>
   {{else}}<span class="muted">Подписка не подключена</span>{{end}}
   <form method="post" action="/settings/codex/login" target="_blank" style="display:inline">
+    <input type="hidden" name="provider" value="{{.Provider}}">
     <button type="submit" class="btn primary">{{if .Connected}}Войти заново{{else}}Войти через браузер{{end}}</button>
   </form>
 </div>
@@ -105,7 +107,7 @@
 <div class="provider">
   <p><b>{{.P.Name}}</b> <code>{{.P.BaseURL}}</code> — <span class="{{if .Probe.OK}}ok{{else}}err{{end}}">● {{.Probe.Msg}}</span>
     <button type="button" class="link" hx-post="/settings/probe" hx-vals='{"provider":"{{.P.Name}}"}' hx-target="#provider-pane" hx-swap="innerHTML">проверить снова</button></p>
-  {{if eq .P.Type "codex"}}<p><button type="button" class="link" hx-post="/settings/codex/import" hx-target="#detail" hx-swap="innerHTML">подхватить новый вход из Codex CLI</button></p>{{end}}
+  {{if eq .P.Type "codex"}}<p><button type="button" class="link" hx-post="/settings/codex/import" hx-vals='{"provider":"{{.P.Name}}"}' hx-target="#detail" hx-swap="innerHTML">подхватить новый вход из Codex CLI</button></p>{{end}}
   {{if .Probe.OK}}
   <form class="filter" hx-get="/settings/provider" hx-target="#provider-pane" hx-swap="innerHTML" hx-trigger="change, keyup changed delay:300ms from:input">
     <input type="hidden" name="name" value="{{.P.Name}}"><input type="hidden" name="filter" value="1">

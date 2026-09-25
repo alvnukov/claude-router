@@ -1,8 +1,8 @@
 {{define "codex-usage"}}
-<div id="codex-usage" aria-live="polite">
+<div class="codex-usage" aria-live="polite">
 {{if .Connected}}
 <div class="subscription-heading"><div><h3>{{if .Account.Email}}{{.Account.Email}}{{else if .Account.Name}}{{.Account.Name}}{{else}}Аккаунт ChatGPT{{end}}</h3><p class="help">Тариф: <b>{{if .Plan}}{{.Plan}}{{else}}не сообщён{{end}}</b>{{if and .Account.Name .Account.Email}} · {{.Account.Name}}{{end}}</p></div>
-<button class="btn" hx-post="/settings/codex/usage" hx-target="#codex-usage" hx-swap="outerHTML" hx-disabled-elt="this">Обновить лимиты</button></div>
+<button class="btn" hx-post="/settings/codex/usage" hx-vals='{"provider":"{{.Provider}}"}' hx-target="closest .codex-usage" hx-swap="outerHTML" hx-disabled-elt="this">Обновить лимиты</button></div>
 {{with .Error}}<p class="note warn" role="alert">{{.}}{{if not $.Updated.IsZero}} Показаны последние полученные данные.{{end}}</p>{{end}}
 <div class="quota-grid">{{range .Limits}}<article class="quota-card {{if or .Blocked (and .Known (le .Remaining 10.0))}}quota-low{{end}}"><h4>{{.Name}}</h4>
 {{if .Known}}<p class="quota-value">{{printf "%.0f" .Remaining}}% <span>осталось</span></p><progress max="100" value="{{.Remaining}}" aria-label="Остаток {{.Name}}">{{printf "%.0f" .Remaining}}%</progress><p class="help">Использовано {{printf "%.0f" .Used}}%</p>{{else}}<p class="help">Процент использования не сообщён</p>{{end}}

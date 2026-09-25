@@ -58,10 +58,9 @@ func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
 	}
 	run("one", "opus", "high", "a:xhigh", 1)
 	hl.acquire("p/a")
-	run("one", "opus", "high", "a:xhigh", 1)    // pinned despite load balancing
-	run("two", "opus", "high", "b:medium", 1)   // new session spreads
-	run("one", "opus", "low", "b:low", 1)       // independent effort and target effort
-	run("one", "sonnet", "high", "b:medium", 1) // independent incoming model
+	run("one", "opus", "high", "a:xhigh", 1) // pinned under load
+	run("two", "opus", "high", "a:xhigh", 1) // a failover pool keeps pool order under load
+	run("one", "opus", "low", "b:low", 1)    // independent effort and target effort
 	hl.release("p/a")
 	stallA.Store(true)
 	run("one", "opus", "high", "b:medium", 2) // timeout after headers -> next model
@@ -69,7 +68,8 @@ func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		hl.record("p/a", true, time.Millisecond, "")
 	}
-	run("one", "opus", "high", "b:medium", 1) // recovery must not steal the session back
+	run("one", "opus", "high", "b:medium", 1)  // recovery must not steal the session back
+	run("one", "sonnet", "high", "a:xhigh", 1) // independent incoming model binds on its own
 	cfg.local.ModelPools["deep"] = append(cfg.local.ModelPools["deep"], poolTarget{Model: "p/outside", Effort: "low"})
 	run("one", "opus", "high", "b:medium", 1) // catalog growth must not reset affinity
 
@@ -93,7 +93,7 @@ func TestConcurrentSessionFirstChoice(t *testing.T) {
 			if i%2 == 0 {
 				c[0], c[1] = c[1], c[0]
 			}
-			results <- hl.bindCandidates("session", c)[0].Key
+			results <- hl.bindCandidates("session", poolRoute{}, c)[0].Key
 		}(i)
 	}
 	wg.Wait()
@@ -157,5 +157,12 @@ func TestRouterStreamsBeforeUpstreamCompletes(t *testing.T) {
 				t.Fatalf("missing stream tail: %s", tail)
 			}
 		})
+	}
+}
+
+func TestCandidateSelectionStableForLegacy(t *testing.T) {
+	data, _ := json.Marshal(provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL})
+	if strings.Contains(string(data), "auth_id") {
+		t.Fatal("empty auth_id serialized; legacy bindings would change")
 	}
 }
