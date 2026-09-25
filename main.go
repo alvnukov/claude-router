@@ -184,6 +184,7 @@ func main() {
 	u := newUIServer(st, cs, hl)
 	u.limits = newAnthropicLimits(limitsPath(), anthropicLimitsMaxAge)
 	u.startCatalogUpdates(context.Background())
+	u.startCodexUsageUpdates(context.Background())
 	mux := newMainHandler(cfg, cs, st, hl, u)
 	log.Printf("listening on %s", cfg.listen)
 	log.Printf("  upstream     %s", cfg.upstream)

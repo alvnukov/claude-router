@@ -183,7 +183,8 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 		u.handler().ServeHTTP(w, r)
 		return w.Code, w.Body.String()
 	}
-	if code, html := request("GET", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || strings.Contains(html, "every 60s") {
+	if code, html := request("GET", ""); code != 200 || calls != 0 || !strings.Contains(html, "person@example.test") || strings.Contains(html, "every 60s") ||
+		!strings.Contains(html, "при старте роутера, раз в 10 минут и по кнопке") {
 		t.Fatalf("GET panel: %d %s", code, html)
 	}
 	if code, _ := request("POST", "https://other.test"); code != 403 || calls != 0 {

@@ -82,6 +82,7 @@ type anthropicLimitsView struct {
 // response carried is set: percentages from utilization, or from remaining
 // and limit when utilization is absent.
 type limitWindow struct {
+	Source           string    `json:"source,omitempty"` // set in limitsReport
 	Name             string    `json:"name"`
 	RemainingPercent *float64  `json:"remaining_percent,omitempty"`
 	UsedPercent      *float64  `json:"used_percent,omitempty"`
@@ -89,7 +90,70 @@ type limitWindow struct {
 	Limit            *int64    `json:"limit,omitempty"`
 	ResetAt          time.Time `json:"reset_at,omitzero"`
 	Status           string    `json:"status,omitempty"`
+	WindowSeconds    int64     `json:"window_seconds,omitempty"`
+	ObservedAt       time.Time `json:"observed_at,omitzero"` // set in limitsReport
 	ResetIn          string    `json:"-"`
+}
+
+// limitsReport is GET /api/limits: the state of every source and one list of
+// windows, each with its source and when it was observed. docs/features.md
+// describes this JSON.
+type limitsReport struct {
+	Sources []limitSource `json:"sources"`
+	Windows []limitWindow `json:"windows"`
+}
+
+type limitSource struct {
+	Source        string            `json:"source"` // anthropic | codex
+	State         string            `json:"state"`  // fresh | no_headers | unavailable | not_connected
+	ObservedAt    time.Time         `json:"observed_at,omitzero"`
+	AgeSeconds    *int64            `json:"age_seconds,omitempty"`
+	MaxAgeSeconds int64             `json:"max_age_seconds"`
+	Raw           map[string]string `json:"raw,omitzero"`
+	Error         string            `json:"error,omitempty"`
+}
+
+// limitsReportOf puts both sources in one report. Codex windows come from the
+// last successful usage request and are shown while it is at most
+// codexUsageMaxAge old; a later failure is reported next to them.
+func limitsReportOf(a anthropicLimitsView, c codexUsageView, now time.Time) limitsReport {
+	r := limitsReport{Windows: []limitWindow{}}
+	r.Sources = append(r.Sources, limitSource{Source: "anthropic", State: a.State, ObservedAt: a.ObservedAt,
+		AgeSeconds: a.AgeSeconds, MaxAgeSeconds: a.MaxAgeSeconds, Raw: a.Raw})
+	for _, w := range a.Windows {
+		w.Source, w.ObservedAt = "anthropic", a.ObservedAt
+		r.Windows = append(r.Windows, w)
+	}
+
+	s := limitSource{Source: "codex", State: "not_connected", MaxAgeSeconds: int64(codexUsageMaxAge / time.Second), Error: c.Error}
+	if c.Connected {
+		s.State = "unavailable"
+	}
+	if c.Connected && !c.Updated.IsZero() {
+		age := now.Sub(c.Updated)
+		s.ObservedAt = c.Updated
+		seconds := max(int64(age/time.Second), 0)
+		s.AgeSeconds = &seconds
+		if age >= -limitsClockSkew && age <= codexUsageMaxAge {
+			s.State = "fresh"
+			for _, row := range c.Limits {
+				w := limitWindow{Source: "codex", Name: row.ID, WindowSeconds: row.Seconds, ObservedAt: c.Updated}
+				if row.Known {
+					remaining, used := row.Remaining, row.Used
+					w.RemainingPercent, w.UsedPercent = &remaining, &used
+				}
+				if !row.Reset.IsZero() {
+					w.ResetAt = row.Reset.UTC()
+				}
+				if row.Blocked {
+					w.Status = "rejected"
+				}
+				r.Windows = append(r.Windows, w)
+			}
+		}
+	}
+	r.Sources = append(r.Sources, s)
+	return r
 }
 
 // Low marks a window the page highlights: a tenth or less left, or refused.
@@ -429,12 +493,17 @@ func (l *anthropicLimits) view(now time.Time) anthropicLimitsView {
 	return v
 }
 
-// limitsAPI is GET /api/limits: the view the settings page shows, from the
-// store only; nothing here reaches Anthropic.
+// limitsAPI is GET /api/limits: what the settings page shows, from the
+// stores only; nothing here reaches Anthropic or Codex.
 func (u *uiServer) limitsAPI(w http.ResponseWriter, r *http.Request) {
+	var codex codexUsageView
+	if codexAuth != nil {
+		codex = u.codexUsage.get(r.Context(), codexAuth, false)
+	}
+	now := time.Now()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(u.limits.view(time.Now()))
+	json.NewEncoder(w).Encode(limitsReportOf(u.limits.view(now), codex, now))
 }
 
 // parseLimitWindows reads anthropic-ratelimit-<window>-<field> without knowing
