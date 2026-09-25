@@ -163,6 +163,36 @@ func TestDeployOrdersReadinessBeforeDrainAndSavesCaddy(t *testing.T) {
 	}
 }
 
+// launchctl bootstrap returns before the slot listens, so the first probes of
+// a real candidate are refused.
+func TestDeployWaitsForTheNewSlotToListen(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		refusals int
+		ok       bool
+	}{{"slot comes up", 3, true}, {"slot never comes up", 1 << 30, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newDeployFixture(t)
+			f.controller.readyTimeout = time.Second
+			refusals := tc.refusals
+			f.onState = func(slot string, s *deploySlotState) error {
+				if slot == "green" && s.PID == 43 && refusals > 0 {
+					refusals--
+					return syscall.ECONNREFUSED
+				}
+				return nil
+			}
+			err := f.controller.deploy(t.Context(), "new", false)
+			if tc.ok && (err != nil || f.active != "green") {
+				t.Fatalf("deploy gave up on a starting slot: %v, active %s", err, f.active)
+			}
+			if !tc.ok && (err == nil || f.active != "blue" || f.slots["blue"].Mode != modeActive || f.slots["green"].PID != 0) {
+				t.Fatalf("slot that never listened: err=%v active=%s old=%s new pid %d", err, f.active, f.slots["blue"].Mode, f.slots["green"].PID)
+			}
+		})
+	}
+}
+
 func TestDeployRollsBackBeforeAndAfterFlipWithoutDraining(t *testing.T) {
 	for _, point := range []string{"start", "snapshot", "quiesce", "activate", "flip", "public-ready"} {
 		t.Run(point, func(t *testing.T) {

@@ -25,6 +25,7 @@ type cutoverFixture struct {
 	pending   []int
 	marker    string
 	committed bool
+	file      deployFile
 	stops     []func()
 	legacy    []func()
 	caddy     []func()
@@ -133,9 +134,10 @@ func (f *cutoverFixture) stopCaddy(context.Context) error {
 	f.caddy = nil
 	return nil
 }
-func (f *cutoverFixture) commit(context.Context, deployFile) error {
+func (f *cutoverFixture) commit(_ context.Context, file deployFile) error {
 	f.record("commit")
 	f.committed = true
+	f.file = file
 	return nil
 }
 
@@ -183,6 +185,20 @@ func TestCutoverMovesPublicPortsFromLegacyToCaddy(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+}
+
+func TestCutoverRecordsLabelPrefixInDeployFile(t *testing.T) {
+	f := newCutoverFixture(t, 0)
+	if out, err := f.run("yes\n", "-label-prefix", "com.claude-local-router.check-1"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if f.file.LabelPrefix != "com.claude-local-router.check-1" {
+		t.Fatalf("deploy.json would name other labels: %+v", f.file)
+	}
+	bad := newCutoverFixture(t, 0)
+	if _, err := bad.run("yes\n", "-label-prefix", "com.example/router"); err == nil || len(bad.calls) != 0 {
+		t.Fatalf("cutover ran with an invalid label prefix: err=%v calls=%v", err, bad.calls)
+	}
 }
 
 func TestCutoverWithoutConfirmationLeavesLegacyServing(t *testing.T) {

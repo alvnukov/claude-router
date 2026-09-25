@@ -65,6 +65,7 @@ func runCutover(ctx context.Context, args []string, in io.Reader, out io.Writer,
 	flags.StringVar(&file.BlueUI, "blue-ui", "", "blue slot UI address")
 	flags.StringVar(&file.GreenAPI, "green-api", "", "green slot API address")
 	flags.StringVar(&file.GreenUI, "green-ui", "", "green slot UI address")
+	flags.StringVar(&file.LabelPrefix, "label-prefix", "", "launchd label prefix recorded in deploy.json; empty keeps the live names")
 	wait := flags.Duration("wait", 15*time.Minute, "how long the legacy router may take to finish its requests")
 	readyTimeout := flags.Duration("ready-timeout", 30*time.Second, "how long blue, Caddy or the returning legacy router may take to answer")
 	if err := flags.Parse(args); err != nil {

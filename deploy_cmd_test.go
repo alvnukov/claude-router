@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -141,5 +142,69 @@ func TestLaunchctlNeverRunsUnderTest(t *testing.T) {
 	err := runLaunchctl(t.Context(), "bootout", "gui/0/com.claude-local-router.blue")
 	if _, statErr := os.Stat(ran); err == nil || statErr == nil {
 		t.Fatalf("launchctl ran under test: err=%v", err)
+	}
+}
+
+func TestDeployCommandSaysWhenNothingChanged(t *testing.T) {
+	f := newDeployFixture(t)
+	home := t.TempDir()
+	writeDeployFile(t, home, f.controller.config)
+	binary := deployBinary(t, home)
+	digest, err := fileDigest(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.slots["blue"].Digest = digest
+	var out bytes.Buffer
+	if err := runDeploy(t.Context(), []string{"-home", home, "-binary", binary}, &out, func(deployFile, string, string, string) deployOps { return f }); err != nil {
+		t.Fatal(err)
+	}
+	if f.active != "blue" || !strings.Contains(out.String(), "no change") {
+		t.Fatalf("repeat deploy did not report a no-op: active=%s out=%q", f.active, out.String())
+	}
+}
+
+func TestDeployCommandWaitsForASlowSlot(t *testing.T) {
+	f := newDeployFixture(t)
+	home := t.TempDir()
+	writeDeployFile(t, home, f.controller.config)
+	refusals := 3
+	f.onState = func(slot string, s *deploySlotState) error {
+		if slot == "green" && s.PID == 43 && refusals > 0 {
+			refusals--
+			return syscall.ECONNREFUSED
+		}
+		return nil
+	}
+	if err := runDeploy(t.Context(), []string{"-home", home, "-binary", deployBinary(t, home)}, &bytes.Buffer{}, func(deployFile, string, string, string) deployOps { return f }); err != nil || f.active != "green" {
+		t.Fatalf("deploy gave up on a starting slot: %v, active %s", err, f.active)
+	}
+}
+
+func TestServiceLabelsNamesProposedPrefixWithoutDeployFile(t *testing.T) {
+	for _, tc := range []struct {
+		prefix, blue string
+		live         bool
+	}{
+		{"com.claude-local-router.check-1", "com.claude-local-router.check-1.blue", false},
+		{defaultRouterLabel, defaultRouterLabel + ".blue", true},
+	} {
+		var out bytes.Buffer
+		if err := runServiceLabels([]string{"-home", t.TempDir(), "-prefix", tc.prefix}, &out); err != nil {
+			t.Fatal(err)
+		}
+		var labels struct {
+			Blue          string
+			DefaultPrefix bool `json:"default_prefix"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &labels); err != nil {
+			t.Fatal(err)
+		}
+		if labels.Blue != tc.blue || labels.DefaultPrefix != tc.live {
+			t.Fatalf("prefix %q: %s", tc.prefix, out.String())
+		}
+	}
+	if err := runServiceLabels([]string{"-prefix", "../router"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("accepted an invalid proposed prefix")
 	}
 }

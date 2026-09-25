@@ -44,10 +44,19 @@ func (f deployFile) validate() error {
 	if host, _, err := net.SplitHostPort(f.CaddyAdmin); err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		return fmt.Errorf("Caddy admin must be a loopback host:port, got %q", f.CaddyAdmin)
 	}
-	if f.LabelPrefix != "" && (!labelPrefixPattern.MatchString(f.LabelPrefix) || strings.HasSuffix(f.LabelPrefix, ".blue") || strings.HasSuffix(f.LabelPrefix, ".green") || strings.HasSuffix(f.LabelPrefix, ".caddy")) {
-		return fmt.Errorf("invalid launchd label prefix %q", f.LabelPrefix)
+	if err := validateLabelPrefix(f.LabelPrefix); err != nil {
+		return err
 	}
 	return f.deployConfig.validate()
+}
+
+// validateLabelPrefix accepts "" (the default names) or a dotted launchd
+// label that cannot be mistaken for one of the names derived from it.
+func validateLabelPrefix(prefix string) error {
+	if prefix != "" && (!labelPrefixPattern.MatchString(prefix) || strings.HasSuffix(prefix, ".blue") || strings.HasSuffix(prefix, ".green") || strings.HasSuffix(prefix, ".caddy")) {
+		return fmt.Errorf("invalid launchd label prefix %q", prefix)
+	}
+	return nil
 }
 
 func fileDigest(path string) (string, error) {
@@ -86,6 +95,7 @@ func runDeploy(ctx context.Context, args []string, out io.Writer, newOps deployO
 	binary := flags.String("binary", "", "candidate router binary")
 	force := flags.Bool("force", false, "switch slots even when the active slot runs this binary")
 	drain := flags.Duration("drain-timeout", 15*time.Minute, "how long the old slot may take to finish its requests")
+	readyTimeout := flags.Duration("ready-timeout", 30*time.Second, "how long the new slot may take to answer")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
@@ -112,16 +122,24 @@ func runDeploy(ctx context.Context, args []string, out io.Writer, newOps deployO
 	}
 
 	ops := newOps(file, *dir, *agents, *binary)
-	controller := &deployController{config: file.deployConfig, ops: ops}
-	ctx, cancel := context.WithTimeout(ctx, *drain+2*time.Minute)
+	controller := &deployController{config: file.deployConfig, ops: ops, readyTimeout: *readyTimeout}
+	ctx, cancel := context.WithTimeout(ctx, *drain+*readyTimeout+2*time.Minute)
 	defer cancel()
 	return withDeployLock(ctx, *dir, func() error {
+		before, err := ops.current(ctx)
+		if err != nil {
+			return err
+		}
 		if err := controller.deploy(ctx, digest, *force); err != nil {
 			return err
 		}
 		slot, err := ops.current(ctx)
 		if err != nil {
 			return err
+		}
+		if slot == before {
+			fmt.Fprintf(out, "no change: active slot %s already runs %s\n", slot, digest[:12])
+			return nil
 		}
 		fmt.Fprintf(out, "active slot %s runs %s\n", slot, digest[:12])
 		return nil

@@ -328,4 +328,27 @@ messages are omitted when translating to an OpenAI-compatible provider.
 go test ./...
 go test -race ./...
 go vet ./...
+deploy/check.sh
 ```
+
+`deploy/check.sh` runs the whole deploy path under the real launchd and Caddy,
+on its own labels (`router-check.*`), free ports and a temporary `ROUTER_HOME`:
+
+1. It starts a legacy router, cuts it over, and keeps a slow event stream open
+   through Caddy.
+2. While the stream is open, Caddy reloads and `./router deploy -force` moves
+   the router to the other slot. The stream must end with every event, and the
+   next request must reach a new PID.
+3. The old process must have exited and its label must be unloaded. Caddy,
+   restarted by launchd, must still route to the new slot.
+4. A repeat deploy must report `no change`.
+
+The check refuses to start if any of its labels is loaded, if a port is in use
+or belongs to the live router, or if its directory lies inside the router home.
+It also refuses the live label names. `deploy/check.sh --live` runs the deploy
+checks against the installed router. That run is a real deploy, so it skips the
+stream and the Caddy restart.
+
+The cutover label prefix defaults to the live names (`com.claude-local-router`).
+`localrouter cutover -label-prefix` records another prefix in `deploy.json`, and
+everything after cutover reads it from there.

@@ -61,9 +61,10 @@ type deployOps interface {
 }
 
 type deployController struct {
-	config deployConfig
-	ops    deployOps
-	client *http.Client
+	config       deployConfig
+	ops          deployOps
+	client       *http.Client
+	readyTimeout time.Duration // how long a started slot may take to answer
 }
 
 func (d *deployController) ready(ctx context.Context, slot string, pid int) error {
@@ -148,8 +149,9 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 		return err
 	}
 	started = true
-	standby, stateErr := d.ops.state(ctx, newSlot)
-	if stateErr != nil || standby.Mode != modeStandby || standby.PID == 0 {
+	// launchctl returns before the slot listens.
+	standby, stateErr := waitSlot(ctx, d.ops, newSlot, modeStandby, d.readyTimeout)
+	if stateErr != nil {
 		return fmt.Errorf("new slot did not become standby: %v", stateErr)
 	}
 	if err = d.ops.admin(ctx, old, "snapshot"); err != nil {
