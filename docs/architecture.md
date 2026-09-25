@@ -245,9 +245,10 @@ move into their packages.
 
 1. `history.Reader`, a read model: `List() []*Record` (a record in flight
    has a zero End; a record carries Session, Model, Route, Served,
-   Start/End, Headers with X-App, and Resp with usage) and
-   `Subscribe(func(*Record))`, called when a record is added and when it is
-   done. The source for spend, activity, events and bypass.
+   Start/End, Headers with X-App, and Resp with usage; `List` returns
+   copies, as the store does today) and `Subscribe(func(*Record))`, called
+   when a record is added and when it is done. The source for spend,
+   activity, events and bypass.
 2. `limits.View()` and `limits.Subscribe(func(View))`: the Anthropic windows
    for reserve and events; no knowledge of Codex.
 3. `server.Admission`: a chain in `/v1/messages` after the route is chosen
@@ -260,16 +261,30 @@ move into their packages.
    traffic. It is the only way for a feature to affect a request (a limit
    per session or role, a reserve for the work machine); the first release
    of each feature only warns.
-4. `/api/<package>` endpoints on the UI port: an `http.ServeMux` in `main`
-   in front of `ui` (`mux.Handle("/api/spend", spend.Handler(reader))`);
-   `ui` itself is not touched until the UI redesign. The UI block of a
-   feature is a section of the new information architecture.
+4. `ui.Mount(pattern string, h http.Handler)`: a feature's `/api/<package>`
+   endpoints are mounted inside the UI port's handler chain, behind the same
+   checks as the UI's own routes: the Host allowlist (loopback names and the
+   configured listen host; it arrives with the seams — without it a
+   DNS-rebinding page reaches the port), `sameOriginPost` for POST, and the
+   `writesSharedState` gate that answers 503 from a slot that is not active.
+   There is no separate mux in `main` in front of `ui`: it would bypass
+   these checks. `main` calls `ui.Mount` for each feature before the servers
+   start; `ui` does not import the feature packages. `cmd/router` builds
+   both `http.Server`s, from `server.Handler()` for the API port and from
+   `ui.Handler()` for the UI port, and hands the lifecycle from `deploy` to
+   both; `server` and `ui` still do not import each other. The UI block of
+   a feature is a section of the new information architecture.
 5. `providers.Upstream`: for new providers (Codex later), not for features.
-6. Feature settings: the feature's own file `ROUTER_HOME/<package>.json`
-   through `platform.WriteFileAtomic` (plus `WithLock` when two processes
-   write); `config` is not extended for features. Reading Claude Code's
-   local state (the sessions on the machine, for bypass) belongs to
-   `claudecode`, not to server.
+6. Feature settings and state: the feature's own file
+   `ROUTER_HOME/<package>.json`, written through `platform.WriteFileAtomic`
+   by one writer, the active slot, like every file in the table above.
+   Mounted POST handlers are already behind the `writesSharedState` gate; a
+   feature's background writer checks the same gate before it writes.
+   `platform.WithLock` protects a file against a second process only where
+   the table says so (limits.json, the Codex auth store); it is not a way to
+   add a second writer. `config` is not extended for features. Reading
+   Claude Code's local state (the sessions on the machine, for bypass)
+   belongs to `claudecode`, not to server.
 7. `routing.Filter`: excludes candidates for a session inside Pick. Named
    now, added when Codex returns as a route: with one Anthropic account
    there is nothing to filter.
