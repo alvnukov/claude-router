@@ -28,7 +28,7 @@ func upstreamTransport() *http.Transport {
 
 type streamKey struct{}
 
-// markStream records on a request's context that the client asked for a
+// markStream records on a request's context that the upstream answers it as a
 // stream. Only such a request is held to the bounds on a silent upstream: a
 // whole answer may send its headers or first byte only when it is done.
 func markStream(ctx context.Context, stream bool) context.Context {

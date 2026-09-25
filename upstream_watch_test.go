@@ -415,7 +415,8 @@ func TestProxyUpgradeIsNotWatched(t *testing.T) {
 // bounds on a silent upstream may cut it: before them it worked however long
 // it took. The whole answer here keeps silent past the header bound, and past
 // the start and then the idle bound; each time a streamed request, cut at the
-// same bound, is the clock that shows the silence outlasted it.
+// same bound, is the clock that shows the silence outlasted it. Codex is the
+// exception: the router reads it as a stream whatever the client asked for.
 func TestNonStreamNotBoundedByStart(t *testing.T) {
 	t.Run("headers", func(t *testing.T) {
 		arrived, release := make(chan struct{}, 1), make(chan struct{})
@@ -553,40 +554,20 @@ func TestNonStreamNotBoundedByStart(t *testing.T) {
 		}
 	})
 
+	// Codex streams to the router even for a whole answer, and a live model
+	// keeps sending events and summaries, so its silence is a stall as on a
+	// stream: silent from the start it moves to the next member, silent after
+	// it began it ends in a 502 with no retry.
 	t.Run("codex", func(t *testing.T) {
 		seedTwoConnections(t)
 		cfg, hl := twoCodexPool(), newHealth("")
 		cfg.startTimeout, cfg.idleTimeout = 50*time.Millisecond, 50*time.Millisecond
-		split := strings.Index(codexStreamOK, "\n\n") + 2
-		head, tail := codexStreamOK[:split], codexStreamOK[split:]
-		arrived, spoke := make(chan struct{}), make(chan struct{})
-		first, rest := make(chan struct{}), make(chan struct{})
-		freeFirst, freeRest := sync.OnceFunc(func() { close(first) }), sync.OnceFunc(func() { close(rest) })
-		defer freeRest()
-		defer freeFirst()
-		var n atomic.Int32
-		scriptedCodex(t, map[string]func(*io.PipeWriter){
-			"acct-a": func(w *io.PipeWriter) {
-				if n.Add(1) != 1 { // only the first is the whole answer; the clocks keep silent
-					return
-				}
-				close(arrived)
-				<-first
-				_, _ = io.WriteString(w, head) // returns once the router has read it
-				close(spoke)
-				<-rest
-				_, _ = io.WriteString(w, tail)
-				w.Close()
-			},
-			"acct-b": func(*io.PipeWriter) {},
+		head := codexStreamOK[:strings.Index(codexStreamOK, "\n\n")+2]
+		calls := scriptedCodex(t, map[string]func(*io.PipeWriter){
+			"acct-a": func(*io.PipeWriter) {},
+			"acct-b": func(w *io.PipeWriter) { _, _ = io.WriteString(w, head) },
 		})
 		marks := recordStreamMarks(t)
-		clock := func(session string) {
-			t.Helper()
-			if _, tr := runLocalRequest(t, context.Background(), cfg, hl, session, true); len(tr.Attempts) == 0 || tr.Attempts[0].Outcome != "upstream_idle" {
-				t.Fatalf("streamed request not cut at the bound: %+v", tr.Attempts)
-			}
-		}
 
 		type run struct {
 			w  *httptest.ResponseRecorder
@@ -597,21 +578,25 @@ func TestNonStreamNotBoundedByStart(t *testing.T) {
 			w, tr := runLocalRequest(t, context.Background(), cfg, hl, "s1", false)
 			whole <- run{w, tr}
 		}()
-		<-arrived
-		clock("s2")
-		freeFirst()
-		<-spoke
-		clock("s3")
-		freeRest()
-		got := <-whole
-		if got.w.Code != http.StatusOK || len(got.tr.Attempts) != 1 {
-			t.Fatalf("whole answer: status %d, attempts %+v\n%s", got.w.Code, got.tr.Attempts, got.w.Body.String())
+		var got run
+		select {
+		case got = <-whole:
+		case <-time.After(5 * time.Second):
+			t.Fatal("whole Codex answer still waits on a silent upstream after 5s")
 		}
-		if a := got.tr.Attempts[0]; a.Outcome != "ok" || a.MaxGap <= cfg.startTimeout {
-			t.Fatalf("whole answer attempt: %+v; want ok with a gap past the %s bound", a, cfg.startTimeout)
+		if got.w.Code != http.StatusBadGateway || !strings.Contains(got.w.Body.String(), "upstream idle 50ms") {
+			t.Fatalf("whole answer: status %d\n%s", got.w.Code, got.w.Body.String())
 		}
-		if got := marks(); len(got) < 2 || got[0] || slices.Contains(got[1:], false) {
-			t.Fatalf("requests through upstreamHTTP marked as streamed: %v, want false then true", got)
+		if called(calls, "acct-a") != 1 || called(calls, "acct-b") != 1 || len(got.tr.Attempts) != 2 {
+			t.Fatalf("calls a %d b %d, attempts %+v", called(calls, "acct-a"), called(calls, "acct-b"), got.tr.Attempts)
+		}
+		for i, bound := range []string{"upstream start 50ms", "upstream idle 50ms"} {
+			if a := got.tr.Attempts[i]; a.Outcome != "upstream_idle" || !strings.Contains(a.Err, bound) {
+				t.Fatalf("attempt %d: %+v; want upstream_idle at %q", i, a, bound)
+			}
+		}
+		if got := marks(); !slices.Equal(got, []bool{true, true}) {
+			t.Fatalf("requests through upstreamHTTP marked as streamed: %v, want [true true]", got)
 		}
 	})
 }
