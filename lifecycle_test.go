@@ -43,6 +43,42 @@ func TestLifecycleTransitions(t *testing.T) {
 	}
 }
 
+// internal/history compacts as it writes only while CompactsHistory holds: the
+// router is active and alone on the file. Leaving active mode forgets being
+// alone, since the next deploy starts another slot that appends too.
+func TestLifecycleCompactsHistoryOnlyWhileActiveAndAlone(t *testing.T) {
+	standby := newLifecycle(true)
+	standby.markAlone() // a legacy router started with ROUTER_STANDBY=1
+	if standby.CompactsHistory() {
+		t.Fatal("standby router compacts history")
+	}
+	life := newLifecycle(false)
+	if life.CompactsHistory() {
+		t.Fatal("active router compacts before it is alone")
+	}
+	life.markAlone()
+	if !life.CompactsHistory() {
+		t.Fatal("active router alone on the file does not compact")
+	}
+	if err := life.quiesce(); err != nil {
+		t.Fatal(err)
+	}
+	if life.CompactsHistory() {
+		t.Fatal("quiesced router compacts history")
+	}
+	if err := life.activate(); err != nil {
+		t.Fatal(err)
+	}
+	if life.CompactsHistory() {
+		t.Fatal("router reactivated after quiesce still counts itself alone")
+	}
+	life.markAlone()
+	life.drain()
+	if life.CompactsHistory() {
+		t.Fatal("draining router compacts history")
+	}
+}
+
 func TestLifecycleHealthAndTraffic(t *testing.T) {
 	life := newLifecycle(true)
 	h := life.guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
