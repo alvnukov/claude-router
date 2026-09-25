@@ -76,7 +76,7 @@ func TestRenameRetryingRetriesWhileBusy(t *testing.T) {
 		}
 		return nil
 	}
-	busy := func(err error) bool { return err == errBusy }
+	busy := func(err error, _ string) bool { return err == errBusy }
 	if err := renameRetrying(rename, busy, time.Minute, "src", "dst"); err != nil || calls != 3 {
 		t.Fatalf("calls=%d err=%v", calls, err)
 	}
@@ -86,7 +86,7 @@ func TestRenameRetryingReturnsOtherErrorsAtOnce(t *testing.T) {
 	errOther := errors.New("other")
 	calls := 0
 	rename := func(string, string) error { calls++; return errOther }
-	busy := func(error) bool { return false }
+	busy := func(error, string) bool { return false }
 	if err := renameRetrying(rename, busy, time.Minute, "src", "dst"); err != errOther || calls != 1 {
 		t.Fatalf("calls=%d err=%v", calls, err)
 	}
@@ -96,7 +96,7 @@ func TestRenameRetryingGivesUpAfterWait(t *testing.T) {
 	errBusy := errors.New("busy")
 	calls := 0
 	rename := func(string, string) error { calls++; return errBusy }
-	busy := func(error) bool { return true }
+	busy := func(error, string) bool { return true }
 	if err := renameRetrying(rename, busy, 0, "src", "dst"); err != errBusy || calls != 1 {
 		t.Fatalf("calls=%d err=%v", calls, err)
 	}

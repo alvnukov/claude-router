@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // replaceFixture makes dst with old content, src with new, and opens dst the
@@ -54,5 +56,35 @@ func TestReplaceFileGivesUpWhileReaderStays(t *testing.T) {
 	}
 	if _, err := os.Stat(src); err != nil {
 		t.Fatalf("src: %v", err)
+	}
+}
+
+// Access denied on a directory or a read-only file does not pass by waiting,
+// so only a writable file's refusal counts as busy.
+func TestRenameBusyOnlyWhileTargetOpen(t *testing.T) {
+	dir := t.TempDir()
+	file, readOnly := filepath.Join(dir, "file"), filepath.Join(dir, "read-only")
+	for _, path := range []string{file, readOnly} {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(readOnly, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // lets TempDir remove it
+		if err := os.Chmod(readOnly, 0o600); err != nil {
+			t.Error(err)
+		}
+	})
+	denied := &os.LinkError{Op: "rename", Err: windows.ERROR_ACCESS_DENIED}
+	for dst, want := range map[string]bool{file: true, readOnly: false, dir: false} {
+		if got := renameBusy(denied, dst); got != want {
+			t.Errorf("access denied on %s: busy = %v, want %v", filepath.Base(dst), got, want)
+		}
+	}
+	sharing := &os.LinkError{Op: "rename", Err: windows.ERROR_SHARING_VIOLATION}
+	if !renameBusy(sharing, dir) {
+		t.Error("sharing violation: not busy")
 	}
 }

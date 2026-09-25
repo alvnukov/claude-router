@@ -57,11 +57,11 @@ func ReplaceFile(src, dst string) error {
 
 // renameRetrying calls rename until it succeeds, fails with an error busy does
 // not accept, or wait has passed; it returns rename's last error.
-func renameRetrying(rename func(src, dst string) error, busy func(error) bool, wait time.Duration, src, dst string) error {
+func renameRetrying(rename func(src, dst string) error, busy func(err error, dst string) bool, wait time.Duration, src, dst string) error {
 	deadline := time.Now().Add(wait)
 	for {
 		err := rename(src, dst)
-		if err == nil || !busy(err) || !time.Now().Before(deadline) {
+		if err == nil || !busy(err, dst) || !time.Now().Before(deadline) {
 			return err
 		}
 		time.Sleep(pollInterval)
