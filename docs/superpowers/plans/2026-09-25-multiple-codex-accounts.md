@@ -612,10 +612,10 @@ func readProviders(path string) (localSetup, error) {
 - `add`: extend the Codex branch to `p.BaseURL, p.APIKey, p.AuthID = codexBaseURL, "", newCodexAuthID()`.
 - `update`: right after `p := &l.Providers[idx]`, before `p.Name = name`:
   ```go
-  		if p.Type == "codex" && name != orig {
-  			err = fmt.Errorf("подключение Codex нельзя переименовать: удалите и добавьте заново со входом")
-  			break
-  		}
+          if p.Type == "codex" && name != orig {
+              err = fmt.Errorf("подключение Codex нельзя переименовать: удалите и добавьте заново со входом")
+              break
+          }
   ```
 - `remove`: unchanged (auth file stays; documented in Task 8).
 
