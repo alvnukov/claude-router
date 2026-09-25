@@ -70,9 +70,16 @@ func loadConfigChecked() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("bad ROUTER_UPSTREAM_URL: %w", err)
 	}
-	local, err := loadLocalSetupChecked(providersPath())
+	local, assigned, err := loadLocalSetupChecked(providersPath())
 	if err != nil {
 		return config{}, err
+	}
+	if assigned {
+		// One-time migration: persist the new auth_id values before the other
+		// startup migrations read or rewrite the file.
+		if err := saveConfigurationMigration(providersPath(), local, ".before-codex-ids"); err != nil {
+			return config{}, fmt.Errorf("codex id migration: %w", err)
+		}
 	}
 	c := config{
 		listen:   env("ROUTER_LISTEN", "127.0.0.1:8787"),

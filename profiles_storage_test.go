@@ -373,7 +373,7 @@ func TestInterruptedProfileMigrationDoesNotReplaceSavedRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadLocalSetupChecked(path); err == nil {
+	if _, _, err := loadLocalSetupChecked(path); err == nil {
 		t.Fatal("interrupted migration loaded as legacy configuration")
 	}
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)

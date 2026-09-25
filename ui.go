@@ -806,7 +806,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		p := provider{Name: name, Type: r.FormValue("type"), BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")}
 		if p.Type == "codex" {
-			p.BaseURL, p.APIKey = codexBaseURL, ""
+			p.BaseURL, p.APIKey, p.AuthID = codexBaseURL, "", newCodexAuthID()
 		}
 		l.Providers = append(l.Providers, p)
 		flash = "Провайдер добавлен: " + name
@@ -826,6 +826,10 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		p := &l.Providers[idx]
+		if p.Type == "codex" && name != orig {
+			err = fmt.Errorf("подключение Codex нельзя переименовать: удалите и добавьте заново со входом")
+			break
+		}
 		p.Name = name
 		if p.Type != "codex" {
 			p.BaseURL = r.FormValue("base_url")

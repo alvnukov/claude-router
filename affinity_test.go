@@ -159,3 +159,10 @@ func TestRouterStreamsBeforeUpstreamCompletes(t *testing.T) {
 		})
 	}
 }
+
+func TestCandidateSelectionStableForLegacy(t *testing.T) {
+	data, _ := json.Marshal(provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL})
+	if strings.Contains(string(data), "auth_id") {
+		t.Fatal("empty auth_id serialized; legacy bindings would change")
+	}
+}
