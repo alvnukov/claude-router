@@ -11,7 +11,7 @@
 </article>{{else}}<p class="help">{{if .Updated.IsZero}}Нажмите «Обновить лимиты», чтобы загрузить данные подписки.{{else}}Сервис пока не сообщил лимиты.{{end}}</p>{{end}}</div>
 <p>Доступно сбросов лимита: <b>{{if .ResetsKnown}}{{.Resets}}{{else}}не сообщено{{end}}</b></p>
 <details class="settings-extra"><summary>Данные аккаунта</summary><p class="help">ID аккаунта: <code>{{.Account.ID}}</code></p></details>
-<p class="help">Лимиты общие для аккаунта, включая Codex и другие приложения. Запрос к OpenAI выполняется только по кнопке «Обновить лимиты».{{if not .Updated.IsZero}}<br>Данные получены {{ago .Updated}} · {{tfull .Updated}}{{end}}</p>
+<p class="help">Лимиты общие для аккаунта, включая Codex и другие приложения. Запрос к OpenAI выполняется при старте роутера, раз в 10 минут и по кнопке «Обновить лимиты».{{if not .Updated.IsZero}}<br>Данные получены {{ago .Updated}} · {{tfull .Updated}}{{end}}</p>
 {{else}}
 <p class="help">Войдите в Codex, чтобы увидеть аккаунт и лимиты подписки.</p>
 {{with .Error}}<p class="note warn">{{.}}</p>{{end}}

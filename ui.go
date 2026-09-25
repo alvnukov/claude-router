@@ -67,7 +67,9 @@ func uiTemplates() (*template.Template, error) {
 		"dur":    fmtDur,
 		"ago":    fmtAgo,
 		"pct":    func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) },
-		"score":  func(f float64) string { return strconv.FormatFloat(f*100, 'f', 0, 64) + "%" },
+		// percent drops a zero fraction: 77, 4.5.
+		"percent": func(f float64) string { return strconv.FormatFloat(f, 'f', -1, 64) },
+		"score":   func(f float64) string { return strconv.FormatFloat(f*100, 'f', 0, 64) + "%" },
 		"ms": func(f float64) string {
 			if f == 0 {
 				return "—"

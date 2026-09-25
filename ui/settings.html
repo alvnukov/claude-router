@@ -53,9 +53,15 @@
 <div id="codex-usage" hx-get="/settings/codex/usage" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>
 </section>
 <section class="settings-section" id="anthropic-limits"><h2>Лимиты Anthropic</h2>
-{{with .Limits}}{{if eq .State "unverified"}}<p><b>Не подтверждено.</b> Anthropic присылает заголовки лимитов, но что они значат для подписки, ещё не проверено, поэтому значения не показываются.</p>
-<p class="help">Заголовки в ответе {{ago .ObservedAt}} · {{tfull .ObservedAt}}:</p>
-<ul>{{range .Headers}}<li><code>{{.}}</code></li>{{end}}</ul>
+{{with .Limits}}{{if eq .State "fresh"}}<div class="quota-grid">{{range $w := .Windows}}<article class="quota-card{{if $w.Low}} quota-low{{end}}"><h4>{{$w.Name}}</h4>
+{{with $w.RemainingPercent}}<p class="quota-value">{{percent .}}% <span>осталось</span></p><progress max="100" value="{{percent .}}" aria-label="Остаток {{$w.Name}}">{{percent .}}%</progress>{{end}}
+{{with $w.UsedPercent}}<p class="help">Использовано {{percent .}}%</p>{{end}}
+{{if and $w.Remaining $w.Limit}}<p class="help">Осталось {{$w.Remaining}} из {{$w.Limit}}</p>{{else if $w.Remaining}}<p class="help">Осталось {{$w.Remaining}}</p>{{else if $w.Limit}}<p class="help">Лимит {{$w.Limit}}</p>{{end}}
+{{with $w.Status}}<p class="help">Статус: <code>{{.}}</code></p>{{end}}
+{{if not $w.ResetAt.IsZero}}<p class="help">Сброс: <time datetime="{{$w.ResetAt.Format "2006-01-02T15:04:05Z07:00"}}">{{$w.ResetAt.Local.Format "02.01.2006 15:04"}}</time><br>{{$w.ResetIn}}</p>{{end}}
+</article>{{else}}<p class="help">Окон лимитов в заголовках нет.</p>{{end}}</div>
+{{if .Raw}}<details class="settings-extra"{{if not .Windows}} open{{end}}><summary>Другие заголовки</summary><ul>{{range $k, $v := .Raw}}<li><code>{{$k}}</code>: {{$v}}</li>{{end}}</ul></details>{{end}}
+<p class="help">Данные получены {{ago .ObservedAt}} · {{tfull .ObservedAt}}, действительны {{.MaxAgeMinutes}} мин.</p>
 {{else if eq .State "no_headers"}}<p class="note warn">Anthropic не присылает лимиты в ответах.</p>
 <p class="help">Ответ {{ago .ObservedAt}} · {{tfull .ObservedAt}} пришёл без заголовков anthropic-ratelimit-*.</p>
 {{else}}<p><b>Недоступно.</b> {{if .ObservedAt.IsZero}}Роутер ещё не видел ответов Anthropic.{{else}}Последний ответ Anthropic {{ago .ObservedAt}} · {{tfull .ObservedAt}}, это старше {{.MaxAgeMinutes}} мин.{{end}}</p>
