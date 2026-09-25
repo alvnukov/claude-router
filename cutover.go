@@ -84,10 +84,6 @@ func runCutover(ctx context.Context, args []string, in io.Reader, out io.Writer,
 	if err := file.validate(); err != nil {
 		return fmt.Errorf("cutover: %w", err)
 	}
-	if conn, err := net.DialTimeout("tcp", file.CaddyAdmin, time.Second); err == nil {
-		conn.Close()
-		return fmt.Errorf("cutover: something already listens on the Caddy admin address %s", file.CaddyAdmin)
-	}
 	digest, err := fileDigest(*binary)
 	if err != nil {
 		return err
@@ -100,8 +96,17 @@ func runCutover(ctx context.Context, args []string, in io.Reader, out io.Writer,
 
 func cutover(ctx context.Context, file deployFile, ops cutoverOps, digest string, in io.Reader, out io.Writer, wait, readyTimeout time.Duration) (err error) {
 	d := &deployController{config: file.deployConfig, ops: ops}
-	if slot := servingSlot(ctx, file.PublicAPI); slot != "" {
+	switch slot := servingSlot(ctx, file.PublicAPI); slot {
+	case "":
+	case "blue":
+		// An earlier cutover switched but did not record it.
+		return recordCutover(ctx, d, file, ops, out)
+	default:
 		return fmt.Errorf("cutover: slot %s already serves %s; use ./router deploy", slot, file.PublicAPI)
+	}
+	if conn, err := net.DialTimeout("tcp", file.CaddyAdmin, time.Second); err == nil {
+		conn.Close()
+		return fmt.Errorf("cutover: something already listens on the Caddy admin address %s", file.CaddyAdmin)
 	}
 	if _, err := ops.legacyPending(ctx); err != nil {
 		return fmt.Errorf("cutover: no legacy router answers on %s: %w", file.PublicUI, err)
@@ -178,11 +183,25 @@ Type yes to continue: `, file.PublicAPI, file.PublicUI, blue.PID, file.BlueAPI, 
 		return fmt.Errorf("Caddy did not come up: %w", err)
 	}
 	serving = true
-	if err = ops.commit(ctx, file); err != nil {
-		return fmt.Errorf("Caddy and blue serve, but the cutover was not recorded: %w", err)
+	return recordCutover(ctx, d, file, ops, out)
+}
+
+// recordCutover records a cutover once Caddy serves blue: deploy.json, the
+// legacy plist moved aside, the history compacted. Run again, it finishes a
+// cutover that failed here.
+func recordCutover(ctx context.Context, d *deployController, file deployFile, ops cutoverOps, out io.Writer) error {
+	blue, err := ops.state(ctx, "blue")
+	if err != nil {
+		return fmt.Errorf("cutover: blue serves %s but does not answer: %w", file.PublicAPI, err)
+	}
+	if err := d.ready(ctx, "blue", blue.PID); err != nil {
+		return fmt.Errorf("cutover: %w", err)
+	}
+	if err := ops.commit(ctx, file); err != nil {
+		return fmt.Errorf("Caddy and blue serve, but the cutover was not recorded; run it again to record it: %w", err)
 	}
 	// The legacy router has exited, so nothing else appends to the history.
-	if err = ops.admin(ctx, "blue", "compact"); err != nil {
+	if err := ops.admin(ctx, "blue", "compact"); err != nil {
 		return fmt.Errorf("blue serves, but its history was not compacted: %w", err)
 	}
 	fmt.Fprintf(out, "Caddy serves %s and %s from blue (pid %d); ./router deploy switches slots from now on\n", file.PublicAPI, file.PublicUI, blue.PID)

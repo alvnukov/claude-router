@@ -238,6 +238,24 @@ func TestCutoverRefusesWhenSlotsAlreadyServe(t *testing.T) {
 	}
 }
 
+// A cutover whose last step failed leaves Caddy serving blue with nothing
+// recorded; deploy then sends the user back to cutover, which finishes it.
+func TestCutoverRecordsASwitchItFailedToRecord(t *testing.T) {
+	f := newCutoverFixture(t, 0)
+	f.stopLegacy(t.Context())
+	f.slots["blue"] = &deploySlotState{Mode: modeActive, PID: 7}
+	f.startCaddy(t.Context())
+	admin := httptest.NewServer(http.NotFoundHandler()) // Caddy's own admin API
+	defer admin.Close()
+	f.calls = nil
+	if out, err := f.run("", "-caddy-admin", admin.Listener.Addr().String()); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := strings.Join(f.calls, ","); got != "state:blue,commit,compact:blue" || !f.committed {
+		t.Fatalf("finishing the cutover did more than record it: %s", got)
+	}
+}
+
 func TestCutoverRefusesBusyCaddyAdmin(t *testing.T) {
 	f := newCutoverFixture(t, 0)
 	admin := httptest.NewServer(http.NotFoundHandler())
