@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.claude-local-router.green</string>
+  <key>ProgramArguments</key>
+  <array><string>/home/router/.claude/local-router/localrouter.green</string></array>
+  <key>WorkingDirectory</key><string>/home/router/.claude/local-router</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ExitTimeOut</key><integer>960</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ROUTER_ACTIVE_SLOT_FILE</key><string>/home/router/.claude/local-router/active-slot</string>
+    <key>ROUTER_ANTHROPIC_LIMITS_FILE</key><string>/home/router/.claude/local-router/limits.json</string>
+    <key>ROUTER_ENV_FILE</key><string>/home/router/.claude/local-router/env</string>
+    <key>ROUTER_LISTEN</key><string>127.0.0.1:18792</string>
+    <key>ROUTER_PROVIDERS_FILE</key><string>/home/router/.claude/local-router/providers.json</string>
+    <key>ROUTER_PUBLIC_LISTEN</key><string>127.0.0.1:18787</string>
+    <key>ROUTER_SLOT</key><string>green</string>
+    <key>ROUTER_STATE_FILE</key><string>/home/router/.claude/local-router/state.json</string>
+    <key>ROUTER_UI_HISTORY_FILE</key><string>/home/router/.claude/local-router/history.jsonl</string>
+    <key>ROUTER_UI_LISTEN</key><string>127.0.0.1:18794</string>
+  </dict>
+  <key>StandardOutPath</key><string>/home/router/.claude/local-router/router.green.log</string>
+  <key>StandardErrorPath</key><string>/home/router/.claude/local-router/router.green.log</string>
+</dict>
+</plist>
