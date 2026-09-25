@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -70,6 +71,7 @@ func uiTemplates() (*template.Template, error) {
 		"fmtnum": fmtNum,
 		"dur":    fmtDur,
 		"ago":    fmtAgo,
+		"base":   filepath.Base,
 		"pct":    func(f float64) string { return strconv.FormatFloat(f, 'f', 1, 64) },
 		"score":  func(f float64) string { return strconv.FormatFloat(f*100, 'f', 0, 64) + "%" },
 		"ms": func(f float64) string {
@@ -436,6 +438,7 @@ func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*r
 // ---- settings ----
 
 type settingsView struct {
+	ReloadErrors  []reloadFailure
 	ActiveProfile string
 	ProfileNames  []string
 	ClaudeProxy   claudeProxyView
@@ -548,7 +551,7 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
+	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
 	for name := range c.local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}

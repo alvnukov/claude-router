@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,4 +200,62 @@ func between(t *testing.T, s, start, end string) string {
 		t.Fatalf("no %q after %q", end, start)
 	}
 	return s[i : i+j]
+}
+
+// withBadProvider returns the providers file with a Codex connection that the
+// strict reader rejects: a second connection without auth_id.
+func withBadProvider(t *testing.T, good []byte) string {
+	t.Helper()
+	var doc map[string]any
+	if err := json.Unmarshal(good, &doc); err != nil {
+		t.Fatal(err)
+	}
+	providers, _ := doc["providers"].([]any)
+	doc["providers"] = append([]any{map[string]any{"name": "work", "type": "codex", "base_url": codexBaseURL}}, providers...)
+	bad, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(bad)
+}
+
+func TestReloadErrorBanner(t *testing.T) {
+	cs, _, path := profileFixture(t)
+	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	good, _ := os.ReadFile(path)
+	bad := withBadProvider(t, good)
+	writeRaw(t, path, bad)
+	future := time.Now().Add(2 * time.Second)
+	os.Chtimes(path, future, future)
+	cs.pollOnce()
+	v := u.settingsView()
+	if len(v.ReloadErrors) != 1 || !strings.Contains(v.ReloadErrors[0].Err, "auth_id") || v.ReloadErrors[0].Snapshot.IsZero() {
+		t.Fatalf("banner: %+v", v.ReloadErrors)
+	}
+	if _, ok := cs.get().local.provider("work"); ok {
+		t.Fatal("rejected file was applied")
+	}
+	if data, _ := os.ReadFile(path); string(data) != bad {
+		t.Fatal("rejected file was rewritten")
+	}
+	cs.pollOnce()
+	if again := u.settingsView().ReloadErrors; len(again) != 1 || !again[0].At.Equal(v.ReloadErrors[0].At) {
+		t.Fatal("same error re-stamped or duplicated")
+	}
+	writeRaw(t, path, string(good))
+	later := future.Add(2 * time.Second)
+	os.Chtimes(path, later, later)
+	cs.pollOnce()
+	if left := u.settingsView().ReloadErrors; len(left) != 0 {
+		t.Fatalf("banner not cleared: %+v", left)
+	}
+}
+
+func TestReloadErrorBannerRenders(t *testing.T) {
+	u, h := testUI(t)
+	u.cs.noteReload("/x/providers.json", errors.New("boom"))
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	if !strings.Contains(body, "файл providers.json не применён: boom; действует снимок от") {
+		t.Fatal("banner not rendered")
+	}
 }

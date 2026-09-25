@@ -3,6 +3,7 @@
 <div class="settings-heading"><div><h1>Настройки роутера</h1><p class="help">Семейство модели → входной effort → Anthropic, модель или пул</p></div><a class="btn" href="/">История запросов</a></div>
 {{with .Flash}}<div class="note ok" role="status">{{.}}</div>{{end}}
 {{with .Err}}<div class="note err" role="alert">{{.}}</div>{{end}}
+{{range .ReloadErrors}}<div class="note err" role="alert">файл {{base .File}} не применён: {{.Err}}; действует снимок от {{.Snapshot.Format "2006-01-02 15:04:05"}}</div>{{end}}
 <section class="settings-section" id="profiles"><h2>Профили маршрутизации</h2><p class="help">Активный профиль: <strong>{{.ActiveProfile}}</strong>. Провайдеры и каталог моделей общие для всех профилей; маршруты и пулы принадлежат выбранному профилю. Переключение применяется к следующему запросу.</p>
 <div class="inline-form">{{range .ProfileNames}}<form hx-post="/settings/profiles/activate" hx-target="#detail"><input type="hidden" name="name" value="{{.}}"><button class="btn" type="submit" {{if eq . $.ActiveProfile}}disabled{{end}}>{{.}}</button></form>{{end}}</div>
 <form class="inline-form" hx-post="/settings/profiles" hx-target="#detail"><input name="name" placeholder="Имя профиля" aria-label="Имя нового профиля" required><button class="btn" type="submit" name="mode" value="clone">Клонировать активный</button><button class="btn" type="submit" name="mode" value="empty">Создать пустой</button></form>
