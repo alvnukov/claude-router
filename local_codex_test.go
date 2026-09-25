@@ -360,3 +360,42 @@ func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
 	serve("n4", "codex/gpt")
 	serve("n1", "work/gpt")
 }
+
+// A slow token refresh on one connection holds its store's lock for seconds.
+// Sessions the pool sends to another connection must not wait behind it.
+func TestCodexRefreshDoesNotStallOtherConnection(t *testing.T) {
+	seedTwoConnections(t)
+	codexStatusByAccount(t, map[string]int{})
+	cfg, hl := codexPoolOf("work/gpt", "codex/gpt"), newHealth("")
+	store, err := codexStoreFor(provider{Name: "codex", Type: "codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock() // what credentialFor holds during a refresh
+	locked := true
+	defer func() {
+		if locked {
+			store.mu.Unlock()
+		}
+	}()
+	type result struct {
+		code   int
+		served string
+	}
+	done := make(chan result, 1)
+	go func() {
+		w, tr := runLocalSession(t, cfg, hl, "n1")
+		done <- result{w.Code, tr.Served}
+	}()
+	select {
+	case r := <-done:
+		if r.code != 200 || r.served != "work/gpt" {
+			t.Fatalf("%d served %q, want work/gpt", r.code, r.served)
+		}
+	case <-time.After(2 * time.Second):
+		store.mu.Unlock()
+		locked = false
+		<-done
+		t.Fatal("new session waited for another connection's refresh")
+	}
+}

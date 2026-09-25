@@ -262,9 +262,14 @@ func (s *codexAuthStore) connected() bool {
 }
 
 // signedIn reports whether the store can authorize a request without a new
-// sign-in: a credential is loaded or on disk, and it was not rejected.
+// sign-in: a credential is loaded or on disk, and it was not rejected. Pool
+// selection asks this of every member, so it never waits for the lock: a
+// holder is loading or refreshing the token, which can take seconds, and the
+// member stays a candidate whose own request finds out.
 func (s *codexAuthStore) signedIn() bool {
-	s.mu.Lock()
+	if !s.mu.TryLock() {
+		return true
+	}
 	defer s.mu.Unlock()
 	if s.authProblem != "" {
 		return false
