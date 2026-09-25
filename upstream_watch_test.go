@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -356,5 +358,53 @@ func TestAnthropicIdleClosesClientConnection(t *testing.T) {
 	case <-upstreamGone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream request still open")
+	}
+}
+
+// A protocol upgrade goes through unwatched: the proxy needs the upstream's
+// own read-write body, and a quiet upgraded connection is not a silent answer.
+func TestProxyUpgradeIsNotWatched(t *testing.T) {
+	captureLog(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") != "echo" {
+			http.Error(w, "want an upgrade", http.StatusBadRequest)
+			return
+		}
+		conn, buf, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		_, _ = io.WriteString(conn, "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+		line, _ := buf.ReadString('\n')
+		_, _ = io.WriteString(conn, line)
+	}))
+	defer upstream.Close()
+	_, handler := limitsRouterStore(t, upstream.URL, "", newStore(10, ""), func(c *config) {
+		c.startTimeout, c.idleTimeout = 0, 50*time.Millisecond
+	})
+	router := httptest.NewServer(handler)
+	defer router.Close()
+
+	conn, err := net.Dial("tcp", router.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.WriteString(conn, "GET /echo HTTP/1.1\r\nHost: router\r\nConnection: Upgrade\r\nUpgrade: echo\r\n\r\n")
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status %d %q; want 101", resp.StatusCode, b)
+	}
+	_, _ = io.WriteString(conn, "ping\n")
+	if line, err := br.ReadString('\n'); line != "ping\n" {
+		t.Fatalf("echo %q, %v; want ping", line, err)
 	}
 }

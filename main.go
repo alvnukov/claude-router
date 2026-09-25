@@ -216,6 +216,11 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 				return err
 			}
 		}
+		// An upgraded connection may keep quiet, and the proxy needs its
+		// read-write body as is.
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			return nil
+		}
 		// A silent upstream is cut off; the copy to the client then fails and
 		// net/http drops the client's connection without an event.
 		orig := resp.Body
