@@ -115,6 +115,7 @@ func (u *uiServer) handler() http.Handler {
 	mux.HandleFunc("GET /requests/{id}/sent.json", u.rawSent)
 	mux.HandleFunc("GET /requests/{id}/response.txt", u.rawResponse)
 	mux.HandleFunc("GET /settings", u.settings)
+	mux.HandleFunc("GET /api/limits", u.limitsAPI)
 	mux.HandleFunc("POST /api/profiles/{name}/activate", u.profileActivateAPI)
 	mux.HandleFunc("POST /settings/profiles", u.profileCreate)
 	mux.HandleFunc("POST /settings/profiles/activate", u.profileActivate)
@@ -446,6 +447,7 @@ type settingsView struct {
 	Catalog       modelCatalog
 	AllModels     []localModel
 	Efforts       []string
+	Limits        anthropicLimitsView
 }
 
 type routeRow struct {
@@ -517,7 +519,7 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts}
+	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
 	for name := range c.local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}

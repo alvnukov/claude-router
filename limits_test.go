@@ -613,3 +613,114 @@ func TestLimitsPath(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+// limitsSection is the Anthropic limits block of the settings page.
+func limitsSection(t *testing.T, h http.Handler) string {
+	t.Helper()
+	body := get(t, h, "GET", "/settings", nil).Body.String()
+	start := strings.Index(body, `<section class="settings-section" id="anthropic-limits">`)
+	if start < 0 {
+		t.Fatal("no Anthropic limits section on the settings page")
+	}
+	end := strings.Index(body[start:], "</section>")
+	return body[start : start+end]
+}
+
+func TestAnthropicLimitsSettingsBlock(t *testing.T) {
+	captureLog(t)
+	u, h := testUI(t)
+	page := get(t, h, "GET", "/settings", nil).Body.String()
+	codex, limits, conns := strings.Index(page, `id="codex-subscription"`), strings.Index(page, `id="anthropic-limits"`), strings.Index(page, `id="connections"`)
+	if codex < 0 || codex > limits || limits > conns {
+		t.Fatalf("limits block is not between Codex subscription and connections: %d %d %d", codex, limits, conns)
+	}
+	if !strings.Contains(page, `<a href="#anthropic-limits">`) {
+		t.Fatal("no navigation link to the limits block")
+	}
+	full := httptest.NewRecorder()
+	h.ServeHTTP(full, httptest.NewRequest("GET", "/settings", nil))
+	if full.Code != http.StatusOK || !strings.Contains(full.Body.String(), `id="anthropic-limits"`) || strings.Contains(full.Body.String(), "<no value>") {
+		t.Fatalf("full settings page: %d", full.Code)
+	}
+
+	now := time.Now()
+	withValues := limitsHeader(
+		"Anthropic-Ratelimit-Requests-Remaining", "value-41-secret",
+		"Anthropic-Ratelimit-Example-Status", "value-allowed-secret",
+	)
+	for _, c := range []struct {
+		name       string
+		setup      func(*anthropicLimits)
+		want, deny []string
+	}{
+		{"nothing observed", func(*anthropicLimits) {},
+			[]string{"Недоступно", "ещё не видел ответов Anthropic"}, []string{"Не подтверждено"}},
+		{"no headers", func(l *anthropicLimits) { l.observe(http.Header{}, now) },
+			[]string{"Anthropic не присылает лимиты в ответах"}, []string{"Недоступно", "Не подтверждено"}},
+		{"unverified", func(l *anthropicLimits) { l.observe(withValues, now) },
+			[]string{"Не подтверждено", "<code>anthropic-ratelimit-example-status</code>", "<code>anthropic-ratelimit-requests-remaining</code>"},
+			[]string{"value-", "<progress", "%", "Недоступно"}},
+		{"stale", func(l *anthropicLimits) { l.observe(withValues, now.Add(-31*time.Minute)) },
+			[]string{"Недоступно", "старше 30 мин"}, []string{"anthropic-ratelimit-example-status", "value-", "Не подтверждено"}},
+	} {
+		u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
+		c.setup(u.limits)
+		s := limitsSection(t, h)
+		for _, w := range c.want {
+			if !strings.Contains(s, w) {
+				t.Fatalf("%s: %q missing in\n%s", c.name, w, s)
+			}
+		}
+		for _, d := range c.deny {
+			if strings.Contains(s, d) {
+				t.Fatalf("%s: %q must not appear in\n%s", c.name, d, s)
+			}
+		}
+		if !strings.Contains(s, "Сам роутер к Anthropic не обращается") || strings.Contains(s, "<button") || strings.Contains(s, "hx-") {
+			t.Fatalf("%s: the block must be passive and say so:\n%s", c.name, s)
+		}
+	}
+}
+
+func TestAnthropicLimitsAPI(t *testing.T) {
+	captureLog(t)
+	u, h := testUI(t)
+	out := countOutbound(t)
+	now := time.Now()
+	u.limits.observe(limitsHeader("Anthropic-Ratelimit-Example-Status", "value-secret"), now)
+
+	w := get(t, h, "GET", "/api/limits", nil)
+	if n := out.n.Load(); n != 0 {
+		t.Fatalf("GET /api/limits made %d outbound requests", n)
+	}
+	if ct, cc := w.Header().Get("Content-Type"), w.Header().Get("Cache-Control"); ct != "application/json" || cc != "no-store" {
+		t.Fatalf("Content-Type %q, Cache-Control %q", ct, cc)
+	}
+	if strings.Contains(w.Body.String(), "value-secret") {
+		t.Fatalf("header value in JSON: %s", w.Body.String())
+	}
+	var got anthropicLimitsView
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := u.limits.view(now)
+	if got.State != want.State || !got.ObservedAt.Equal(want.ObservedAt) || got.AgeSeconds == nil || got.MaxAgeSeconds != want.MaxAgeSeconds || strings.Join(got.Headers, ",") != strings.Join(want.Headers, ",") {
+		t.Fatalf("JSON %+v, store %+v", got, want)
+	}
+	if s := limitsSection(t, h); !strings.Contains(s, "Не подтверждено") || !strings.Contains(s, "anthropic-ratelimit-example-status") {
+		t.Fatalf("page disagrees with JSON:\n%s", s)
+	}
+
+	for _, method := range []string{"POST", "PUT", "DELETE"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, "/api/limits", nil))
+		if rec.Code != http.StatusMethodNotAllowed {
+			t.Fatalf("%s /api/limits: %d", method, rec.Code)
+		}
+	}
+
+	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
+	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body, `{"state":"unavailable","max_age_seconds":1800}`) {
+		t.Fatalf("nothing observed: %s", body)
+	}
+}

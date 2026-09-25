@@ -391,6 +391,14 @@ func (l *anthropicLimits) view(now time.Time) anthropicLimitsView {
 	return v
 }
 
+// limitsAPI is GET /api/limits: the view the settings page shows, from the
+// store only; nothing here reaches Anthropic.
+func (u *uiServer) limitsAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(u.limits.view(time.Now()))
+}
+
 func sortedNames(m map[string]string) []string {
 	names := make([]string, 0, len(m))
 	for k := range m {
