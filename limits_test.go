@@ -735,40 +735,103 @@ func TestAnthropicLimitsViewJSON(t *testing.T) {
 		"Anthropic-Ratelimit-Unified-Status", "allowed",
 		"Anthropic-Ratelimit-Unified-Representative-Claim", "five_hour",
 	), now)
+	report := func(l *anthropicLimits, at time.Time) string {
+		got, _ := json.Marshal(limitsReportOf(l.view(at), codexUsageView{}, at))
+		return string(got)
+	}
+	const noCodex = `{"source":"codex","state":"not_connected","max_age_seconds":1800}`
 	for _, c := range []struct {
 		after time.Duration
 		want  string
 	}{
-		{90 * time.Second, `{"state":"fresh","observed_at":"` + at + `","age_seconds":90,"max_age_seconds":1800,` +
-			`"windows":[{"name":"unified","status":"allowed"},{"name":"unified-5h","remaining_percent":77,"used_percent":23,"reset_at":"2026-09-25T15:00:00Z"}],` +
-			`"raw":{"anthropic-ratelimit-unified-representative-claim":"five_hour"}}`},
-		{31 * time.Minute, `{"state":"unavailable","observed_at":"` + at + `","age_seconds":1860,"max_age_seconds":1800}`},
+		{90 * time.Second, `{"sources":[{"source":"anthropic","state":"fresh","observed_at":"` + at + `","age_seconds":90,"max_age_seconds":1800,` +
+			`"raw":{"anthropic-ratelimit-unified-representative-claim":"five_hour"}},` + noCodex + `],` +
+			`"windows":[{"source":"anthropic","name":"unified","status":"allowed","observed_at":"` + at + `"},` +
+			`{"source":"anthropic","name":"unified-5h","remaining_percent":77,"used_percent":23,"reset_at":"2026-09-25T15:00:00Z","observed_at":"` + at + `"}]}`},
+		{31 * time.Minute, `{"sources":[{"source":"anthropic","state":"unavailable","observed_at":"` + at + `","age_seconds":1860,"max_age_seconds":1800},` + noCodex + `],"windows":[]}`},
 	} {
-		if got, _ := json.Marshal(l.view(now.Add(c.after))); string(got) != c.want {
+		if got := report(l, now.Add(c.after)); got != c.want {
 			t.Fatalf("after %s\n got %s\nwant %s", c.after, got, c.want)
 		}
 	}
 
-	// While fresh, both lists are always there, even empty.
+	// While fresh, raw is always there, even empty; windows always are.
 	for _, c := range []struct {
 		h    http.Header
 		want string
 	}{
 		{limitsHeader("Anthropic-Ratelimit-Unified-5h-Utilization", "0.5"),
-			`"windows":[{"name":"unified-5h","remaining_percent":50,"used_percent":50}],"raw":{}}`},
+			`"raw":{}},` + noCodex + `],"windows":[{"source":"anthropic","name":"unified-5h","remaining_percent":50,"used_percent":50,"observed_at":"` + at + `"}]}`},
 		{limitsHeader("Anthropic-Ratelimit-Unified-Fallback", "available"),
-			`"windows":[],"raw":{"anthropic-ratelimit-unified-fallback":"available"}}`},
+			`"raw":{"anthropic-ratelimit-unified-fallback":"available"}},` + noCodex + `],"windows":[]}`},
 	} {
 		l := newAnthropicLimits("", anthropicLimitsMaxAge)
 		l.observe(c.h, now)
-		if got, _ := json.Marshal(l.view(now)); !strings.HasPrefix(string(got), `{"state":"fresh",`) || !strings.HasSuffix(string(got), c.want) {
+		if got := report(l, now); !strings.HasPrefix(got, `{"sources":[{"source":"anthropic","state":"fresh",`) || !strings.HasSuffix(got, c.want) {
 			t.Fatalf("got %s, want suffix %s", got, c.want)
 		}
 	}
 	none := newAnthropicLimits("", anthropicLimitsMaxAge)
 	none.observe(http.Header{}, now)
-	if got, _ := json.Marshal(none.view(now)); string(got) != `{"state":"no_headers","observed_at":"`+at+`","age_seconds":0,"max_age_seconds":1800}` {
+	if got := report(none, now); got != `{"sources":[{"source":"anthropic","state":"no_headers","observed_at":"`+at+`","age_seconds":0,"max_age_seconds":1800},`+noCodex+`],"windows":[]}` {
 		t.Fatalf("no headers: %s", got)
+	}
+}
+
+// Codex windows come from the last successful usage request, in the same
+// shape as Anthropic's, and only while that request is at most 30 minutes old.
+func TestLimitsReportCodex(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	var payload codexUsagePayload
+	if err := json.Unmarshal([]byte(`{"plan_type":"pro",
+		"rate_limit":{"allowed":true,"primary_window":{"used_percent":20,"limit_window_seconds":18000,"reset_at":1790348400},
+			"secondary_window":{"limit_window_seconds":604800}},
+		"additional_rate_limits":[{"limit_name":"code_review","rate_limit":{"allowed":false,"primary_window":{"used_percent":100,"limit_window_seconds":18000}}}]}`), &payload); err != nil {
+		t.Fatal(err)
+	}
+	updated := now.Add(-2 * time.Minute)
+	at := updated.Format(time.RFC3339)
+	fresh := decodeCodexUsage(payload, codexAccount{ID: "acct"}, updated)
+	codex := func(v codexUsageView, at time.Time) string {
+		r := limitsReportOf(anthropicLimitsView{State: "unavailable", MaxAgeSeconds: 1800}, v, at)
+		sources, _ := json.Marshal(r.Sources[1])
+		windows, _ := json.Marshal(r.Windows)
+		return string(sources) + " " + string(windows)
+	}
+
+	want := `{"source":"codex","state":"fresh","observed_at":"` + at + `","age_seconds":120,"max_age_seconds":1800} ` +
+		`[{"source":"codex","name":"primary","remaining_percent":80,"used_percent":20,"reset_at":"2026-09-25T15:00:00Z","window_seconds":18000,"observed_at":"` + at + `"},` +
+		`{"source":"codex","name":"secondary","window_seconds":604800,"observed_at":"` + at + `"},` +
+		`{"source":"codex","name":"code_review-primary","remaining_percent":0,"used_percent":100,"status":"rejected","window_seconds":18000,"observed_at":"` + at + `"}]`
+	if got := codex(fresh, now); got != want {
+		t.Fatalf("fresh\n got %s\nwant %s", got, want)
+	}
+
+	// A failed refresh keeps the last good numbers while they are fresh and
+	// says why the newer ones are missing.
+	failed := fresh
+	failed.Error = "сервис лимитов Codex вернул HTTP 503"
+	want = `{"source":"codex","state":"fresh","observed_at":"` + at + `","age_seconds":120,"max_age_seconds":1800,"error":"сервис лимитов Codex вернул HTTP 503"} [`
+	if got := codex(failed, now); !strings.HasPrefix(got, want) {
+		t.Fatalf("failed refresh\n got %s\nwant prefix %s", got, want)
+	}
+
+	for _, c := range []struct {
+		name string
+		v    codexUsageView
+		at   time.Time
+		want string
+	}{
+		{"stale", failed, updated.Add(31 * time.Minute),
+			`{"source":"codex","state":"unavailable","observed_at":"` + at + `","age_seconds":1860,"max_age_seconds":1800,"error":"сервис лимитов Codex вернул HTTP 503"} []`},
+		{"never fetched", codexUsageView{Connected: true, Error: "нет ответа"}, now,
+			`{"source":"codex","state":"unavailable","max_age_seconds":1800,"error":"нет ответа"} []`},
+		{"not connected", codexUsageView{}, now,
+			`{"source":"codex","state":"not_connected","max_age_seconds":1800} []`},
+	} {
+		if got := codex(c.v, c.at); got != c.want {
+			t.Fatalf("%s\n got %s\nwant %s", c.name, got, c.want)
+		}
 	}
 }
 
@@ -919,23 +982,39 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 		"Anthropic-Ratelimit-Unified-Representative-Claim", "five_hour",
 	), now)
 
+	// Codex is connected and its last refresh failed: its source says so and
+	// the Anthropic part is unaffected.
+	oldAuth := codexAuth
+	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("acct")}
+	t.Cleanup(func() { codexAuth = oldAuth })
+	var codexCalls atomic.Int64
+	u.codexUsage.client = &http.Client{Transport: usageTransport(func(*http.Request) (*http.Response, error) {
+		codexCalls.Add(1)
+		return usageResponse(503, "private-body"), nil
+	})}
+	u.codexUsage.get(t.Context(), codexAuth, true)
+
 	w := get(t, h, "GET", "/api/limits", nil)
-	if n := out.n.Load(); n != 0 {
-		t.Fatalf("GET /api/limits made %d outbound requests", n)
+	if n := out.n.Load(); n != 0 || codexCalls.Load() != 1 {
+		t.Fatalf("GET /api/limits made %d outbound requests, %d to Codex", n, codexCalls.Load()-1)
 	}
 	if ct, cc := w.Header().Get("Content-Type"), w.Header().Get("Cache-Control"); ct != "application/json" || cc != "no-store" {
 		t.Fatalf("Content-Type %q, Cache-Control %q", ct, cc)
 	}
-	var got anthropicLimitsView
+	var got limitsReport
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := u.limits.view(now)
+	want := limitsReportOf(u.limits.view(now), u.codexUsage.get(t.Context(), codexAuth, false), now)
 	gotWindows, _ := json.Marshal(got.Windows)
 	wantWindows, _ := json.Marshal(want.Windows)
-	if got.State != "fresh" || got.State != want.State || !got.ObservedAt.Equal(want.ObservedAt) || got.AgeSeconds == nil || got.MaxAgeSeconds != want.MaxAgeSeconds ||
-		string(gotWindows) != string(wantWindows) || !maps.Equal(got.Raw, want.Raw) {
+	if len(got.Sources) != 2 || got.Sources[0].Source != "anthropic" || got.Sources[0].State != "fresh" || !got.Sources[0].ObservedAt.Equal(want.Sources[0].ObservedAt) ||
+		got.Sources[0].AgeSeconds == nil || got.Sources[0].MaxAgeSeconds != 1800 || !maps.Equal(got.Sources[0].Raw, want.Sources[0].Raw) ||
+		string(gotWindows) != string(wantWindows) || len(got.Windows) != 1 {
 		t.Fatalf("JSON %s, store %+v", w.Body.String(), want)
+	}
+	if c := got.Sources[1]; c.Source != "codex" || c.State != "unavailable" || c.Error == "" || strings.Contains(w.Body.String(), "private-body") {
+		t.Fatalf("codex source: %s", w.Body.String())
 	}
 	if s := limitsSection(t, h); !strings.Contains(s, "77% <span>осталось</span>") || !strings.Contains(s, "five_hour") {
 		t.Fatalf("page disagrees with JSON:\n%s", s)
@@ -950,7 +1029,9 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 	}
 
 	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
-	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body, `{"state":"unavailable","max_age_seconds":1800}`) {
+	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "missing.json")}
+	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body,
+		`{"sources":[{"source":"anthropic","state":"unavailable","max_age_seconds":1800},{"source":"codex","state":"not_connected","max_age_seconds":1800}],"windows":[]}`) {
 		t.Fatalf("nothing observed: %s", body)
 	}
 }
