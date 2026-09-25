@@ -21,11 +21,13 @@ func MkdirPrivate(dir string) error {
 // WriteFileAtomic replaces path with data so that a reader sees the old file
 // or the new one, never a partial write. The data goes to a temporary file
 // ".<base>.*" in path's directory, which must exist; it is synced to disk and
-// renamed over path with ReplaceFile. On failure path is left as it was and
-// the temporary file is removed.
+// renamed over path with ReplaceFile. The directory is not synced, so a crash
+// right after the rename may leave the old file. On failure path is left as it
+// was and the temporary file is removed.
 //
-// On unix the file gets mode perm whatever the umask. On Windows perm does not
-// apply: the file inherits the directory's ACL.
+// On unix the file gets mode perm whatever the umask. On Windows access comes
+// from the directory's ACL, and of perm only the owner-write bit applies:
+// without it the file is read-only.
 func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
 	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
