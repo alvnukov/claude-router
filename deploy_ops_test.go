@@ -98,6 +98,7 @@ func TestDeployOpsUseConfiguredScratchLabels(t *testing.T) {
 }
 
 func TestDeployOpsRunTheCaddyNamedInDeployFile(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
 	home := t.TempDir()
 	caddy := filepath.Join(home, "caddy")
 	if err := os.WriteFile(caddy, []byte("#!/bin/sh\necho '{\"from\":\"configured\"}'\n"), 0o755); err != nil {

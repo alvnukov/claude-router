@@ -82,9 +82,7 @@ func TestClaudeProxyAbsentAndInvalidFiles(t *testing.T) {
 			if err := p.set(target, true); err != nil {
 				t.Fatal(err)
 			}
-			if stat, err := os.Stat(path + ".router-proxy-backup"); err != nil || stat.Mode().Perm() != 0600 {
-				t.Fatal("backup permissions")
-			}
+			requirePrivateFile(t, path+".router-proxy-backup")
 			if err := p.set(target, false); err != nil {
 				t.Fatal(err)
 			}

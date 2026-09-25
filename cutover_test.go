@@ -145,7 +145,7 @@ func (f *cutoverFixture) run(answer string, extra ...string) (string, error) {
 	home := f.t.TempDir()
 	binary := deployBinary(f.t, home)
 	cfg := f.controller.config
-	args := []string{"-home", home, "-binary", binary, "-caddy", "/nonexistent/caddy", "-caddy-admin", "127.0.0.1:1",
+	args := []string{"-home", home, "-binary", binary, "-caddy", filepath.Join(home, "nonexistent-caddy"), "-caddy-admin", "127.0.0.1:1",
 		"-public-api", cfg.PublicAPI, "-public-ui", cfg.PublicUI, "-blue-api", cfg.BlueAPI, "-blue-ui", cfg.BlueUI,
 		"-green-api", cfg.GreenAPI, "-green-ui", cfg.GreenUI, "-wait", "2s", "-ready-timeout", "2s"}
 	var out bytes.Buffer
@@ -342,6 +342,7 @@ func TestSystemCutoverUsesConfiguredScratchLabels(t *testing.T) {
 }
 
 func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	agents := filepath.Join(home, "agents")

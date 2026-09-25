@@ -96,10 +96,7 @@ func TestWriteEnv(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("got:\n%s", got)
 	}
-	st, _ := os.Stat(p)
-	if st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", st.Mode())
-	}
+	requirePrivateFile(t, p)
 }
 
 func TestParseGzipResponse(t *testing.T) {
@@ -170,9 +167,7 @@ func TestProvidersFile(t *testing.T) {
 	if err := cs.applyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", st.Mode())
-	}
+	requirePrivateFile(t, p)
 	c := cs.get()
 	if len(c.local.Models) != 2 || c.local.Providers[0].BaseURL != "http://a/v1" || c.routeFor("zero", "default").Mode != "disabled" || c.routeFor("m2", "default").Mode != "disabled" {
 		t.Fatalf("%+v", c.local)

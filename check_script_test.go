@@ -23,6 +23,7 @@ func checkScript(t *testing.T, env []string, labelsJSON, ports string, loaded ..
 // with CURL_OUT when env sets it.
 func checkScriptArgs(t *testing.T, args, env []string, labelsJSON, ports string, loaded ...string) (string, string, error) {
 	t.Helper()
+	skipDarwinOnlyDeploy(t)
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
 	home := filepath.Join(root, "home")

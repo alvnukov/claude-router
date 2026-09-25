@@ -12,6 +12,7 @@ import (
 
 func routerScript(t *testing.T, command string, slot bool) (string, string, error) {
 	t.Helper()
+	skipDarwinOnlyDeploy(t)
 	home := t.TempDir()
 	bin := filepath.Join(home, "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {

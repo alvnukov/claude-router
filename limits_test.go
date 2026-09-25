@@ -422,10 +422,7 @@ func TestAnthropicLimitsPersistRoundTrip(t *testing.T) {
 	if err := l.save(); err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(path)
-	if err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("limits.json: %v %v", fi, err)
-	}
+	requirePrivateFile(t, path)
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
 		if e.Name() != "limits.json" && e.Name() != "limits.json.lock" {

@@ -39,6 +39,7 @@ func TestSystemStateReportsSlotAndInstalledBinaryDigest(t *testing.T) {
 }
 
 func TestCaddyPersistentConfigIsValidAndTargetsSelectedSlot(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	ops := newSystemDeployOps(cfg, "http://127.0.0.1:1", home, filepath.Join(home, "agents"), filepath.Join(home, "binary"))
@@ -51,6 +52,7 @@ func TestCaddyPersistentConfigIsValidAndTargetsSelectedSlot(t *testing.T) {
 }
 
 func TestCaddyAdaptedConfigListensOnLoopbackAndResolvesSlot(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	ops := newSystemDeployOps(cfg, "http://127.0.0.1:1", home, filepath.Join(home, "agents"), filepath.Join(home, "binary"))
