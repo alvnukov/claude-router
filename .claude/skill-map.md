@@ -12,6 +12,8 @@ skill or tool you do not have installed.
 - A test fails or behavior surprises you: superpowers:systematic-debugging
 - Before claiming done, committing or reporting:
   superpowers:verification-before-completion
+- Touching credentials, API keys, user input or HTTP endpoints:
+  security-review-ecc
 - Before handing work off or opening a PR: superpowers:requesting-code-review
 - After the review is accepted: superpowers:finishing-a-development-branch
 - Go navigation: the happ MCP server, tool `code` — `op=calls` before changing
