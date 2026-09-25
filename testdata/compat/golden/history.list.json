@@ -1,0 +1,162 @@
+[
+  {
+    "ID": "req_err1",
+    "Seq": 4,
+    "Start": "2026-09-25T10:03:00+03:00",
+    "End": "2026-09-25T10:03:00.5+03:00",
+    "Path": "/v1/messages/count_tokens",
+    "Model": "claude-opus-5-5",
+    "Route": "cloud",
+    "Session": "sess-b",
+    "Stream": false,
+    "Headers": {},
+    "ReqBody": null,
+    "OpenAIBody": null,
+    "TrimBefore": 0,
+    "TrimAfter": 0,
+    "TrimNotes": null,
+    "Served": "",
+    "Attempts": null,
+    "Status": 400,
+    "RespCT": "application/json",
+    "RespBytes": "eyJ0eXBlIjoiZXJyb3IiLCJlcnJvciI6eyJ0eXBlIjoiaW52YWxpZF9yZXF1ZXN0X2Vycm9yIiwibWVzc2FnZSI6ImJhZCJ9fQ==",
+    "RespTruncated": false,
+    "Resp": {
+      "Blocks": null,
+      "StopReason": "",
+      "Usage": null,
+      "Model": "",
+      "Error": "invalid_request_error: bad",
+      "Note": "",
+      "Events": 0
+    }
+  },
+  {
+    "ID": "req_local1",
+    "Seq": 3,
+    "Start": "2026-09-25T10:02:00+03:00",
+    "End": "2026-09-25T10:02:04.5+03:00",
+    "Path": "/v1/messages",
+    "Model": "claude-opus-5-5",
+    "Route": "local",
+    "Session": "sess-b",
+    "Stream": true,
+    "Headers": {
+      "User-Agent": "claude-cli/2.1.282",
+      "X-App": "cli"
+    },
+    "ReqBody": "eyJtb2RlbCI6ImNsYXVkZS1vcHVzLTUtNSIsInN0cmVhbSI6dHJ1ZX0=",
+    "OpenAIBody": "eyJtb2RlbCI6ImdwdC14Iiwic3RyZWFtIjp0cnVlfQ==",
+    "TrimBefore": 12,
+    "TrimAfter": 9,
+    "TrimNotes": [
+      "dropped 3 old tool results"
+    ],
+    "Served": "gpt-x",
+    "Attempts": [
+      {
+        "Model": "model-a",
+        "Err": "upstream timeout",
+        "Dur": 1500000000
+      },
+      {
+        "Model": "gpt-x",
+        "Err": "",
+        "Dur": 900000000
+      }
+    ],
+    "Status": 200,
+    "RespCT": "text/event-stream",
+    "RespBytes": "ZXZlbnQ6IG1lc3NhZ2Vfc3RhcnQKZGF0YTogeyJ0eXBlIjoibWVzc2FnZV9zdGFydCJ9Cgo=",
+    "RespTruncated": true,
+    "Resp": {
+      "Blocks": [
+        {
+          "Type": "tool_use",
+          "Text": "",
+          "ID": "toolu_1",
+          "Name": "Read",
+          "Input": "{\"path\":\"a\"}"
+        }
+      ],
+      "StopReason": "tool_use",
+      "Usage": {
+        "output_tokens": 7
+      },
+      "Model": "gpt-x",
+      "Error": "",
+      "Note": "capture truncated",
+      "Events": 4
+    }
+  },
+  {
+    "ID": "req_legacy",
+    "Seq": 2,
+    "Start": "2026-09-25T10:01:00+03:00",
+    "End": "2026-09-25T10:01:02+03:00",
+    "Path": "/v1/messages",
+    "Model": "claude-sonnet-5",
+    "Route": "cloud",
+    "Session": "sess-legacy",
+    "Stream": true,
+    "Headers": null,
+    "ReqBody": "eyJtb2RlbCI6ImNsYXVkZS1zb25uZXQtNSIsIm1ldGFkYXRhIjp7InVzZXJfaWQiOiJ7XCJkZXZpY2VfaWRcIjpcImRldi0xXCIsXCJhY2NvdW50X3V1aWRcIjpcImFjYy0xXCIsXCJzZXNzaW9uX2lkXCI6XCJzZXNzLWxlZ2FjeVwifSJ9fQ==",
+    "OpenAIBody": null,
+    "TrimBefore": 0,
+    "TrimAfter": 0,
+    "TrimNotes": null,
+    "Served": "",
+    "Attempts": null,
+    "Status": 529,
+    "RespCT": "",
+    "RespBytes": null,
+    "RespTruncated": false,
+    "Resp": null
+  },
+  {
+    "ID": "req_cloud1",
+    "Seq": 1,
+    "Start": "2026-09-25T10:00:00+03:00",
+    "End": "2026-09-25T10:00:01.25+03:00",
+    "Path": "/v1/messages",
+    "Model": "claude-opus-5-5",
+    "Route": "cloud",
+    "Session": "sess-a",
+    "Stream": false,
+    "Headers": {
+      "Anthropic-Version": "2023-06-01",
+      "User-Agent": "claude-cli/2.1.282"
+    },
+    "ReqBody": "eyJtb2RlbCI6ImNsYXVkZS1vcHVzLTUtNSIsIm1lc3NhZ2VzIjpbeyJyb2xlIjoidXNlciIsImNvbnRlbnQiOiJoaSA8Yj4mPC9iPiJ9XX0=",
+    "OpenAIBody": null,
+    "TrimBefore": 0,
+    "TrimAfter": 0,
+    "TrimNotes": null,
+    "Served": "",
+    "Attempts": null,
+    "Status": 200,
+    "RespCT": "application/json",
+    "RespBytes": "eyJ0eXBlIjoibWVzc2FnZSIsImNvbnRlbnQiOlt7InR5cGUiOiJ0ZXh0IiwidGV4dCI6ImhlbGxvIn1dLCJzdG9wX3JlYXNvbiI6ImVuZF90dXJuIiwidXNhZ2UiOnsiaW5wdXRfdG9rZW5zIjozLCJvdXRwdXRfdG9rZW5zIjoxfX0=",
+    "RespTruncated": false,
+    "Resp": {
+      "Blocks": [
+        {
+          "Type": "text",
+          "Text": "hello",
+          "ID": "",
+          "Name": "",
+          "Input": ""
+        }
+      ],
+      "StopReason": "end_turn",
+      "Usage": {
+        "input_tokens": 3,
+        "output_tokens": 1
+      },
+      "Model": "",
+      "Error": "",
+      "Note": "",
+      "Events": 0
+    }
+  }
+]
