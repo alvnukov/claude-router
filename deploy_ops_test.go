@@ -60,6 +60,9 @@ func TestLaunchdSlotConfigSetsExitTimeoutAndSharedPaths(t *testing.T) {
 	if p.EnvironmentVariables["ROUTER_ANTHROPIC_LIMITS_FILE"] != filepath.Join(home, "limits.json") {
 		t.Fatal("slot lost shared Anthropic limits")
 	}
+	if p.EnvironmentVariables["ROUTER_PUBLIC_LISTEN"] != cfg.PublicAPI {
+		t.Fatal("slot does not know the public address clients use")
+	}
 }
 
 func TestRealAdminEndpointsFollowLoopbackOnly(t *testing.T) {

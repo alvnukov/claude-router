@@ -22,6 +22,7 @@ const respCaptureLimit = 8 << 20
 
 type config struct {
 	listen        string
+	publicListen  string // where clients reach the router; a slot listens behind Caddy
 	upstream      *url.URL
 	local         localSetup
 	maxInputChars int
@@ -84,6 +85,7 @@ func loadConfigChecked() (config, error) {
 	c.firstByte = time.Duration(atoiOr(env("ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", "45"), 45)) * time.Second
 	c.balance = atoiOr(env("ROUTER_LOCAL_BALANCE", "3"), 3)
 	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
+	c.publicListen = env("ROUTER_PUBLIC_LISTEN", c.listen)
 	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
 	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
 	if routerStartsStandby() {

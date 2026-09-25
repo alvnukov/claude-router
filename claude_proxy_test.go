@@ -140,6 +140,27 @@ func TestClaudeProxyDoesNotOverwriteExternalEndpointChange(t *testing.T) {
 	}
 }
 
+// A slot listens on its own port, which the next deploy stops; Claude has to
+// reach the router through the public address instead.
+func TestClaudeProxyConnectsASlotThroughThePublicAddress(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
+	t.Setenv("ROUTER_ENV_FILE", filepath.Join(dir, "env"))
+	t.Setenv("ROUTER_LISTEN", "127.0.0.1:18791")
+	t.Setenv("ROUTER_PUBLIC_LISTEN", "127.0.0.1:18787")
+	u := newUIServer(newStore(10, ""), newConfigStore(loadConfig(), ""), newHealth(""))
+	settings := filepath.Join(dir, "settings.json")
+	u.claudeProxy = &claudeProxy{path: settings}
+	r := httptest.NewRequest("POST", "http://localhost:8788/settings/claude-proxy", strings.NewReader(url.Values{"op": {"connect"}}.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("Origin", "http://localhost:8788")
+	u.handler().ServeHTTP(httptest.NewRecorder(), r)
+	data, err := os.ReadFile(settings)
+	if err != nil || !strings.Contains(string(data), `"http://127.0.0.1:18787"`) {
+		t.Fatalf("Claude pointed at the slot, not the public address: %v\n%s", err, data)
+	}
+}
+
 func TestClaudeProxyButtonAndOrigin(t *testing.T) {
 	cs := newConfigStore(config{listen: "127.0.0.1:8787"}, "")
 	u := newUIServer(newStore(10, ""), cs, newHealth(""))
