@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -798,6 +799,9 @@ func TestAnthropicLimitsValuesStayOutOfHistoryAndLog(t *testing.T) {
 	if err != nil || len(data) == 0 {
 		t.Fatalf("history not written: %v", err)
 	}
+	// Start and End carry fractional seconds: at hh:mm:57.6… they would
+	// contain "57.6" without any limit value in the record.
+	data = regexp.MustCompile(`"(Start|End)":"[^"]*"`).ReplaceAll(data, nil)
 	for _, value := range []string{"0.4242", "1790348417", "claim-value-7931", "42.4", "57.6"} {
 		if bytes.Contains(data, []byte(value)) {
 			t.Fatalf("limit value %s in history: %s", value, data)
