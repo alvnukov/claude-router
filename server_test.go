@@ -112,7 +112,10 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	server := newRouterServer(cfg, life, filepath.Join(dir, "state.json"))
 	done := make(chan error, 1)
 	go func() { done <- server.serve(api, ui) }()
-	client := &http.Client{Timeout: time.Second}
+	// Without keep-alives the client never dials a spare connection, which
+	// the server would count as busy for five seconds after accepting it:
+	// longer than the shutdown below waits.
+	client := &http.Client{Timeout: time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	get := func(addr, path string) (int, []byte) {
 		t.Helper()
 		resp, err := client.Get("http://" + addr + path)
