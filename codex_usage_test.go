@@ -166,14 +166,14 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 	oldAuth := codexAuth
 	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("acct-test")}
 	defer func() { codexAuth = oldAuth }()
-	u := newUIServer(newStore(10, ""), newConfigStore(config{}, ""), newHealth(""))
+	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}}}, ""), newHealth(""))
 	calls := 0
 	u.codexUsage.client = &http.Client{Transport: usageTransport(func(*http.Request) (*http.Response, error) {
 		calls++
 		return usageResponse(200, `{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000}},"rate_limit_reset_credits":{"available_count":0}}`), nil
 	})}
 	request := func(method, origin string) (int, string) {
-		r := httptest.NewRequest(method, "http://localhost:8788/settings/codex/usage", nil)
+		r := httptest.NewRequest(method, "http://localhost:8788/settings/codex/usage?provider=codex", nil)
 		if origin != "" {
 			r.Header.Set("Origin", origin)
 		}

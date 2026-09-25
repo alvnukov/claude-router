@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -169,5 +171,52 @@ func TestCodexStoreForSeparatesConnections(t *testing.T) {
 	recreated, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: strings.Repeat("c", 32)})
 	if recreated.connected() {
 		t.Fatal("recreated name adopted the old id's token")
+	}
+}
+
+func codexUI(t *testing.T) (*uiServer, http.Handler) {
+	t.Helper()
+	u, h := testUI(t)
+	l := u.cs.get().local.clone()
+	l.Providers = append(l.Providers,
+		provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL},
+		provider{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB})
+	c := u.cs.get()
+	c.local = l
+	u.cs.c = c
+	return u, h
+}
+
+func TestCodexActionsRejectUnknownProvider(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	_, h := codexUI(t)
+	for _, target := range []string{"/settings/codex/import", "/settings/codex/login", "/settings/codex/usage"} {
+		for _, name := range []string{"", "missing", "p"} {
+			req := httptest.NewRequest("POST", target, strings.NewReader(url.Values{"provider": {name}}.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("%s provider=%q: %d", target, name, w.Code)
+			}
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(codexAuth.path)); len(entries) != 0 {
+		t.Fatalf("files written: %v", entries)
+	}
+}
+
+func TestCodexImportTargetsNamedProvider(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	u, h := codexUI(t)
+	data, _ := json.Marshal(usageCredential("work-account"))
+	writeRaw(t, codexAuth.cliPath, string(data))
+	get(t, h, "POST", "/settings/codex/import", url.Values{"provider": {"work"}})
+	work, _ := codexStoreFor(provider{Name: "work", Type: "codex", AuthID: testAuthB})
+	if !work.connected() || codexAuth.connected() {
+		t.Fatal("import went to the wrong connection")
+	}
+	if v := u.codexLoginViewFor(provider{Name: "codex", Type: "codex"}); v.Connected {
+		t.Fatal("legacy shows work's login")
 	}
 }

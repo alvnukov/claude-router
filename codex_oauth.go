@@ -21,6 +21,10 @@ import (
 
 const codexCallbackAddr = "127.0.0.1:1455"
 
+// codexLoginAddr is where the login handler listens for the callback; tests
+// move it to a free port.
+var codexLoginAddr = codexCallbackAddr
+
 type codexBrowserFlow struct {
 	URL         string
 	state       string
@@ -122,7 +126,9 @@ func writeOAuthPage(w http.ResponseWriter, message string, ok bool) {
 	fmt.Fprintf(w, "<!doctype html><meta charset=utf-8><title>Codex</title><body style='font:16px system-ui;padding:3rem'><h1 style='color:%s'>Codex</h1><p>%s</p></body>", color, html.EscapeString(message))
 }
 
-func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrowserFlow) error {
+// stillCurrent reports whether the connection the login was started for is
+// still configured; a login for a replaced connection is discarded.
+func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrowserFlow, stillCurrent func() bool) error {
 	defer flow.server.Close()
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
@@ -177,6 +183,9 @@ func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrows
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return withFileLock(context.Background(), s.path+".lock", func() error {
+		if stillCurrent != nil && !stillCurrent() {
+			return errors.New("подключение изменилось во время входа; войдите заново")
+		}
 		if err := s.save(c); err != nil {
 			return err
 		}

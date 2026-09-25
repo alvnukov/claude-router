@@ -43,6 +43,7 @@ type uiServer struct {
 	probe       map[string]probeResult // by provider name
 	oauthMu     sync.Mutex
 	oauthFlow   *codexBrowserFlow
+	oauthTarget provider // the connection the pending login is for
 	oauthStatus string
 	oauthError  string
 }
@@ -440,7 +441,7 @@ type settingsView struct {
 	Models        []candidate
 	Providers     []providerRow
 	Pick          *providerRow
-	Login         codexLoginView
+	Logins        []codexLoginView
 	Pools         []poolRow
 	Routes        []routeRow
 	Families      []routeRow
@@ -490,19 +491,43 @@ type poolKeyRow struct {
 }
 
 type codexLoginView struct {
+	Provider  string
 	Connected bool
 	Pending   bool
 	Error     string
 }
 
-func (u *uiServer) codexLoginView() codexLoginView {
+// codexLoginViewFor shows one connection's login; the browser flow's state
+// belongs only to the connection it was started for.
+func (u *uiServer) codexLoginViewFor(p provider) codexLoginView {
+	v := codexLoginView{Provider: p.Name}
+	store, err := codexStoreFor(p)
+	if err != nil {
+		v.Error = err.Error()
+		return v
+	}
+	v.Connected = store.connected()
 	u.oauthMu.Lock()
 	defer u.oauthMu.Unlock()
-	problem := u.oauthError
-	if problem == "" {
-		problem = codexAuth.authStatus()
+	if u.oauthTarget.Name == p.Name && u.oauthTarget.AuthID == p.AuthID {
+		v.Pending, v.Error = u.oauthStatus == "pending", u.oauthError
 	}
-	return codexLoginView{Connected: codexAuth.connected(), Pending: u.oauthStatus == "pending", Error: problem}
+	if v.Error == "" {
+		v.Error = store.authStatus()
+	}
+	return v
+}
+
+// codexProvider resolves the connection a /settings/codex/* action names,
+// checked against the config in force now.
+func (u *uiServer) codexProvider(r *http.Request) (provider, *codexAuthStore, error) {
+	name := strings.TrimSpace(r.FormValue("provider"))
+	p, ok := u.cs.get().local.provider(name)
+	if !ok || p.Type != "codex" {
+		return provider{}, nil, fmt.Errorf("подключение Codex %q не найдено", name)
+	}
+	s, err := codexStoreFor(p)
+	return p, s, err
 }
 
 // providerRow is one provider with what the UI knows about it.
@@ -520,13 +545,16 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Login: u.codexLoginView(), Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
+	v := settingsView{ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
 	for name := range c.local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}
 	sort.Strings(v.ProfileNames)
 	info := map[string]probeModel{}
 	for _, p := range c.local.Providers {
+		if p.Type == "codex" {
+			v.Logins = append(v.Logins, u.codexLoginViewFor(p))
+		}
 		row := u.providerRow(c, p, false, modelFilter{})
 		v.Providers = append(v.Providers, row)
 		for _, m := range row.Probe.Info {
@@ -935,7 +963,12 @@ func (u *uiServer) settingsCodexImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	err := codexAuth.importFromCLI()
+	_, store, err := u.codexProvider(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	err = store.importFromCLI()
 	if err == nil {
 		u.probeMu.Lock()
 		u.probe = nil
@@ -955,24 +988,36 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	p, store, err := u.codexProvider(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	u.oauthMu.Lock()
 	if u.oauthStatus == "pending" && u.oauthFlow != nil {
-		url := u.oauthFlow.URL
+		url, target := u.oauthFlow.URL, u.oauthTarget
 		u.oauthMu.Unlock()
+		if target.Name != p.Name || target.AuthID != p.AuthID {
+			http.Error(w, fmt.Sprintf("идёт вход для %q; дождитесь его окончания", target.Name), http.StatusConflict)
+			return
+		}
 		http.Redirect(w, r, url, http.StatusSeeOther)
 		return
 	}
-	flow, err := startCodexBrowserFlow(r.Context(), codexCallbackAddr, codexIssuer)
+	flow, err := startCodexBrowserFlow(r.Context(), codexLoginAddr, store.issuer)
 	if err != nil {
 		u.oauthStatus, u.oauthError = "failed", err.Error()
 		u.oauthMu.Unlock()
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	u.oauthFlow, u.oauthStatus, u.oauthError = flow, "pending", ""
+	u.oauthFlow, u.oauthTarget, u.oauthStatus, u.oauthError = flow, p, "pending", ""
 	u.oauthMu.Unlock()
 	go func() {
-		err := codexAuth.finishBrowserFlow(context.Background(), flow)
+		err := store.finishBrowserFlow(context.Background(), flow, func() bool {
+			now, ok := u.cs.get().local.provider(p.Name)
+			return ok && now.Type == "codex" && now.AuthID == p.AuthID
+		})
 		u.oauthMu.Lock()
 		if u.oauthFlow == flow {
 			u.oauthFlow = nil
@@ -1002,7 +1047,12 @@ func sameOriginPost(r *http.Request) bool {
 }
 
 func (u *uiServer) settingsCodexStatus(w http.ResponseWriter, r *http.Request) {
-	u.render(w, "codex-login", u.codexLoginView())
+	p, _, err := u.codexProvider(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	u.render(w, "codex-login", u.codexLoginViewFor(p))
 }
 
 func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {

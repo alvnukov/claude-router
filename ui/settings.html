@@ -49,8 +49,8 @@
 <form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.ActiveProfile}}"><input type="hidden" name="op" value="create"><input name="name" aria-label="Название пула" placeholder="Название: быстрый, сложные задачи…" required><button class="btn primary" type="submit">Создать пул</button></form>
 </section>
 <section class="settings-section" id="codex-subscription"><h2>Подписка Codex</h2>
-{{template "codex-login" .Login}}
-<div id="codex-usage" hx-get="/settings/codex/usage" hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>
+{{range .Logins}}{{template "codex-login" .}}
+<div id="codex-usage" hx-get="/settings/codex/usage" hx-vals='{"provider":"{{.Provider}}"}' hx-trigger="load" hx-swap="outerHTML"><p class="help">Загрузка аккаунта и лимитов…</p></div>{{end}}
 </section>
 <section class="settings-section" id="anthropic-limits"><h2>Лимиты Anthropic</h2>
 {{with .Limits}}{{if eq .State "unverified"}}<p><b>Не подтверждено.</b> Anthropic присылает заголовки лимитов, но что они значат для подписки, ещё не проверено, поэтому значения не показываются.</p>
@@ -72,12 +72,13 @@
 </div>
 {{end}}
 {{define "codex-login"}}
-<div id="codex-login" hx-get="/settings/codex/status" hx-trigger="every 2s" hx-swap="outerHTML">
+<div id="codex-login" hx-get="/settings/codex/status" hx-vals='{"provider":"{{.Provider}}"}' hx-trigger="every 2s" hx-swap="outerHTML">
   {{if .Pending}}<span class="muted">Ожидаем вход в браузере…</span>
   {{else if .Error}}<span class="err">{{.Error}}</span>
   {{else if .Connected}}<span class="ok">● Подписка подключена</span>
   {{else}}<span class="muted">Подписка не подключена</span>{{end}}
   <form method="post" action="/settings/codex/login" target="_blank" style="display:inline">
+    <input type="hidden" name="provider" value="{{.Provider}}">
     <button type="submit" class="btn primary">{{if .Connected}}Войти заново{{else}}Войти через браузер{{end}}</button>
   </form>
 </div>

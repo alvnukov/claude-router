@@ -332,9 +332,14 @@ func (u *uiServer) settingsCodexUsage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	_, store, err := u.codexProvider(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	view := u.codexUsage.get(ctx, codexAuth, r.Method == http.MethodPost)
+	view := u.codexUsage.get(ctx, store, r.Method == http.MethodPost)
 	w.Header().Set("Cache-Control", "no-store")
 	u.render(w, "codex-usage", view)
 }
