@@ -318,7 +318,9 @@ func treeReport(before, after map[string]fileSum) string {
 // a directory the check could write past: it has to be a 0700 directory
 // strictly under the temp dir, and HOME, ROUTER_HOME, ROUTER_PROVIDERS_FILE
 // and ROUTER_ENV_FILE all have to point into it. Paths are compared with
-// symlinks resolved, so each of them has to exist.
+// symlinks resolved, so each of them has to exist. None of the four may be a
+// link itself, since the store writes .tmp, .profiles and backups beside the
+// path it was given, and nothing inside the copy may be a link either.
 func liveCopyDir(dir string, getenv func(string) string) (string, error) {
 	root, err := realPath(dir)
 	if err != nil {
@@ -342,6 +344,18 @@ func liveCopyDir(dir string, getenv func(string) string) (string, error) {
 		if _, ok := within(root, p); !ok {
 			return "", fmt.Errorf("%s=%s is outside ROUTER_COMPAT_DIR", key, getenv(key))
 		}
+		if info, err := os.Lstat(getenv(key)); err != nil || info.Mode()&fs.ModeSymlink != 0 {
+			return "", fmt.Errorf("%s=%s is a link", key, getenv(key))
+		}
+	}
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.Type()&fs.ModeSymlink != 0 {
+			err = fmt.Errorf("%s is a link", p)
+		}
+		return err
+	})
+	if err != nil {
+		return "", fmt.Errorf("ROUTER_COMPAT_DIR: %w", err)
 	}
 	return root, nil
 }
@@ -405,24 +419,38 @@ func TestLiveCopyDirRefuses(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the live copy is checked on macOS; Windows has no 0700 directories")
 	}
-	dir := filepath.Join(t.TempDir(), "copy")
 	outside := t.TempDir()
-	for _, d := range []string{dir, filepath.Join(dir, "home")} {
-		if err := os.Mkdir(d, 0o700); err != nil {
+	writeRaw(t, filepath.Join(outside, "providers.json"), "{}\n")
+	// copyDir lays out what the documented commands make: a 0700 directory
+	// with home, providers.json and env, and a stray env one level up.
+	copyDir := func() string {
+		dir := filepath.Join(t.TempDir(), "copy")
+		for _, d := range []string{dir, filepath.Join(dir, "home")} {
+			if err := os.Mkdir(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, p := range []string{filepath.Join(dir, "providers.json"), filepath.Join(dir, "env"), filepath.Join(filepath.Dir(dir), "env")} {
+			writeRaw(t, p, "{}\n")
+		}
+		return dir
+	}
+	link := func(target, name string) {
+		if err := os.Symlink(target, name); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, p := range []string{filepath.Join(dir, "providers.json"), filepath.Join(dir, "env"), filepath.Join(outside, "providers.json"), filepath.Join(filepath.Dir(dir), "env")} {
-		writeRaw(t, p, "{}\n")
-	}
-	if err := os.Symlink(filepath.Join(outside, "providers.json"), filepath.Join(dir, "link.json")); err != nil {
-		t.Fatal(err)
-	}
+	dir, fileLink, dirLink := copyDir(), copyDir(), copyDir()
+	// cp -Rp keeps links: the atomic write goes through a .tmp link, and a
+	// linked profiles directory would take the profile writes out.
+	link(filepath.Join(outside, "providers.json"), filepath.Join(fileLink, "providers.json.tmp"))
+	link(outside, filepath.Join(dirLink, "providers.json.profiles"))
+	link(filepath.Join(dir, "providers.json"), filepath.Join(outside, "link.json"))
 	open := filepath.Join(t.TempDir(), "open")
 	if err := os.Mkdir(open, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := func(over map[string]string) func(string) string {
+	env := func(dir string, over map[string]string) func(string) string {
 		vars := map[string]string{"HOME": filepath.Join(dir, "home"), "ROUTER_HOME": dir,
 			"ROUTER_PROVIDERS_FILE": filepath.Join(dir, "providers.json"), "ROUTER_ENV_FILE": filepath.Join(dir, "env")}
 		for k, v := range over {
@@ -435,24 +463,26 @@ func TestLiveCopyDirRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, err := liveCopyDir(dir, env(nil)); err != nil || got != want {
+	if got, err := liveCopyDir(dir, env(dir, nil)); err != nil || got != want {
 		t.Fatalf("a proper copy: %q, %v; want %q", got, err, want)
 	}
 	for name, c := range map[string]struct {
 		dir  string
 		over map[string]string
 	}{
-		"the temp dir itself":            {os.TempDir(), nil},
-		"not 0700":                       {open, nil},
-		"missing":                        {filepath.Join(dir, "none"), nil},
-		"HOME outside":                   {dir, map[string]string{"HOME": outside}},
-		"ROUTER_HOME outside":            {dir, map[string]string{"ROUTER_HOME": outside}},
-		"ROUTER_PROVIDERS_FILE outside":  {dir, map[string]string{"ROUTER_PROVIDERS_FILE": filepath.Join(outside, "providers.json")}},
-		"ROUTER_PROVIDERS_FILE via link": {dir, map[string]string{"ROUTER_PROVIDERS_FILE": filepath.Join(dir, "link.json")}},
-		"ROUTER_ENV_FILE unset":          {dir, map[string]string{"ROUTER_ENV_FILE": ""}},
-		"ROUTER_ENV_FILE above":          {dir, map[string]string{"ROUTER_ENV_FILE": filepath.Join(dir, "..", "env")}},
+		"the temp dir itself":              {os.TempDir(), nil},
+		"not 0700":                         {open, nil},
+		"missing":                          {filepath.Join(dir, "none"), nil},
+		"a file link in the copy":          {fileLink, nil},
+		"a directory link in the copy":     {dirLink, nil},
+		"HOME outside":                     {dir, map[string]string{"HOME": outside}},
+		"ROUTER_HOME outside":              {dir, map[string]string{"ROUTER_HOME": outside}},
+		"ROUTER_PROVIDERS_FILE outside":    {dir, map[string]string{"ROUTER_PROVIDERS_FILE": filepath.Join(outside, "providers.json")}},
+		"ROUTER_PROVIDERS_FILE via a link": {dir, map[string]string{"ROUTER_PROVIDERS_FILE": filepath.Join(outside, "link.json")}},
+		"ROUTER_ENV_FILE unset":            {dir, map[string]string{"ROUTER_ENV_FILE": ""}},
+		"ROUTER_ENV_FILE above":            {dir, map[string]string{"ROUTER_ENV_FILE": filepath.Join(dir, "..", "env")}},
 	} {
-		if got, err := liveCopyDir(c.dir, env(c.over)); err == nil {
+		if got, err := liveCopyDir(c.dir, env(c.dir, c.over)); err == nil {
 			t.Errorf("%s: accepted as %q", name, got)
 		}
 	}
