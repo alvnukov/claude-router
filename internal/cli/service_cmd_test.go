@@ -366,9 +366,15 @@ func TestRestartWhileTheRouterDrains(t *testing.T) {
 
 // A router may drain for up to its agent's ExitTimeOut, 960 s, before launchd
 // kills it, and Stop waits for that. Every wait the commands start is
-// bounded, and longer than that.
+// bounded, and leaves launchd time past the ExitTimeOut to kill the router
+// and unload its agent.
 func TestStopWaitsAsLongAsTheRouterMayDrain(t *testing.T) {
-	const exitTimeOut = 960 * time.Second
+	// The slots' agents have the legacy agent's ExitTimeOut.
+	exitTimeOut := legacySpec(legacyLabel, t.TempDir()).ExitTimeout
+	if exitTimeOut != 960*time.Second {
+		t.Fatalf("legacy ExitTimeOut = %s; want the slots' 960s", exitTimeOut)
+	}
+	const unload = 30 * time.Second
 	for _, tc := range []struct {
 		name    string
 		slot    bool
@@ -396,8 +402,8 @@ func TestStopWaitsAsLongAsTheRouterMayDrain(t *testing.T) {
 				t.Fatalf("waits = %v; want one per agent of %v", f.svc.waits, labels)
 			}
 			for _, wait := range f.svc.waits {
-				if wait <= exitTimeOut {
-					t.Fatalf("waits = %v; want each bounded and over %s", f.svc.waits, exitTimeOut)
+				if wait < exitTimeOut+unload {
+					t.Fatalf("waits = %v; want each bounded and at least %s", f.svc.waits, exitTimeOut+unload)
 				}
 			}
 		})

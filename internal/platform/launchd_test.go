@@ -80,15 +80,19 @@ var notFound = launchctlError([]string{"print"}, exitCode(launchctlNotFound), ni
 
 // fakeLaunchctl records launchctl calls; fail holds the error each failing
 // verb returns. prints, when set, scripts print's answers in turn, the last
-// one repeated: nil finds the agent.
+// one repeated: nil finds the agent. Like RunLaunchctl, it fails on a
+// context that is over.
 type fakeLaunchctl struct {
 	calls  [][]string
 	fail   map[string]error
 	prints []error
 }
 
-func (f *fakeLaunchctl) run(_ context.Context, args ...string) error {
+func (f *fakeLaunchctl) run(ctx context.Context, args ...string) error {
 	f.calls = append(f.calls, args)
+	if err := ctx.Err(); err != nil {
+		return launchctlError(args, err, nil)
+	}
 	if args[0] == "print" && len(f.prints) > 0 {
 		err := f.prints[0]
 		if len(f.prints) > 1 {
@@ -120,10 +124,13 @@ func newFakeLaunchd(t *testing.T, fail ...string) (Launchd, *fakeLaunchctl) {
 	return Launchd{Dir: filepath.Join(t.TempDir(), "LaunchAgents"), Domain: "gui/501", Poll: time.Nanosecond, Run: fake.run}, fake
 }
 
-// expired is a context already over: a wait on it ends at once.
-func expired(t *testing.T) context.Context {
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
+// outlasted makes l wait an hour between prints and returns a context whose
+// deadline passes while l waits, so a Stop sees the agent loaded once and
+// then the end of its wait.
+func outlasted(t *testing.T, l *Launchd) context.Context {
+	l.Poll = time.Hour
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	t.Cleanup(cancel)
 	return ctx
 }
 
@@ -204,7 +211,7 @@ func TestLaunchdUninstall(t *testing.T) {
 			ctx := t.Context()
 			fake.prints = []error{notFound}
 			if tc.stuck {
-				ctx, fake.prints = expired(t), []error{nil}
+				ctx, fake.prints = outlasted(t, &l), []error{nil}
 			}
 			err := l.Uninstall(ctx, "svc")
 			if (err != nil) != tc.stuck {
@@ -228,14 +235,15 @@ func TestLaunchdUninstall(t *testing.T) {
 // to its ExitTimeOut. Stop returns once print no longer finds the agent, so
 // a start after it loads the agent again rather than find it loaded and
 // leave the router down. An agent still loaded when the context ends is a
-// failure, and so is a failed bootout only then: launchctl can report one
-// while launchd unloads the agent.
+// failure, reported as such rather than as a print cut short, and so is a
+// failed bootout only then: launchctl can report one while launchd unloads
+// the agent.
 func TestLaunchdStopWaitsForTheAgentToUnload(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		bootout    bool // bootout fails
 		prints     []error
-		expired    bool
+		outlasted  bool // the context ends while Stop waits
 		wantErr    bool
 		wantPrints int // prints after bootout
 	}{
@@ -253,15 +261,15 @@ func TestLaunchdStopWaitsForTheAgentToUnload(t *testing.T) {
 			l, fake := newFakeLaunchd(t, fail...)
 			fake.prints = tc.prints
 			ctx := t.Context()
-			if tc.expired {
-				ctx = expired(t)
+			if tc.outlasted {
+				ctx = outlasted(t, &l)
 			}
 			err := l.Stop(ctx, "svc")
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Stop = %v; want error %t", err, tc.wantErr)
 			}
-			if tc.wantErr && (!errors.Is(err, context.Canceled) || tc.bootout && !errors.Is(err, fake.fail["bootout"])) {
-				t.Fatalf("Stop = %v; want the context's end and bootout's failure", err)
+			if tc.wantErr && (!strings.Contains(fmt.Sprint(err), "launchd still has svc loaded") || !errors.Is(err, context.DeadlineExceeded) || tc.bootout && !errors.Is(err, fake.fail["bootout"])) {
+				t.Fatalf("Stop = %v; want the agent still loaded at the deadline, and bootout's failure", err)
 			}
 			want := append([]string{"bootout"}, slices.Repeat([]string{"print"}, tc.wantPrints)...)
 			if verbs := fake.verbs(); !reflect.DeepEqual(verbs, want) {

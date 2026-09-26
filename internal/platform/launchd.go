@@ -108,12 +108,15 @@ func (l Launchd) Stop(ctx context.Context, label string) error {
 			return errors.Join(stopErr, err)
 		case !loaded:
 			return nil
-		case ctx.Err() != nil:
-			return errors.Join(stopErr, fmt.Errorf("launchd still has %s loaded: %w", label, context.Cause(ctx)))
 		}
 		select {
 		case <-ctx.Done():
 		case <-time.After(poll):
+		}
+		// Checked after the wait, not at the next print, which would fail
+		// on the ended ctx instead of saying why the stop failed.
+		if ctx.Err() != nil {
+			return errors.Join(stopErr, fmt.Errorf("launchd still has %s loaded: %w", label, context.Cause(ctx)))
 		}
 	}
 }
