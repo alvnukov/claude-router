@@ -1,0 +1,42 @@
+{
+  "state": "fresh",
+  "observed_at": "2026-09-25T10:05:00.123456789+03:00",
+  "age_seconds": 60,
+  "max_age_seconds": 1800,
+  "windows": [
+    {
+      "name": "requests",
+      "remaining_percent": 84,
+      "remaining": 42,
+      "limit": 50,
+      "reset_at": "2026-09-25T07:06:00Z"
+    },
+    {
+      "name": "unified",
+      "reset_at": "2026-09-25T13:00:00Z",
+      "status": "allowed"
+    },
+    {
+      "name": "unified-5h",
+      "remaining_percent": 83,
+      "used_percent": 17,
+      "reset_at": "2026-09-25T13:00:00Z",
+      "status": "allowed"
+    },
+    {
+      "name": "unified-7d",
+      "remaining_percent": 9,
+      "used_percent": 91,
+      "reset_at": "2026-09-28T13:00:00Z",
+      "status": "allowed_warning"
+    },
+    {
+      "name": "unified-overage",
+      "status": "rejected"
+    }
+  ],
+  "raw": {
+    "anthropic-ratelimit-unified-fallback-percentage": "0.5",
+    "anthropic-ratelimit-unified-representative-claim": "five_hour"
+  }
+}

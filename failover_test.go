@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 type testCalls struct {
@@ -54,12 +56,12 @@ func fakeEndpoint(t *testing.T, calls *testCalls) *httptest.Server {
 	}))
 }
 
-func runLocal(t *testing.T, cfg config, hl *health) (*httptest.ResponseRecorder, *localTrace) {
+func runLocal(t *testing.T, cfg config, hl *health) (*httptest.ResponseRecorder, *history.Trace) {
 	t.Helper()
 	body := []byte(`{"model":"local-model","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`)
 	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body)))
 	w := httptest.NewRecorder()
-	tr := &localTrace{}
+	tr := &history.Trace{}
 	handleLocal(w, r, cfg, body, tr, hl)
 	return w, tr
 }

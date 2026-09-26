@@ -217,7 +217,7 @@ func (s *codexAuthStore) save(c codexCredential) error {
 	if err != nil {
 		return err
 	}
-	return writePrivateAtomic(s.path, data)
+	return platform.WritePrivateAtomic(s.path, data)
 }
 
 func (s *codexAuthStore) importFromCLI() error {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"localrouter/internal/cli"
+	"localrouter/internal/history"
 )
 
 // respCaptureLimit bounds how much of a response the UI keeps per request.
@@ -195,11 +196,11 @@ func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error)
 	return probe.Model, route, nil
 }
 
-func newMainHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer) http.Handler {
+func newMainHandler(cfg config, cs *configStore, st *history.Store, hl *health, u *uiServer) http.Handler {
 	return newRouterHandler(cfg, cs, st, hl, u, nil)
 }
 
-func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiServer, life *lifecycle) http.Handler {
+func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health, u *uiServer, life *lifecycle) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
@@ -208,7 +209,7 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 	// FlushInterval -1 streams SSE through without buffering.
 	proxy.FlushInterval = -1
 	if u != nil {
-		proxy.ModifyResponse = u.limits.observeResponse
+		proxy.ModifyResponse = u.limits.ObserveResponse
 	}
 
 	pass := func(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -249,15 +250,15 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 		}
 		log.Printf("req model=%q -> %s", probe.Model, route)
 
-		rec := &record{Start: time.Now(), Path: r.URL.Path, Model: probe.Model,
-			Route: route, Session: sessionOf(body), Stream: probe.Stream, Headers: pickHeaders(r.Header), ReqBody: body}
-		st.add(rec)
-		rw := newRecorder(w, respCaptureLimit)
-		var tr *localTrace
+		rec := &history.Record{Start: time.Now(), Path: r.URL.Path, Model: probe.Model,
+			Route: route, Session: history.SessionOf(body), Stream: probe.Stream, Headers: history.PickHeaders(r.Header), ReqBody: body}
+		st.Add(rec)
+		rw := history.NewRecorder(w, respCaptureLimit)
+		var tr *history.Trace
 		if local {
-			tr = &localTrace{}
+			tr = &history.Trace{}
 		}
-		defer st.finish(rec.ID, rw, tr)
+		defer st.Finish(rec.ID, rw, tr)
 		if routeErr != nil {
 			writeAnthropicError(rw, http.StatusBadRequest, "invalid_request_error", routeErr.Error())
 			return
@@ -303,9 +304,9 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 		if len(path) > 256 {
 			path = path[:256] + "…"
 		}
-		rw := newRecorder(w, 0)
+		rw := history.NewRecorder(w, 0)
 		pass(rw, r, nil)
-		status := rw.status
+		status := rw.Status()
 		if status == 0 {
 			status = http.StatusOK
 		}

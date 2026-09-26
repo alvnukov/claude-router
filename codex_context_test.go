@@ -7,23 +7,25 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func TestCodexRestoresMissingToolCallFromSameSession(t *testing.T) {
-	history := newStore(10, "")
+	hist := history.New(10, "")
 	previous := []byte(strings.Join([]string{
 		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"call-1","name":"Read","input":{}}}`,
 		`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"file.txt\"}"}}`,
 		`data: {"type":"content_block_stop","index":0}`,
 	}, "\n\n"))
-	history.add(&record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
-		Resp: parseResponse("text/event-stream", "", previous, false)})
+	hist.Add(&history.Record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
+		Resp: history.ParseResponse("text/event-stream", "", previous, false)})
 	input := openaiRequest{Model: "gpt-test", Messages: []openaiMsg{
 		{Role: "tool", ToolCallID: "call-1", Content: "file contents"},
 		{Role: "user", Content: "continue"},
 	}}
 
-	repaired, err := restoreCodexCalls(input, "session-a", history)
+	repaired, err := restoreCodexCalls(input, "session-a", hist)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,14 +55,14 @@ func TestCodexRestoresMissingToolCallFromSameSession(t *testing.T) {
 }
 
 func TestCodexMissingCallNeverLeaksOtherSession(t *testing.T) {
-	history := newStore(10, "")
-	history.add(&record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-b", Status: 200,
-		Resp: &parsedResponse{Blocks: []respBlock{{Type: "tool_use", ID: "call-1", Name: "Read", Input: `{}`}}}})
+	hist := history.New(10, "")
+	hist.Add(&history.Record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-b", Status: 200,
+		Resp: &history.Response{Blocks: []history.Block{{Type: "tool_use", ID: "call-1", Name: "Read", Input: `{}`}}}})
 	input := openaiRequest{Messages: []openaiMsg{{Role: "tool", ToolCallID: "call-1", Content: "private"}}}
-	if _, err := restoreCodexCalls(input, "session-a", history); err == nil {
+	if _, err := restoreCodexCalls(input, "session-a", hist); err == nil {
 		t.Fatal("borrowed another session's tool call")
 	}
-	if _, err := restoreCodexCalls(input, "", history); err == nil {
+	if _, err := restoreCodexCalls(input, "", hist); err == nil {
 		t.Fatal("borrowed a tool call without a session identity")
 	}
 }
@@ -72,19 +74,19 @@ func TestCodexDoesNotRestoreCallFromErroredStream(t *testing.T) {
 		`data: {"type":"content_block_stop","index":0}`,
 		`data: {"type":"error","error":{"type":"api_error","message":"stream interrupted"}}`,
 	}, "\n\n")
-	history := newStore(10, "")
-	history.add(&record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
-		Resp: parseResponse("text/event-stream", "", []byte(stream), false)})
+	hist := history.New(10, "")
+	hist.Add(&history.Record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
+		Resp: history.ParseResponse("text/event-stream", "", []byte(stream), false)})
 	input := openaiRequest{Messages: []openaiMsg{{Role: "tool", ToolCallID: "call-1", Content: "private result"}}}
-	if _, err := restoreCodexCalls(input, "session-a", history); err == nil {
+	if _, err := restoreCodexCalls(input, "session-a", hist); err == nil {
 		t.Fatal("restored a tool call from a failed stream")
 	}
 }
 
 func TestCodexRestoresParallelToolResults(t *testing.T) {
-	history := newStore(10, "")
-	history.add(&record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
-		Resp: &parsedResponse{Blocks: []respBlock{
+	hist := history.New(10, "")
+	hist.Add(&history.Record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
+		Resp: &history.Response{Blocks: []history.Block{
 			{Type: "tool_use", ID: "call-1", Name: "Read", Input: `{"path":"a"}`},
 			{Type: "tool_use", ID: "call-2", Name: "Read", Input: `{"path":"b"}`},
 		}}})
@@ -92,7 +94,7 @@ func TestCodexRestoresParallelToolResults(t *testing.T) {
 		{Role: "tool", ToolCallID: "call-2", Content: "b result"},
 		{Role: "tool", ToolCallID: "call-1", Content: "a result"},
 	}}
-	repaired, err := restoreCodexCalls(input, "session-a", history)
+	repaired, err := restoreCodexCalls(input, "session-a", hist)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,21 +126,21 @@ func TestCodexOrphanedResultIsStoppedBeforeUpstream(t *testing.T) {
 		Models: []localModel{{Provider: "codex", Model: "gpt-test"}}, Preferred: "codex/gpt-test"}, firstByte: time.Second}
 	body := []byte(`{"model":"claude-opus-5-5","stream":true,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"private result"}]}]}`)
 	w := httptest.NewRecorder()
-	handleLocal(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), cfg, body, nil, newHealth(""), newStore(10, ""))
+	handleLocal(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), cfg, body, nil, newHealth(""), history.New(10, ""))
 	if w.Code != http.StatusBadRequest || upstreamCalls != 0 || strings.Contains(w.Body.String(), "private result") {
 		t.Fatalf("orphaned output leaked to upstream or error response (status=%d calls=%d)", w.Code, upstreamCalls)
 	}
 }
 
 func TestCodexRestoredCallStreamsWithoutAnotherError(t *testing.T) {
-	history := newStore(10, "")
-	previous := &record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
-		Resp: &parsedResponse{Blocks: []respBlock{{Type: "tool_use", ID: "call-1", Name: "Read", Input: `{"path":"file.txt"}`}}}}
-	history.add(previous)
+	hist := history.New(10, "")
+	previous := &history.Record{Start: time.Now().Add(-time.Second), End: time.Now(), Session: "session-a", Status: 200,
+		Resp: &history.Response{Blocks: []history.Block{{Type: "tool_use", ID: "call-1", Name: "Read", Input: `{"path":"file.txt"}`}}}}
+	hist.Add(previous)
 	input := openaiRequest{Model: "gpt-test", Stream: true, Messages: []openaiMsg{
 		{Role: "tool", ToolCallID: "call-1", Content: "file contents"},
 	}}
-	repaired, err := restoreCodexCalls(input, "session-a", history)
+	repaired, err := restoreCodexCalls(input, "session-a", hist)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +184,7 @@ func TestCodexRestoredCallStreamsWithoutAnotherError(t *testing.T) {
 		Models: []localModel{{Provider: "codex", Model: "gpt-test"}}, Preferred: "codex/gpt-test"}, firstByte: time.Second}
 	body := []byte(`{"model":"claude-opus-5-5","stream":true,"metadata":{"user_id":"{\"session_id\":\"session-a\"}"},"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"file contents"}]}]}`)
 	w := httptest.NewRecorder()
-	handleLocal(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), cfg, body, nil, newHealth(""), history)
+	handleLocal(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), cfg, body, nil, newHealth(""), hist)
 	if w.Code != http.StatusOK || upstreamCalls != 1 || !strings.Contains(w.Body.String(), `"text":"done"`) || !strings.Contains(w.Body.String(), "event: message_stop") {
 		t.Fatalf("streaming route did not complete (status=%d calls=%d)", w.Code, upstreamCalls)
 	}

@@ -50,6 +50,15 @@ func WriteFileAtomic(path string, data []byte, perm fs.FileMode) error {
 	return ReplaceFile(f.Name(), path)
 }
 
+// WritePrivateAtomic writes a file only the user may read: it creates path's
+// directory with MkdirPrivate and replaces path with WriteFileAtomic, mode 0600.
+func WritePrivateAtomic(path string, data []byte) error {
+	if err := MkdirPrivate(filepath.Dir(path)); err != nil {
+		return err
+	}
+	return WriteFileAtomic(path, data, 0o600)
+}
+
 // ReplaceFile renames src over dst. Unix replaces dst even while it is open.
 // Windows refuses while another handle has dst open, so the rename is retried
 // for up to a second before its error is returned.

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func TestQuiescedHealthKeepsMemoryWithoutWritingFile(t *testing.T) {
@@ -34,7 +36,7 @@ func TestQuiescedHealthKeepsMemoryWithoutWritingFile(t *testing.T) {
 
 func TestQuiescedUIRejectsChangesButServesReads(t *testing.T) {
 	life := newLifecycle(false)
-	u := newUIServer(newStore(5, ""), newConfigStore(config{}, ""), newHealth(""))
+	u := newUIServer(history.New(5, ""), newConfigStore(config{}, ""), newHealth(""))
 	u.life = life
 	if err := life.quiesce(); err != nil {
 		t.Fatal(err)
@@ -59,7 +61,7 @@ func TestStandbyCatalogDoesNotTouchProviders(t *testing.T) {
 	}
 	life := newLifecycle(true)
 	cs := newConfigStore(config{}, path)
-	u := newUIServer(newStore(5, ""), cs, newHealth(""))
+	u := newUIServer(history.New(5, ""), cs, newHealth(""))
 	u.life = life
 	if err := u.refreshModels(t.Context()); err == nil {
 		t.Fatal("standby catalog refresh should reject instead of writing")

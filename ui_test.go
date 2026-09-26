@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 func TestSettingsUsesAnthropicPools(t *testing.T) {
@@ -74,21 +76,21 @@ func testUI(t *testing.T, sessions ...string) (*uiServer, http.Handler) {
 	}))
 	t.Cleanup(prov.Close)
 	cs := &configStore{c: config{local: oneProvider(prov.URL, "m1"), failover: true, firstByte: 45 * time.Second}}
-	st := newStore(100, "")
+	st := history.New(100, "")
 	for _, sid := range sessions {
 		meta := fmt.Sprintf(`{"metadata":{"user_id":"{\"session_id\":\"%s\"}"},"messages":[{"role":"user","content":"hello"}]}`, sid)
 		for _, route := range []string{"cloud", "local"} {
-			r := &record{Start: time.Now(), Model: "claude-x", Route: route, ReqBody: []byte(meta), Session: sid}
+			r := &history.Record{Start: time.Now(), Model: "claude-x", Route: route, ReqBody: []byte(meta), Session: sid}
 			if route == "local" {
 				r.Served = "p/m1"
 				r.OpenAIBody = []byte(`{"model":"m1","messages":[]}`)
 			}
-			st.add(r)
-			rw := newRecorder(httptest.NewRecorder(), 1<<20)
+			st.Add(r)
+			rw := history.NewRecorder(httptest.NewRecorder(), 1<<20)
 			rw.Header().Set("Content-Type", "application/json")
 			rw.WriteHeader(200)
 			_, _ = rw.Write([]byte(`{"type":"message","content":[{"type":"text","text":"hi there"}],"stop_reason":"end_turn"}`))
-			st.finish(r.ID, rw, nil)
+			st.Finish(r.ID, rw, nil)
 		}
 	}
 	u := newUIServer(st, cs, newHealth(""))
@@ -124,7 +126,7 @@ func TestUIPagesRender(t *testing.T) {
 	get(t, h, "GET", "/status", nil)
 	get(t, h, "GET", "/requests", nil)
 	get(t, h, "GET", "/requests?route=local&q=hi&model=claude", nil)
-	for _, rec := range u.st.list() {
+	for _, rec := range u.st.List() {
 		for _, view := range []string{"structure", "sent", "response", "raw"} {
 			get(t, h, "GET", "/requests/"+rec.ID+"?view="+view+"&q=hi", nil)
 		}
@@ -222,7 +224,7 @@ func withBadProvider(t *testing.T, good []byte) string {
 
 func TestReloadErrorBanner(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	good, _ := os.ReadFile(path)
 	bad := withBadProvider(t, good)
 	writeRaw(t, path, bad)
@@ -332,7 +334,7 @@ func TestCodexProviderPaneImportNamesProvider(t *testing.T) {
 func TestReloadErrorClearedByUISave(t *testing.T) {
 	t.Setenv("ROUTER_ENV_FILE", filepath.Join(t.TempDir(), "router.env"))
 	cs, _, path := profileFixture(t)
-	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	good, _ := os.ReadFile(path)
 	writeRaw(t, path, withBadProvider(t, good))
 	future := time.Now().Add(2 * time.Second)

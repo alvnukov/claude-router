@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 // A standby slot leaves Codex alone; the slot that becomes active starts the
@@ -26,7 +28,7 @@ func TestCodexUsageRefreshStartsWhenASlotActivates(t *testing.T) {
 		t.Fatal(err)
 	}
 	life := newLifecycle(true)
-	u := newUIServer(newStore(10, ""), newConfigStore(config{local: local}, providers), newHealth(""))
+	u := newUIServer(history.New(10, ""), newConfigStore(config{local: local}, providers), newHealth(""))
 	u.life = life
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return nil, nil }
 	calls := make(chan struct{}, 10)

@@ -8,52 +8,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func TestTwoStoresDoNotLoseHistoryDuringCompaction(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "history.jsonl")
-	old, next := newStore(3, path), newStore(3, path)
-	life := newLifecycle(false)
-	if err := life.quiesce(); err != nil {
-		t.Fatal(err)
-	}
-	old.life, next.life = life, newLifecycle(false)
-	var wg sync.WaitGroup
-	for _, s := range []*store{old, next} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range 30 {
-				r := &record{ID: fmt.Sprintf("%p-%d", s, i), End: time.Now()}
-				s.mu.Lock()
-				s.recs = append(s.recs, r)
-				s.mu.Unlock()
-				s.persist(r)
-			}
-		}()
-	}
-	wg.Wait()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		var r record
-		if err := json.Unmarshal([]byte(line), &r); err != nil {
-			t.Fatalf("corrupt JSONL record: %v", err)
-		}
-		seen[r.ID] = true
-	}
-	if len(seen) != 60 {
-		t.Fatalf("history lost overlap records: got %d, want 60", len(seen))
-	}
-}
 
 func TestTwoAuthStoresRefreshRotatingTokenOnce(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "codex-auth.json")

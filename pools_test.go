@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"localrouter/internal/history"
 )
 
 func TestClaudePoolsSelectModelAndEffort(t *testing.T) {
@@ -76,7 +78,7 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 	defer func() { codexAuth = oldAuth }()
 	upstream, _ := url.Parse("https://api.anthropic.com")
 	cs := newConfigStore(config{upstream: upstream}, filepath.Join(t.TempDir(), "providers.json"))
-	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	form := url.Values{"op": {"add"}, "name": {"codex"}, "type": {"codex"}, "base_url": {"http://127.0.0.1:1234/v1"}}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/settings/providers", strings.NewReader(form.Encode()))

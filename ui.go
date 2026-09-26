@@ -20,6 +20,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/history"
+	"localrouter/internal/limits"
 )
 
 //go:embed ui/*
@@ -32,11 +35,11 @@ type uiServer struct {
 	codexUsage     codexUsageCache // template: per-connection caches copy its client
 	usageMu        sync.Mutex
 	codexUsages    map[string]*codexUsageCache // by name + "\x00" + auth id
-	limits         *anthropicLimits
+	limits         *limits.Store
 	claudeProxy    *claudeProxy
 	catalogMu      sync.Mutex
 	fetchAnthropic func(context.Context) ([]string, error)
-	st             *store
+	st             *history.Store
 	cs             *configStore
 	hl             *health
 	life           *lifecycle
@@ -99,8 +102,8 @@ func uiTemplates() (*template.Template, error) {
 	return template.New("").Funcs(funcs).ParseFS(uiFS, "ui/*.html")
 }
 
-func newUIServer(st *store, cs *configStore, hl *health) *uiServer {
-	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: newAnthropicLimits("", anthropicLimitsMaxAge)}
+func newUIServer(st *history.Store, cs *configStore, hl *health) *uiServer {
+	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: limits.New("", limits.MaxAge)}
 }
 
 func (u *uiServer) handler() http.Handler {
@@ -204,10 +207,10 @@ type statusView struct {
 
 func (u *uiServer) status(w http.ResponseWriter, r *http.Request) {
 	v := statusView{C: u.cs.get(), Uptime: fmtDur(time.Since(u.started))}
-	v.StoreLen, v.StoreMax = u.st.size()
+	v.StoreLen, v.StoreMax = u.st.Size()
 	var dc, dl time.Duration
 	var nc, nl int
-	for _, rec := range u.st.list() {
+	for _, rec := range u.st.List() {
 		v.Total++
 		switch rec.Route {
 		case "cloud":
@@ -243,7 +246,7 @@ func (u *uiServer) status(w http.ResponseWriter, r *http.Request) {
 }
 
 type listItem struct {
-	R       *record
+	R       *history.Record
 	Chars   int
 	Msgs    int
 	Matches int
@@ -295,7 +298,7 @@ func (u *uiServer) list(w http.ResponseWriter, r *http.Request) {
 	v := listView{Q: q.Get("q"), Session: session}
 	groups := map[string]*sessionGroup{}
 	shown := 0
-	for _, rec := range u.st.list() {
+	for _, rec := range u.st.List() {
 		v.Total++
 		if route != "" && rec.Route != route {
 			continue
@@ -347,17 +350,17 @@ func (u *uiServer) list(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) clear(w http.ResponseWriter, r *http.Request) {
-	u.st.clear()
+	u.st.Clear()
 	u.render(w, "list", listView{})
 }
 
 type detailView struct {
-	R        *record
+	R        *history.Record
 	View     string
 	Q        string
 	Ctx      *ctxView
 	Sent     *ctxView
-	Resp     *parsedResponse
+	Resp     *history.Response
 	RespHTML []respBlockView
 	RawReq   string
 	RawSent  string
@@ -367,13 +370,13 @@ type detailView struct {
 }
 
 type respBlockView struct {
-	respBlock
+	history.Block
 	HTML  template.HTML
 	Chars int
 }
 
 func (u *uiServer) detail(w http.ResponseWriter, r *http.Request) {
-	rec := u.st.get(r.PathValue("id"))
+	rec := u.st.Get(r.PathValue("id"))
 	if rec == nil {
 		http.Error(w, "нет такой записи (буфер перезаписан?)", http.StatusNotFound)
 		return
@@ -399,32 +402,32 @@ func (u *uiServer) detail(w http.ResponseWriter, r *http.Request) {
 				if b.Type == "tool_use" {
 					text = b.Input
 				}
-				v.RespHTML = append(v.RespHTML, respBlockView{respBlock: b, HTML: highlight(text, re), Chars: len(text)})
+				v.RespHTML = append(v.RespHTML, respBlockView{Block: b, HTML: highlight(text, re), Chars: len(text)})
 			}
 			v.Usage = sortedKV(rec.Resp.Usage)
 		}
 	case "raw":
-		v.RawReq = prettyJSON(rec.ReqBody)
-		v.RawSent = prettyJSON(rec.OpenAIBody)
+		v.RawReq = history.PrettyJSON(rec.ReqBody)
+		v.RawSent = history.PrettyJSON(rec.OpenAIBody)
 		v.RawResp = string(rec.RespBytes)
 	}
 	u.render(w, "detail", v)
 }
 
 func (u *uiServer) rawRequest(w http.ResponseWriter, r *http.Request) {
-	u.serveRaw(w, r, func(rec *record) ([]byte, string) { return rec.ReqBody, "application/json" })
+	u.serveRaw(w, r, func(rec *history.Record) ([]byte, string) { return rec.ReqBody, "application/json" })
 }
 
 func (u *uiServer) rawSent(w http.ResponseWriter, r *http.Request) {
-	u.serveRaw(w, r, func(rec *record) ([]byte, string) { return rec.OpenAIBody, "application/json" })
+	u.serveRaw(w, r, func(rec *history.Record) ([]byte, string) { return rec.OpenAIBody, "application/json" })
 }
 
 func (u *uiServer) rawResponse(w http.ResponseWriter, r *http.Request) {
-	u.serveRaw(w, r, func(rec *record) ([]byte, string) { return rec.RespBytes, "text/plain; charset=utf-8" })
+	u.serveRaw(w, r, func(rec *history.Record) ([]byte, string) { return rec.RespBytes, "text/plain; charset=utf-8" })
 }
 
-func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*record) ([]byte, string)) {
-	rec := u.st.get(r.PathValue("id"))
+func (u *uiServer) serveRaw(w http.ResponseWriter, r *http.Request, pick func(*history.Record) ([]byte, string)) {
+	rec := u.st.Get(r.PathValue("id"))
 	if rec == nil {
 		http.NotFound(w, r)
 		return
@@ -453,7 +456,7 @@ type settingsView struct {
 	Catalog       modelCatalog
 	AllModels     []localModel
 	Efforts       []string
-	Limits        anthropicLimitsView
+	Limits        limits.View
 }
 
 type routeRow struct {
@@ -550,7 +553,7 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.get()
-	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.view(time.Now())}
+	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.View(time.Now())}
 	for name := range c.local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}
@@ -610,7 +613,7 @@ func (u *uiServer) settingsView() settingsView {
 	for model := range c.local.Routes {
 		models[model] = true
 	}
-	for _, rec := range u.st.list() {
+	for _, rec := range u.st.List() {
 		if rec.Model != "" {
 			models[rec.Model] = true
 		}

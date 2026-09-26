@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"localrouter/internal/history"
 )
 
 // TestRouterEnvPointsClaudeAtTheRouter runs the built binary as the router
@@ -197,7 +199,7 @@ func TestClaudeProxyConnectsASlotThroughThePublicAddress(t *testing.T) {
 	t.Setenv("ROUTER_ENV_FILE", filepath.Join(dir, "env"))
 	t.Setenv("ROUTER_LISTEN", "127.0.0.1:18791")
 	t.Setenv("ROUTER_PUBLIC_LISTEN", "127.0.0.1:18787")
-	u := newUIServer(newStore(10, ""), newConfigStore(loadConfig(), ""), newHealth(""))
+	u := newUIServer(history.New(10, ""), newConfigStore(loadConfig(), ""), newHealth(""))
 	settings := filepath.Join(dir, "settings.json")
 	u.claudeProxy = &claudeProxy{path: settings}
 	r := httptest.NewRequest("POST", "http://localhost:8788/settings/claude-proxy", strings.NewReader(url.Values{"op": {"connect"}}.Encode()))
@@ -212,7 +214,7 @@ func TestClaudeProxyConnectsASlotThroughThePublicAddress(t *testing.T) {
 
 func TestClaudeProxyButtonAndOrigin(t *testing.T) {
 	cs := newConfigStore(config{listen: "127.0.0.1:8787"}, "")
-	u := newUIServer(newStore(10, ""), cs, newHealth(""))
+	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	u.claudeProxy = &claudeProxy{path: filepath.Join(t.TempDir(), "settings.json")}
 	post := func(op, origin string) (int, string) {
 		r := httptest.NewRequest("POST", "http://localhost:8788/settings/claude-proxy", strings.NewReader(url.Values{"op": {op}}.Encode()))

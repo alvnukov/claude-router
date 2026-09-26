@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
 
 // twoCodexPool routes local-model to a failover pool [codex/gpt, work/gpt].
@@ -65,7 +67,7 @@ func seedTwoConnections(t *testing.T) {
 
 // runLocalRequest is runLocal with a Claude Code session id, so affinity
 // binds, and the client's context, so a test can go away mid-answer.
-func runLocalRequest(t *testing.T, ctx context.Context, cfg config, hl *health, session string, stream bool) (*httptest.ResponseRecorder, *localTrace) {
+func runLocalRequest(t *testing.T, ctx context.Context, cfg config, hl *health, session string, stream bool) (*httptest.ResponseRecorder, *history.Trace) {
 	t.Helper()
 	uid, _ := json.Marshal(map[string]string{"session_id": session})
 	body, _ := json.Marshal(map[string]any{
@@ -77,12 +79,12 @@ func runLocalRequest(t *testing.T, ctx context.Context, cfg config, hl *health, 
 	})
 	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))).WithContext(ctx)
 	w := httptest.NewRecorder()
-	tr := &localTrace{}
+	tr := &history.Trace{}
 	handleLocal(w, r, cfg, body, tr, hl)
 	return w, tr
 }
 
-func runLocalSession(t *testing.T, cfg config, hl *health, session string) (*httptest.ResponseRecorder, *localTrace) {
+func runLocalSession(t *testing.T, cfg config, hl *health, session string) (*httptest.ResponseRecorder, *history.Trace) {
 	t.Helper()
 	return runLocalRequest(t, context.Background(), cfg, hl, session, false)
 }
@@ -334,7 +336,7 @@ func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
 	serve("s2", "codex/gpt")
 
 	// Switched from the UI: new sessions balance, bound ones stay.
-	h := newUIServer(newStore(10, ""), cs, hl).handler()
+	h := newUIServer(history.New(10, ""), cs, hl).handler()
 	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "type": {poolBalance}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})
 	// A form without the type field keeps the stored one.
 	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})

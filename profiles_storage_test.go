@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"localrouter/internal/history"
 )
 
 func TestProfileStaleSnapshotCannotReactivateOldProfile(t *testing.T) {
@@ -195,7 +197,7 @@ func TestStaleRoutingFormRejectedAfterActivation(t *testing.T) {
 	if err := cs.createProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	if err := cs.activateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +225,7 @@ func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 	if err := cs.createProfile("cloud", true); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(newStore(10, ""), cs, h)
+	u := newUIServer(history.New(10, ""), cs, h)
 	if err := cs.activateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,61 +17,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"localrouter/internal/platform"
+	"localrouter/internal/history"
+	"localrouter/internal/limits"
 )
-
-// The unified-* names below are the ones the Claude Code client reads; every
-// value is synthetic. Live traffic has not confirmed either, so nothing below
-// claims what Anthropic sends.
-
-func TestAnthropicLimitsKeepsOnlyRatelimitHeaders(t *testing.T) {
-	h := http.Header{}
-	h.Set("Anthropic-Ratelimit-Requests-Remaining", "41")
-	h["anthropic-ratelimit-example-status"] = []string{"allowed", "second"}
-	h.Set("Authorization", "Bearer secret-token")
-	h.Set("X-Api-Key", "secret-key")
-	h.Set("Set-Cookie", "session=secret")
-	h.Set("Request-Id", "req_1")
-	h.Set("Retry-After", "5")
-	h.Set("Anthropic-Ratelimit-Long", strings.Repeat("x", 1000))
-
-	got := limitHeaders(h)
-	want := map[string]string{
-		"anthropic-ratelimit-requests-remaining": "41",
-		"anthropic-ratelimit-example-status":     "allowed",
-		"anthropic-ratelimit-long":               strings.Repeat("x", limitsMaxValue),
-	}
-	if len(got) != len(want) {
-		t.Fatalf("kept %v", got)
-	}
-	for k, v := range want {
-		if got[k] != v {
-			t.Fatalf("%s = %q, want %q", k, got[k], v)
-		}
-	}
-
-	many := http.Header{}
-	for i := 0; i < 3*limitsMaxHeaders; i++ {
-		many.Set(fmt.Sprintf("Anthropic-Ratelimit-N%03d", i), "1")
-	}
-	kept := limitHeaders(many)
-	if len(kept) != limitsMaxHeaders || kept["anthropic-ratelimit-n000"] == "" || kept[fmt.Sprintf("anthropic-ratelimit-n%03d", limitsMaxHeaders)] != "" {
-		t.Fatalf("cap is not the first %d names in order: %d kept", limitsMaxHeaders, len(kept))
-	}
-	long := http.Header{}
-	long.Set("Anthropic-Ratelimit-"+strings.Repeat("n", 500), "1")
-	if n := len(limitHeaders(long)); n != 0 {
-		t.Fatal("unbounded header name kept")
-	}
-	if n := len(limitHeaders(nil)); n != 0 {
-		t.Fatalf("nil header kept %d", n)
-	}
-}
 
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
@@ -82,72 +33,6 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	log.SetFlags(0)
 	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
 	return &buf
-}
-
-func TestAnthropicLimitsLogsNamesOnceWithoutValues(t *testing.T) {
-	buf := captureLog(t)
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	now := time.Now()
-	l.observe(http.Header{}, now)
-	l.observe(http.Header{}, now.Add(time.Second))
-	h := http.Header{}
-	h.Set("Anthropic-Ratelimit-B", "value-b-7")
-	h.Set("Anthropic-Ratelimit-A", "value-a-9")
-	l.observe(h, now.Add(2*time.Second))
-	l.observe(h, now.Add(3*time.Second))
-
-	out := buf.String()
-	if strings.Count(out, "\n") != 2 {
-		t.Fatalf("want one line per distinct name set, got:\n%s", out)
-	}
-	if !strings.Contains(out, "anthropic limits: response headers: none") {
-		t.Fatalf("empty set not logged:\n%s", out)
-	}
-	if !strings.Contains(out, "anthropic limits: response headers: anthropic-ratelimit-a, anthropic-ratelimit-b") {
-		t.Fatalf("names not logged sorted:\n%s", out)
-	}
-	if strings.Contains(out, "value-") {
-		t.Fatalf("header values leaked into the log:\n%s", out)
-	}
-}
-
-func TestAnthropicLimitsHookNeverFails(t *testing.T) {
-	captureLog(t)
-	var nilStore *anthropicLimits
-	if err := nilStore.observeResponse(&http.Response{Header: http.Header{}}); err != nil {
-		t.Fatal(err)
-	}
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	if err := l.observeResponse(nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.observeResponse(&http.Response{Header: http.Header{}}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAnthropicLimitsErrorWithoutHeadersDoesNotClaimAbsence(t *testing.T) {
-	buf := captureLog(t)
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
-	for _, status := range []int{http.StatusBadGateway, 529} {
-		resp := &http.Response{StatusCode: status, Request: req, Header: http.Header{}}
-		if err := l.observeResponse(resp); err != nil {
-			t.Fatal(err)
-		}
-		if v := l.view(time.Now()); v.State != "unavailable" {
-			t.Fatalf("%d without headers claimed Anthropic sent no limits: %+v", status, v)
-		}
-	}
-	if strings.Contains(buf.String(), "response headers: none") {
-		t.Fatalf("error response logged as evidence of absent headers: %s", buf.String())
-	}
-	if err := l.observeResponse(&http.Response{StatusCode: http.StatusNoContent, Request: req, Header: http.Header{}}); err != nil {
-		t.Fatal(err)
-	}
-	if v := l.view(time.Now()); v.State != "no_headers" {
-		t.Fatalf("successful response without headers must be diagnostic: %+v", v)
-	}
 }
 
 // countingTransport counts every outbound request the process makes through
@@ -175,10 +60,10 @@ func countOutbound(t *testing.T) *countingTransport {
 // and opus/high to the local provider at local.
 func limitsRouter(t *testing.T, upstream, local string) (*uiServer, http.Handler) {
 	t.Helper()
-	return limitsRouterStore(t, upstream, local, newStore(10, ""))
+	return limitsRouterStore(t, upstream, local, history.New(10, ""))
 }
 
-func limitsRouterStore(t *testing.T, upstream, local string, st *store) (*uiServer, http.Handler) {
+func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store) (*uiServer, http.Handler) {
 	t.Helper()
 	cs, h, _ := profileFixture(t)
 	up, _ := url.Parse(upstream)
@@ -261,7 +146,7 @@ func TestAnthropicLimitsProxyIsTransparent(t *testing.T) {
 	if n := out.n.Load(); n != 1 {
 		t.Fatalf("router made %d outbound requests, want 1", n)
 	}
-	v := u.limits.view(time.Now())
+	v := u.limits.View(time.Now())
 	if v.State != "fresh" || limitKeys(v) != "example,requests" || v.Windows[0].Status != "allowed" || v.Windows[1].Remaining == nil || *v.Windows[1].Remaining != 41 {
 		t.Fatalf("snapshot %+v", v)
 	}
@@ -269,7 +154,7 @@ func TestAnthropicLimitsProxyIsTransparent(t *testing.T) {
 
 // limitKeys is a view's parsed window names and raw header names, sorted:
 // what the tests below compare to tell snapshots apart.
-func limitKeys(v anthropicLimitsView) string {
+func limitKeys(v limits.View) string {
 	var keys []string
 	for _, w := range v.Windows {
 		keys = append(keys, w.Name)
@@ -312,7 +197,7 @@ func TestAnthropicLimitsIgnoresLocalAndOtherPaths(t *testing.T) {
 	if code := send("/v1/models", ""); code != http.StatusOK {
 		t.Fatalf("catch-all: %d", code)
 	}
-	if v := u.limits.view(time.Now()); v.State != "unavailable" {
+	if v := u.limits.View(time.Now()); v.State != "unavailable" {
 		t.Fatalf("non-messages or local response updated the snapshot: %+v", v)
 	}
 }
@@ -325,461 +210,21 @@ func limitsHeader(kv ...string) http.Header {
 	return h
 }
 
-func TestAnthropicLimitsViewStates(t *testing.T) {
-	captureLog(t)
-	now := time.Now()
-	with := limitsHeader("Anthropic-Ratelimit-Example-Status", "allowed")
-
-	l := newAnthropicLimits("", 30*time.Minute)
-	if v := l.view(now); v.State != "unavailable" || !v.ObservedAt.IsZero() || v.AgeSeconds != nil || v.MaxAgeSeconds != 1800 || v.Windows != nil || v.Raw != nil {
-		t.Fatalf("nothing observed: %+v", v)
-	}
-	l.observe(http.Header{}, now.Add(-10*time.Minute))
-	if v := l.view(now); v.State != "no_headers" || !v.ObservedAt.Equal(now.Add(-10*time.Minute)) || v.AgeSeconds == nil || *v.AgeSeconds != 600 || v.Windows != nil || v.Raw != nil {
-		t.Fatalf("response without headers: %+v", v)
-	}
-	l.observe(with, now.Add(-30*time.Minute))
-	if v := l.view(now); v.State != "fresh" || *v.AgeSeconds != 1800 || limitKeys(v) != "example" {
-		t.Fatalf("headers exactly max age old are still current: %+v", v)
-	}
-	if v := l.view(now.Add(time.Second)); v.State != "no_headers" {
-		t.Fatalf("stale headers must not be shown as current: %+v", v)
-	}
-	if v := l.view(now.Add(21 * time.Minute)); v.State != "unavailable" || !v.ObservedAt.Equal(now.Add(-10*time.Minute)) || *v.AgeSeconds != 31*60 || v.Windows != nil || v.Raw != nil {
-		t.Fatalf("everything stale: %+v", v)
-	}
-
-	// A later answer without the headers (an error, say) does not hide a
-	// current snapshot.
-	l.observe(with, now.Add(-time.Minute))
-	l.observe(http.Header{}, now)
-	if v := l.view(now); v.State != "fresh" || !v.ObservedAt.Equal(now.Add(-time.Minute)) {
-		t.Fatalf("newer response without headers hid current snapshot: %+v", v)
-	}
-}
-
-func TestAnthropicLimitsIgnoresOlderObservation(t *testing.T) {
-	captureLog(t)
-	now := time.Now()
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	l.observe(limitsHeader("Anthropic-Ratelimit-New", "1"), now)
-	l.observe(limitsHeader("Anthropic-Ratelimit-Old", "1"), now.Add(-time.Second))
-	if v := l.view(now); limitKeys(v) != "anthropic-ratelimit-new" || !v.ObservedAt.Equal(now) {
-		t.Fatalf("older response replaced newer snapshot: %+v", v)
-	}
-	l2 := newAnthropicLimits("", anthropicLimitsMaxAge)
-	l2.observe(http.Header{}, now)
-	l2.observe(http.Header{}, now.Add(-time.Second))
-	if v := l2.view(now); !v.ObservedAt.Equal(now) {
-		t.Fatalf("older response moved time back: %+v", v)
-	}
-}
-
-// A slow streaming response may reach the hook minutes after a newer one.
-// Its timestamp must not make the newer observation look like an invalid
-// future timestamp just because it was used as the clock for the comparison.
-func TestAnthropicLimitsSlowOlderResponseDoesNotRegress(t *testing.T) {
-	captureLog(t)
-	now := time.Now()
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	l.observe(limitsHeader("Anthropic-Ratelimit-New", "1"), now)
-	l.observe(limitsHeader("Anthropic-Ratelimit-Old", "1"), now.Add(-5*time.Minute))
-	if v := l.view(now); !v.ObservedAt.Equal(now) || limitKeys(v) != "anthropic-ratelimit-new" {
-		t.Fatalf("slow response replaced newer headers: %+v", v)
-	}
-
-	l2 := newAnthropicLimits("", anthropicLimitsMaxAge)
-	l2.observe(http.Header{}, now)
-	l2.observe(http.Header{}, now.Add(-5*time.Minute))
-	if v := l2.view(now); !v.ObservedAt.Equal(now) {
-		t.Fatalf("slow response moved no-headers time back: %+v", v)
-	}
-}
-
-// A timestamp from the future (clock moved back, hand-edited file) must
-// neither look current nor block real observations.
-func TestAnthropicLimitsFutureTimestamp(t *testing.T) {
-	captureLog(t)
-	now := time.Now()
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	l.observe(limitsHeader("Anthropic-Ratelimit-Future", "1"), now.Add(2*time.Hour))
-	if v := l.view(now); v.State != "unavailable" || !v.ObservedAt.IsZero() || v.AgeSeconds != nil {
-		t.Fatalf("future snapshot shown: %+v", v)
-	}
-	l.observe(limitsHeader("Anthropic-Ratelimit-Now", "1"), now)
-	if v := l.view(now); v.State != "fresh" || limitKeys(v) != "anthropic-ratelimit-now" {
-		t.Fatalf("future snapshot blocked a real one: %+v", v)
-	}
-}
-
-func TestAnthropicLimitsPersistRoundTrip(t *testing.T) {
-	captureLog(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "limits.json")
-	now := time.Now()
-	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	t.Cleanup(l.close)
-	l.observe(limitsHeader("Anthropic-Ratelimit-A", "value-a"), now.Add(-time.Minute))
-	l.observe(http.Header{}, now.Add(-2*time.Minute))
-	if err := l.save(); err != nil {
-		t.Fatal(err)
-	}
-	requirePrivateFile(t, path)
-	entries, _ := os.ReadDir(dir)
-	for _, e := range entries {
-		if e.Name() != "limits.json" && e.Name() != "limits.json.lock" {
-			t.Fatalf("temporary file left behind: %s", e.Name())
-		}
-	}
-	var disk limitsState
-	data, _ := os.ReadFile(path)
-	if err := json.Unmarshal(data, &disk); err != nil || disk.WithHeaders == nil || disk.WithHeaders.Headers["anthropic-ratelimit-a"] != "value-a" || !disk.WithoutAt.Equal(now.Add(-2*time.Minute)) {
-		t.Fatalf("file content %s: %v", data, err)
-	}
-
-	again := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	a, _ := json.Marshal(l.view(now))
-	b, _ := json.Marshal(again.view(now))
-	if string(a) != string(b) {
-		t.Fatalf("after restart %s, before %s", b, a)
-	}
-}
-
-// Two router processes share limits.json during a deploy: a save never
-// replaces a newer observation on disk with an older one.
-func TestAnthropicLimitsSaveKeepsNewerDiskState(t *testing.T) {
-	captureLog(t)
-	path := filepath.Join(t.TempDir(), "limits.json")
-	now := time.Now()
-	older := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	t.Cleanup(older.close)
-	newer := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	t.Cleanup(newer.close)
-	older.observe(limitsHeader("Anthropic-Ratelimit-Old", "1"), now.Add(-5*time.Minute))
-	newer.observe(limitsHeader("Anthropic-Ratelimit-New", "1"), now.Add(-time.Minute))
-	newer.observe(http.Header{}, now)
-	if err := newer.save(); err != nil {
-		t.Fatal(err)
-	}
-	if err := older.save(); err != nil {
-		t.Fatal(err)
-	}
-	reread := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	for name, l := range map[string]*anthropicLimits{"file": reread, "stale process": older} {
-		if v := l.view(now); limitKeys(v) != "anthropic-ratelimit-new" {
-			t.Fatalf("%s regressed to older snapshot: %+v", name, v)
-		}
-	}
-	var disk limitsState
-	data, _ := os.ReadFile(path)
-	if err := json.Unmarshal(data, &disk); err != nil || !disk.WithoutAt.Equal(now) {
-		t.Fatalf("without_at regressed: %s %v", data, err)
-	}
-}
-
-// holdLock holds the file lock at path, as another router process would.
-// The returned func releases it; the end of the test releases it too.
-func holdLock(t *testing.T, path string) (release func()) {
-	t.Helper()
-	held, stop, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
-	go func() {
-		done <- platform.WithLock(context.Background(), path, func() error {
-			close(held)
-			<-stop
-			return nil
-		})
-	}()
-	select {
-	case <-held:
-	case err := <-done:
-		t.Fatalf("hold lock: %v", err)
-	}
-	var once sync.Once
-	release = func() {
-		once.Do(func() {
-			close(stop)
-			if err := <-done; err != nil {
-				t.Error(err)
-			}
-		})
-	}
-	t.Cleanup(release)
-	return release
-}
-
-// The read-merge-write of one process must not interleave with another's.
-func TestAnthropicLimitsSaveWaitsForOtherWriter(t *testing.T) {
-	captureLog(t)
-	path := filepath.Join(t.TempDir(), "limits.json")
-	release := holdLock(t, path+".lock")
-	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	t.Cleanup(l.close)
-	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
-	saved := make(chan error, 1)
-	go func() { saved <- l.save() }()
-	select {
-	case err := <-saved:
-		t.Fatalf("saved while another writer held the lock: %v", err)
-	case <-time.After(200 * time.Millisecond):
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("written while another writer held the lock")
-	}
-	release()
-	if err := <-saved; err != nil {
-		t.Fatal(err)
-	}
-}
-
-// A writer that keeps the lock makes a save fail after limitsLockWait, with
-// the lock file named, instead of blocking the saver for good.
-func TestAnthropicLimitsSaveGivesUpOnHeldLock(t *testing.T) {
-	captureLog(t)
-	path := filepath.Join(t.TempDir(), "limits.json")
-	holdLock(t, path+".lock")
-	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	t.Cleanup(l.close)
-	start := time.Now()
-	err := l.save()
-	if err == nil || err.Error() != path+".lock: held by another process" {
-		t.Fatalf("save under a held lock: %v", err)
-	}
-	if waited := time.Since(start); waited < limitsLockWait || waited > limitsLockWait+time.Second {
-		t.Fatalf("waited %v, want about %v", waited, limitsLockWait)
-	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatal("written while another writer held the lock")
-	}
-}
-
-func TestAnthropicLimitsBadFile(t *testing.T) {
-	buf := captureLog(t)
-	dir := t.TempDir()
-	missing := newAnthropicLimits(filepath.Join(dir, "missing.json"), anthropicLimitsMaxAge)
-	if v := missing.view(time.Now()); v.State != "unavailable" {
-		t.Fatalf("missing file: %+v", v)
-	}
-	missing.close()
-	if _, err := os.Stat(filepath.Join(dir, "missing.json")); !os.IsNotExist(err) {
-		t.Fatal("file created without an observation")
-	}
-	if buf.Len() != 0 {
-		t.Fatalf("missing file reported: %q", buf.String())
-	}
-
-	path := filepath.Join(dir, "limits.json")
-	writeRaw(t, path, "{not json")
-	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	t.Cleanup(l.close)
-	if v := l.view(time.Now()); v.State != "unavailable" {
-		t.Fatalf("corrupt file: %+v", v)
-	}
-	if !strings.Contains(buf.String(), "anthropic limits: "+path) {
-		t.Fatalf("corrupt file not reported: %q", buf.String())
-	}
-	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
-	if err := l.save(); err != nil {
-		t.Fatal(err)
-	}
-	if v := newAnthropicLimits(path, anthropicLimitsMaxAge).view(time.Now()); v.State != "fresh" {
-		t.Fatalf("corrupt file not replaced: %+v", v)
-	}
-
-	// A hand-edited file cannot smuggle other headers or unbounded names in.
-	edited := filepath.Join(dir, "edited.json")
-	writeRaw(t, edited, `{"with_headers":{"at":"`+time.Now().Format(time.RFC3339Nano)+`","headers":{"authorization":"x","anthropic-ratelimit-ok":"1","anthropic-ratelimit-`+strings.Repeat("n", 500)+`":"1"}}}`)
-	if v := newAnthropicLimits(edited, anthropicLimitsMaxAge).view(time.Now()); limitKeys(v) != "anthropic-ratelimit-ok" {
-		t.Fatalf("file headers not filtered: %+v", v)
-	}
-}
-
-func TestAnthropicLimitsSaveErrorKeepsMemory(t *testing.T) {
-	buf := captureLog(t)
-	notDir := filepath.Join(t.TempDir(), "file")
-	writeRaw(t, notDir, "")
-	l := newAnthropicLimits(filepath.Join(notDir, "limits.json"), anthropicLimitsMaxAge)
-	t.Cleanup(l.close)
-	l.observe(limitsHeader("Anthropic-Ratelimit-A", "secret-value"), time.Now())
-	if err := l.save(); err == nil {
-		t.Fatal("save into a file path succeeded")
-	}
-	if v := l.view(time.Now()); v.State != "fresh" {
-		t.Fatalf("failed save lost the snapshot: %+v", v)
-	}
-	l.observe(limitsHeader("Anthropic-Ratelimit-A", "secret-value"), time.Now().Add(time.Second))
-	l.close()
-	out := buf.String()
-	if strings.Count(out, "anthropic limits: save") != 1 || strings.Contains(out, "secret-value") {
-		t.Fatalf("save failure must be logged once, without values: %q", out)
-	}
-}
-
-// The proxy never waits for the disk: observe only schedules a save, and
-// close flushes whatever is pending.
-func TestAnthropicLimitsBackgroundSave(t *testing.T) {
-	captureLog(t)
-	path := filepath.Join(t.TempDir(), "limits.json")
-	l := newAnthropicLimits(path, anthropicLimitsMaxAge)
-	l.observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("observation never saved")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	l.observe(limitsHeader("Anthropic-Ratelimit-B", "1"), time.Now().Add(time.Second))
-	l.close()
-	l.close()
-	if v := newAnthropicLimits(path, anthropicLimitsMaxAge).view(time.Now().Add(time.Second)); limitKeys(v) != "anthropic-ratelimit-b" {
-		t.Fatalf("close did not flush the last observation: %+v", v)
-	}
-	l.observe(http.Header{}, time.Now().Add(2*time.Second)) // after close: memory only
-	var nilStore *anthropicLimits
-	nilStore.close()
-	if err := nilStore.save(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAnthropicLimitsConcurrentUse(t *testing.T) {
-	captureLog(t)
-	l := newAnthropicLimits(filepath.Join(t.TempDir(), "limits.json"), anthropicLimitsMaxAge)
-	t.Cleanup(l.close)
-	start := time.Now()
-	var wg sync.WaitGroup
-	for g := 0; g < 8; g++ {
-		wg.Add(1)
-		go func(g int) {
-			defer wg.Done()
-			for i := 0; i < 200; i++ {
-				at := start.Add(time.Duration(i*8+g) * time.Millisecond)
-				if i%2 == 0 {
-					l.observe(limitsHeader(fmt.Sprintf("Anthropic-Ratelimit-G%d", g), "1"), at)
-				} else {
-					l.observe(http.Header{}, at)
-				}
-				l.view(at)
-				if i%50 == 0 {
-					_ = l.save() // racing writers; the view below is what counts
-				}
-			}
-		}(g)
-	}
-	wg.Wait()
-	last := start.Add(time.Duration(199*8+7) * time.Millisecond)
-	if v := l.view(last); v.State != "fresh" || !v.ObservedAt.Equal(start.Add(time.Duration(198*8+7)*time.Millisecond)) {
-		t.Fatalf("after concurrent use: %+v", v)
-	}
-}
-
-// Every header is anthropic-ratelimit-<window>-<field>, the field being
-// utilization, remaining, limit, reset or status. One function reads them all
-// without knowing window names; anything else stays raw under its full name.
-func TestParseLimitWindows(t *testing.T) {
-	windows, raw := parseLimitWindows(map[string]string{
-		"anthropic-ratelimit-unified-5h-utilization":       "0.23",
-		"anthropic-ratelimit-unified-5h-reset":             "1790348400",
-		"anthropic-ratelimit-unified-7d-utilization":       "1.25",
-		"anthropic-ratelimit-unified-7d-status":            "rejected",
-		"anthropic-ratelimit-unified-7d_oi-utilization":    "0.1234",
-		"anthropic-ratelimit-unified-status":               "allowed_warning",
-		"anthropic-ratelimit-requests-limit":               "50",
-		"anthropic-ratelimit-requests-remaining":           "41",
-		"anthropic-ratelimit-requests-reset":               "2026-09-25T18:00:00+03:00",
-		"anthropic-ratelimit-tokens-remaining":             "39999",
-		"anthropic-ratelimit-both-utilization":             "0.5",
-		"anthropic-ratelimit-both-remaining":               "9",
-		"anthropic-ratelimit-both-limit":                   "10",
-		"anthropic-ratelimit-over-remaining":               "15",
-		"anthropic-ratelimit-over-limit":                   "10",
-		"anthropic-ratelimit-zero-remaining":               "0",
-		"anthropic-ratelimit-zero-limit":                   "0",
-		"anthropic-ratelimit-unified-representative-claim": "five_hour",
-		"anthropic-ratelimit-unified-fallback":             "available",
-		"anthropic-ratelimit-reset":                        "1790348400",
-	})
-	got, _ := json.Marshal(windows)
-	want := `[` +
-		`{"name":"both","remaining_percent":50,"used_percent":50,"remaining":9,"limit":10},` +
-		`{"name":"over","remaining_percent":100,"remaining":15,"limit":10},` +
-		`{"name":"requests","remaining_percent":82,"remaining":41,"limit":50,"reset_at":"2026-09-25T15:00:00Z"},` +
-		`{"name":"tokens","remaining":39999},` +
-		`{"name":"unified","status":"allowed_warning"},` +
-		`{"name":"unified-5h","remaining_percent":77,"used_percent":23,"reset_at":"2026-09-25T15:00:00Z"},` +
-		`{"name":"unified-7d","remaining_percent":0,"used_percent":125,"status":"rejected"},` +
-		`{"name":"unified-7d_oi","remaining_percent":87.7,"used_percent":12.3},` +
-		`{"name":"zero","remaining":0,"limit":0}` +
-		`]`
-	if string(got) != want {
-		t.Fatalf("windows\n got %s\nwant %s", got, want)
-	}
-	wantRaw := map[string]string{
-		"anthropic-ratelimit-unified-representative-claim": "five_hour",
-		"anthropic-ratelimit-unified-fallback":             "available",
-		"anthropic-ratelimit-reset":                        "1790348400",
-	}
-	if !maps.Equal(raw, wantRaw) {
-		t.Fatalf("raw %v, want %v", raw, wantRaw)
-	}
-}
-
-// A value that does not parse stays raw under its full name; nothing is
-// guessed from it.
-func TestParseLimitWindowsMalformed(t *testing.T) {
-	for _, c := range []struct{ name, value string }{
-		{"anthropic-ratelimit-unified-5h-utilization", "abc"},
-		{"anthropic-ratelimit-unified-5h-utilization", "-0.1"},
-		{"anthropic-ratelimit-unified-5h-utilization", "NaN"},
-		{"anthropic-ratelimit-unified-5h-utilization", "+Inf"},
-		{"anthropic-ratelimit-unified-5h-utilization", "23%"},
-		{"anthropic-ratelimit-requests-remaining", "-1"},
-		{"anthropic-ratelimit-requests-remaining", "4.5"},
-		{"anthropic-ratelimit-requests-limit", "many"},
-		{"anthropic-ratelimit-unified-5h-reset", "tomorrow"},
-		{"anthropic-ratelimit-unified-5h-reset", "0"},
-		{"anthropic-ratelimit-unified-5h-reset", "1790348400000"}, // milliseconds are not guessed
-		{"anthropic-ratelimit-unified-5h-status", ""},
-		{"anthropic-ratelimit--utilization", "0.5"},
-		{"anthropic-ratelimit-utilization", "0.5"},
-	} {
-		windows, raw := parseLimitWindows(map[string]string{c.name: c.value})
-		if v, ok := raw[c.name]; len(windows) != 0 || len(raw) != 1 || !ok || v != c.value {
-			t.Fatalf("%s=%q: windows %+v, raw %v", c.name, c.value, windows, raw)
-		}
-	}
-
-	windows, raw := parseLimitWindows(map[string]string{
-		"anthropic-ratelimit-unified-5h-utilization": "0.5",
-		"anthropic-ratelimit-unified-5h-reset":       "soon",
-	})
-	if len(windows) != 1 || windows[0].Name != "unified-5h" || !windows[0].ResetAt.IsZero() || raw["anthropic-ratelimit-unified-5h-reset"] != "soon" {
-		t.Fatalf("one bad field must not drop the window: %+v %v", windows, raw)
-	}
-
-	if windows, raw := parseLimitWindows(nil); len(windows) != 0 || len(raw) != 0 {
-		t.Fatalf("no headers: %+v %v", windows, raw)
-	}
-}
-
 // /api/limits and the settings page show this JSON; docs/features.md
 // describes it, so a change here is a change there.
 func TestAnthropicLimitsViewJSON(t *testing.T) {
 	captureLog(t)
 	now := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
 	at := now.Format(time.RFC3339)
-	l := newAnthropicLimits("", anthropicLimitsMaxAge)
-	l.observe(limitsHeader(
+	l := limits.New("", limits.MaxAge)
+	l.Observe(limitsHeader(
 		"Anthropic-Ratelimit-Unified-5h-Utilization", "0.23",
 		"Anthropic-Ratelimit-Unified-5h-Reset", "1790348400",
 		"Anthropic-Ratelimit-Unified-Status", "allowed",
 		"Anthropic-Ratelimit-Unified-Representative-Claim", "five_hour",
 	), now)
-	report := func(l *anthropicLimits, at time.Time) string {
-		got, _ := json.Marshal(limitsReportOf(l.view(at), nil, at))
+	report := func(l *limits.Store, at time.Time) string {
+		got, _ := json.Marshal(limitsReportOf(l.View(at), nil, at))
 		return string(got)
 	}
 	const noCodex = `{"source":"codex","state":"not_connected","max_age_seconds":1800}`
@@ -808,14 +253,14 @@ func TestAnthropicLimitsViewJSON(t *testing.T) {
 		{limitsHeader("Anthropic-Ratelimit-Unified-Fallback", "available"),
 			`"raw":{"anthropic-ratelimit-unified-fallback":"available"}},` + noCodex + `],"windows":[]}`},
 	} {
-		l := newAnthropicLimits("", anthropicLimitsMaxAge)
-		l.observe(c.h, now)
+		l := limits.New("", limits.MaxAge)
+		l.Observe(c.h, now)
 		if got := report(l, now); !strings.HasPrefix(got, `{"sources":[{"source":"anthropic","state":"fresh",`) || !strings.HasSuffix(got, c.want) {
 			t.Fatalf("got %s, want suffix %s", got, c.want)
 		}
 	}
-	none := newAnthropicLimits("", anthropicLimitsMaxAge)
-	none.observe(http.Header{}, now)
+	none := limits.New("", limits.MaxAge)
+	none.Observe(http.Header{}, now)
 	if got := report(none, now); got != `{"sources":[{"source":"anthropic","state":"no_headers","observed_at":"`+at+`","age_seconds":0,"max_age_seconds":1800},`+noCodex+`],"windows":[]}` {
 		t.Fatalf("no headers: %s", got)
 	}
@@ -836,7 +281,7 @@ func TestLimitsReportCodex(t *testing.T) {
 	at := updated.Format(time.RFC3339)
 	fresh := decodeCodexUsage(payload, codexAccount{ID: "acct"}, updated)
 	codex := func(v codexUsageView, at time.Time) string {
-		r := limitsReportOf(anthropicLimitsView{State: "unavailable", MaxAgeSeconds: 1800}, []codexUsageView{v}, at)
+		r := limitsReportOf(limits.View{State: "unavailable", MaxAgeSeconds: 1800}, []codexUsageView{v}, at)
 		sources, _ := json.Marshal(r.Sources[1])
 		windows, _ := json.Marshal(r.Windows)
 		return string(sources) + " " + string(windows)
@@ -890,18 +335,18 @@ func TestAnthropicLimitsValuesStayOutOfHistoryAndLog(t *testing.T) {
 		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
 	}))
 	defer upstream.Close()
-	history := filepath.Join(t.TempDir(), "history.jsonl")
-	u, handler := limitsRouterStore(t, upstream.URL, "", newStore(10, history))
+	histPath := filepath.Join(t.TempDir(), "history.jsonl")
+	u, handler := limitsRouterStore(t, upstream.URL, "", history.New(10, histPath))
 
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hi"}]}`)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d", w.Code)
 	}
-	if v := u.limits.view(time.Now()); v.State != "fresh" || limitKeys(v) != "anthropic-ratelimit-unified-representative-claim,unified-5h" {
+	if v := u.limits.View(time.Now()); v.State != "fresh" || limitKeys(v) != "anthropic-ratelimit-unified-representative-claim,unified-5h" {
 		t.Fatalf("snapshot %+v", v)
 	}
-	data, err := os.ReadFile(history)
+	data, err := os.ReadFile(histPath)
 	if err != nil || len(data) == 0 {
 		t.Fatalf("history not written: %v", err)
 	}
@@ -950,9 +395,9 @@ func TestAnthropicLimitsSettingsBlock(t *testing.T) {
 	captureLog(t)
 	u, h := testUI(t)
 	page := get(t, h, "GET", "/settings", nil).Body.String()
-	codex, limits, conns := strings.Index(page, `id="codex-subscription"`), strings.Index(page, `id="anthropic-limits"`), strings.Index(page, `id="connections"`)
-	if codex < 0 || codex > limits || limits > conns {
-		t.Fatalf("limits block is not between Codex subscription and connections: %d %d %d", codex, limits, conns)
+	codex, block, conns := strings.Index(page, `id="codex-subscription"`), strings.Index(page, `id="anthropic-limits"`), strings.Index(page, `id="connections"`)
+	if codex < 0 || codex > block || block > conns {
+		t.Fatalf("limits block is not between Codex subscription and connections: %d %d %d", codex, block, conns)
 	}
 	if !strings.Contains(page, `<a href="#anthropic-limits">`) {
 		t.Fatal("no navigation link to the limits block")
@@ -974,28 +419,28 @@ func TestAnthropicLimitsSettingsBlock(t *testing.T) {
 	)
 	for _, c := range []struct {
 		name       string
-		setup      func(*anthropicLimits)
+		setup      func(*limits.Store)
 		want, deny []string
 	}{
-		{"nothing observed", func(*anthropicLimits) {},
+		{"nothing observed", func(*limits.Store) {},
 			[]string{"Недоступно", "ещё не видел ответов Anthropic"}, []string{"осталось"}},
-		{"no headers", func(l *anthropicLimits) { l.observe(http.Header{}, now) },
+		{"no headers", func(l *limits.Store) { l.Observe(http.Header{}, now) },
 			[]string{"Anthropic не присылает лимиты в ответах"}, []string{"Недоступно", "осталось"}},
-		{"fresh", func(l *anthropicLimits) { l.observe(withValues, now) },
+		{"fresh", func(l *limits.Store) { l.Observe(withValues, now) },
 			[]string{"<h4>unified-5h</h4>", "77% <span>осталось</span>", "Использовано 23%", `<progress max="100" value="77"`,
 				`Сброс: <time datetime="` + reset.UTC().Format(time.RFC3339) + `"`, "через 1 ч. 30 мин.",
 				"4.5% <span>осталось</span>", "quota-low", "Статус: <code>allowed</code>", "Данные получены",
 				`<details class="settings-extra">`, "<code>anthropic-ratelimit-unified-representative-claim</code>", "five_hour"},
 			[]string{"Недоступно", "<no value>", "%!"}},
-		{"unknown headers only", func(l *anthropicLimits) {
-			l.observe(limitsHeader("Anthropic-Ratelimit-Unified-Fallback", "available"), now)
+		{"unknown headers only", func(l *limits.Store) {
+			l.Observe(limitsHeader("Anthropic-Ratelimit-Unified-Fallback", "available"), now)
 		},
 			[]string{"Окон лимитов в заголовках нет", "<code>anthropic-ratelimit-unified-fallback</code>", "available"},
 			[]string{"Недоступно", "<progress", "<no value>"}},
-		{"stale", func(l *anthropicLimits) { l.observe(withValues, now.Add(-31*time.Minute)) },
+		{"stale", func(l *limits.Store) { l.Observe(withValues, now.Add(-31*time.Minute)) },
 			[]string{"Недоступно", "старше 30 мин"}, []string{"осталось", "unified-5h", "five_hour", "<progress"}},
 	} {
-		u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
+		u.limits = limits.New("", limits.MaxAge)
 		c.setup(u.limits)
 		s := limitsSection(t, h)
 		for _, w := range c.want {
@@ -1019,7 +464,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 	u, h := testUI(t)
 	out := countOutbound(t)
 	now := time.Now()
-	u.limits.observe(limitsHeader(
+	u.limits.Observe(limitsHeader(
 		"Anthropic-Ratelimit-Unified-5h-Utilization", "0.23",
 		"Anthropic-Ratelimit-Unified-5h-Reset", "1790348400",
 		"Anthropic-Ratelimit-Unified-Representative-Claim", "five_hour",
@@ -1050,7 +495,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	want := limitsReportOf(u.limits.view(now), nil, now)
+	want := limitsReportOf(u.limits.View(now), nil, now)
 	gotWindows, _ := json.Marshal(got.Windows)
 	wantWindows, _ := json.Marshal(want.Windows)
 	if len(got.Sources) != 2 || got.Sources[0].Source != "anthropic" || got.Sources[0].State != "fresh" || !got.Sources[0].ObservedAt.Equal(want.Sources[0].ObservedAt) ||
@@ -1073,7 +518,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 		}
 	}
 
-	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
+	u.limits = limits.New("", limits.MaxAge)
 	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "missing.json")}
 	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body,
 		`{"sources":[{"source":"anthropic","state":"unavailable","max_age_seconds":1800},{"source":"codex","provider":"codex","state":"not_connected","max_age_seconds":1800}],"windows":[]}`) {
@@ -1094,8 +539,8 @@ func TestCodexLimitsPerConnection(t *testing.T) {
 	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
 	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
 	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
-	u := newUIServer(newStore(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
-	u.limits = newAnthropicLimits("", anthropicLimitsMaxAge)
+	u := newUIServer(history.New(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	u.limits = limits.New("", limits.MaxAge)
 	used := map[string]string{"acct-a": "20", "acct-b": "70"}
 	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
 		return usageResponse(200, `{"rate_limit":{"primary_window":{"used_percent":`+used[r.Header.Get("ChatGPT-Account-Id")]+`}}}`), nil
@@ -1127,5 +572,86 @@ func TestCodexLimitsPerConnection(t *testing.T) {
 	if strings.Join(sources, ",") != "anthropic//unavailable,codex/codex/fresh,codex/work/fresh" ||
 		strings.Join(windows, ",") != "codex/codex/primary/20,codex/work/primary/70" {
 		t.Fatalf("sources %v, windows %v\n%s", sources, windows, body)
+	}
+}
+
+// TestCompatAPILimits is the /api/limits part of the compatibility check of
+// internal/limits: the body built from limits.json, read by the moved store,
+// and fixed Codex views is the one the code before the move wrote to
+// golden/api-limits.json, byte for byte:
+//
+//	go test -run TestCompatAPILimits -count=1 .
+//	ROUTER_COMPAT_DIR=<anonymized live copy> go test -run TestCompatAPILimits -count=1 .
+//
+// ROUTER_COMPAT_DIR is the copy the compat tests in internal/ read too.
+func TestCompatAPILimits(t *testing.T) {
+	dirs := []string{filepath.Join("testdata", "compat")}
+	if d := os.Getenv("ROUTER_COMPAT_DIR"); d != "" {
+		dirs = append(dirs, d)
+	}
+	for _, dir := range dirs {
+		t.Run(filepath.Base(dir), func(t *testing.T) {
+			home := filepath.Join(dir, "home")
+			now := compatNow(t, home)
+			// Nothing is observed, so the store only reads limits.json.
+			l := limits.New(filepath.Join(home, "limits.json"), limits.MaxAge)
+			var got bytes.Buffer
+			if err := json.NewEncoder(&got).Encode(limitsReportOf(l.View(now), compatCodex(now), now)); err != nil {
+				t.Fatal(err)
+			}
+			want, err := os.ReadFile(filepath.Join(dir, "golden", "api-limits.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got.Bytes(), want) {
+				// Offsets only: the limits of a live copy stay out of the test log.
+				at := 0
+				for at < got.Len() && at < len(want) && got.Bytes()[at] == want[at] {
+					at++
+				}
+				t.Errorf("api-limits.json differs from golden at byte %d: %d bytes, want %d", at, got.Len(), len(want))
+			}
+		})
+	}
+}
+
+// compatNow is a minute after the newest observation in limits.json, so the
+// report does not depend on the wall clock.
+func compatNow(t *testing.T, home string) time.Time {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(home, "limits.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		WithHeaders *struct {
+			At time.Time `json:"at"`
+		} `json:"with_headers"`
+		WithoutAt time.Time `json:"without_at"`
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	at := f.WithoutAt
+	if f.WithHeaders != nil && f.WithHeaders.At.After(at) {
+		at = f.WithHeaders.At
+	}
+	if at.IsZero() {
+		t.Fatal("limits.json has no observation")
+	}
+	return at.Add(time.Minute)
+}
+
+// compatCodex covers each Codex source state /api/limits reports.
+func compatCodex(now time.Time) []codexUsageView {
+	return []codexUsageView{
+		{Provider: "codex-a", Connected: true, Plan: "pro", Updated: now.Add(-2 * time.Minute), Attempted: now.Add(-2 * time.Minute),
+			Limits: []codexUsageRow{
+				{Name: "5h", ID: "primary", Seconds: 18000, Known: true, Remaining: 83, Used: 17, Reset: now.Add(time.Hour)},
+				{Name: "weekly", ID: "secondary", Seconds: 604800, Known: true, Remaining: 5, Used: 95, Blocked: true},
+			}},
+		{Provider: "codex-b", Connected: true, Error: "no response"},
+		{Provider: "codex-c", Connected: true, Updated: now.Add(-time.Hour), Limits: []codexUsageRow{{ID: "primary"}}},
+		{},
 	}
 }
