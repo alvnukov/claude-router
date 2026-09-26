@@ -26,7 +26,7 @@ func codexStoreFor(p provider) (*codexAuthStore, error) {
 		}
 		return nil, fmt.Errorf("provider %q: у подключения Codex нет auth_id", p.Name)
 	}
-	if !authIDOK(p.AuthID) {
+	if !AuthIDOK(p.AuthID) {
 		return nil, fmt.Errorf("provider %q: неверный auth_id", p.Name)
 	}
 	path := filepath.Join(filepath.Dir(codexAuth.path), "codex-auth-"+hex.EncodeToString([]byte(p.Name))+"-"+p.AuthID+".json")

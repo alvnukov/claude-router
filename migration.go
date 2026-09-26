@@ -9,15 +9,15 @@ import (
 )
 
 // Legacy fields are consumed once; their known routes become explicit entries.
-func migrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
+func MigrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
 	if l.Routes != nil {
 		return l, false
 	}
-	l = l.clone()
+	l = l.Clone()
 	l.Routes = map[string]map[string]modelRoute{}
 	l.ModelPools = map[string][]poolTarget{}
 	var keys []string
-	for _, m := range l.ordered() {
+	for _, m := range l.Ordered() {
 		keys = append(keys, m.Key())
 	}
 	// Freeze the old catalog: adding a new dashboard model must not enable it
@@ -66,7 +66,7 @@ func migrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
 			}
 		}
 		l.Routes[model] = map[string]modelRoute{}
-		for _, effort := range claudeEfforts {
+		for _, effort := range ClaudeEfforts {
 			route := modelRoute{Mode: "disabled"}
 			if direct {
 				route.Mode = "anthropic"
@@ -98,11 +98,11 @@ func migrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
 	return l, true
 }
 
-func savePoolMigration(path string, l localSetup) error {
-	return saveConfigurationMigration(path, l, ".before-pools")
+func SavePoolMigration(path string, l localSetup) error {
+	return SaveConfigurationMigration(path, l, ".before-pools")
 }
 
-func saveConfigurationMigration(path string, l localSetup, suffix string) error {
+func SaveConfigurationMigration(path string, l localSetup, suffix string) error {
 	if path == "" {
 		return nil
 	}
@@ -123,7 +123,7 @@ func saveConfigurationMigration(path string, l localSetup, suffix string) error 
 	} else if !os.IsNotExist(err) {
 		return err
 	}
-	return writeProviders(path, l)
+	return WriteProviders(path, l)
 }
 
 func legacyTargets(l localSetup, keys []string, source string) []poolTarget {

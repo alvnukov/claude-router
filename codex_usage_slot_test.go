@@ -20,15 +20,15 @@ func TestCodexUsageRefreshStartsWhenASlotActivates(t *testing.T) {
 	defer func() { codexAuth = oldAuth }()
 	dir := t.TempDir()
 	providers := filepath.Join(dir, "providers.json")
-	if err := os.WriteFile(providers, []byte(`{"providers":[{"name":"codex","type":"codex","base_url":"`+codexBaseURL+`"}],"models":[]}`), 0600); err != nil {
+	if err := os.WriteFile(providers, []byte(`{"providers":[{"name":"codex","type":"codex","base_url":"`+CodexBaseURL+`"}],"models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	local, err := readProviders(providers)
+	local, err := ReadProviders(providers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	life := newLifecycle(true)
-	u := newUIServer(history.New(10, ""), newConfigStore(config{local: local}, providers), newHealth(""))
+	u := newUIServer(history.New(10, ""), NewStore(config{Local: local}, providers), newHealth(""))
 	u.life = life
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return nil, nil }
 	calls := make(chan struct{}, 10)
@@ -57,7 +57,7 @@ func TestCodexUsageRefreshStartsWhenASlotActivates(t *testing.T) {
 	}
 	// The catalog refresh started beside it writes providers.json; let it
 	// finish before the directory goes away.
-	for deadline := time.Now().Add(5 * time.Second); u.cs.get().local.Catalog.CheckedAt.IsZero(); time.Sleep(10 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); u.cs.Get().Local.Catalog.CheckedAt.IsZero(); time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("catalog refresh did not finish")
 		}

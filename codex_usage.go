@@ -349,7 +349,7 @@ type codexUsageTarget struct {
 // settings page shows its error.
 func (u *uiServer) codexUsageTargets() []codexUsageTarget {
 	var targets []codexUsageTarget
-	for _, p := range u.cs.get().local.Providers {
+	for _, p := range u.cs.Get().Local.Providers {
 		if p.Type != "codex" {
 			continue
 		}

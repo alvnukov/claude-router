@@ -75,7 +75,7 @@ func affinityKey(cfg config, body []byte, req anthropicRequest) string {
 	if effort == "" {
 		effort = "default"
 	}
-	definition, _ := json.Marshal([]string{session, req.Model, effort, cfg.local.ActiveProfile, cfg.routeFor(req.Model, effort).Pool})
+	definition, _ := json.Marshal([]string{session, req.Model, effort, cfg.Local.ActiveProfile, cfg.RouteFor(req.Model, effort).Pool})
 	digest := sha256.Sum256(definition)
 	return hex.EncodeToString(digest[:])
 }
@@ -111,7 +111,7 @@ func (h *health) bindCandidates(scope string, pool poolRoute, candidates []candi
 		// old connection.
 		delete(h.sessions, scope)
 	}
-	if pool.Type == poolBalance {
+	if pool.Type == PoolBalance {
 		candidates = h.balanceFirst(pool.Name, candidates)
 	}
 	if len(h.sessions) >= 4096 {

@@ -24,25 +24,25 @@ import (
 const respCaptureLimit = 8 << 20
 
 type config struct {
-	listen        string
-	publicListen  string // where clients reach the router; a slot listens behind Caddy
-	upstream      *url.URL
-	local         localSetup
-	maxInputChars int
-	failover      bool
-	firstByte     time.Duration // give up on a model that has not answered by then
-	balance       int           // spread requests over this many best-rated models; <2 sends everything to the first
-	probeEvery    time.Duration // ping idle models this often; 0 disables
-	poolType      string        // poolFailover or poolBalance for a pool route: pool order, no rating; "" keeps the rating order
-	poolName      string        // the pool a pool route resolved to; "" otherwise
+	Listen        string
+	PublicListen  string // where clients reach the router; a slot listens behind Caddy
+	Upstream      *url.URL
+	Local         localSetup
+	MaxInputChars int
+	Failover      bool
+	FirstByte     time.Duration // give up on a model that has not answered by then
+	Balance       int           // spread requests over this many best-rated models; <2 sends everything to the first
+	ProbeEvery    time.Duration // ping idle models this often; 0 disables
+	PoolType      string        // PoolFailover or PoolBalance for a pool route: pool order, no rating; "" keeps the rating order
+	PoolName      string        // the pool a pool route resolved to; "" otherwise
 
-	uiListen  string
-	uiHistory int
+	UIListen  string
+	UIHistory int
 }
 
 // Whole seconds, as pool settings store them.
-func (c config) FirstByteSec() int { return int(c.firstByte / time.Second) }
-func (c config) ProbeSec() int     { return int(c.probeEvery / time.Second) }
+func (c config) FirstByteSec() int { return int(c.FirstByte / time.Second) }
+func (c config) ProbeSec() int     { return int(c.ProbeEvery / time.Second) }
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -71,7 +71,7 @@ func loadConfigChecked() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("bad ROUTER_UPSTREAM_URL: %w", err)
 	}
-	local, assigned, err := loadLocalSetupChecked(providersPath())
+	local, assigned, err := LoadLocal(ProvidersPath())
 	if err != nil {
 		return config{}, err
 	}
@@ -79,78 +79,78 @@ func loadConfigChecked() (config, error) {
 		// One-time migration: persist the new auth_id values before the other
 		// startup migrations read or rewrite the file. A standby slot writes
 		// them when it is activated.
-		if err := saveConfigurationMigration(providersPath(), local, ".before-codex-ids"); err != nil {
+		if err := SaveConfigurationMigration(ProvidersPath(), local, ".before-codex-ids"); err != nil {
 			return config{}, fmt.Errorf("codex id migration: %w", err)
 		}
 	}
 	c := config{
-		listen:   env("ROUTER_LISTEN", "127.0.0.1:8787"),
-		upstream: up,
-		local:    local,
+		Listen:   env("ROUTER_LISTEN", "127.0.0.1:8787"),
+		Upstream: up,
+		Local:    local,
 	}
-	c.maxInputChars = atoiOr(env("ROUTER_LOCAL_MAX_INPUT_CHARS", "0"), 0)
-	c.failover = env("ROUTER_LOCAL_FAILOVER", "1") != "0"
-	c.firstByte = time.Duration(atoiOr(env("ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", "45"), 45)) * time.Second
-	c.balance = atoiOr(env("ROUTER_LOCAL_BALANCE", "3"), 3)
-	c.probeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
-	c.publicListen = env("ROUTER_PUBLIC_LISTEN", c.listen)
-	c.uiListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
-	c.uiHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
+	c.MaxInputChars = atoiOr(env("ROUTER_LOCAL_MAX_INPUT_CHARS", "0"), 0)
+	c.Failover = env("ROUTER_LOCAL_FAILOVER", "1") != "0"
+	c.FirstByte = time.Duration(atoiOr(env("ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", "45"), 45)) * time.Second
+	c.Balance = atoiOr(env("ROUTER_LOCAL_BALANCE", "3"), 3)
+	c.ProbeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
+	c.PublicListen = env("ROUTER_PUBLIC_LISTEN", c.Listen)
+	c.UIListen = env("ROUTER_UI_LISTEN", "127.0.0.1:8788")
+	c.UIHistory = atoiOr(env("ROUTER_UI_HISTORY", "300"), 300)
 	if routerStartsStandby() {
 		return c, nil // standby migrates when it is activated, as the only writer
 	}
-	return migrateConfig(c, providersPath())
+	return MigrateConfig(c, ProvidersPath())
 }
 
-// migrateConfig brings providers.json at path to the current schema, keeping
+// MigrateConfig brings providers.json at path to the current schema, keeping
 // a backup of each step.
-func migrateConfig(c config, path string) (config, error) {
-	if migrated, changed := migrateLegacyPools(c.local, splitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
-		if err := savePoolMigration(path, migrated); err != nil {
+func MigrateConfig(c config, path string) (config, error) {
+	if migrated, changed := MigrateLegacyPools(c.Local, SplitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
+		if err := SavePoolMigration(path, migrated); err != nil {
 			return config{}, fmt.Errorf("pool migration: %w", err)
 		}
-		c.local = migrated
+		c.Local = migrated
 	}
-	if migrated, changed := migrateFamilyRoutes(c.local); changed {
-		if err := saveConfigurationMigration(path, migrated, ".before-families"); err != nil {
+	if migrated, changed := MigrateFamilyRoutes(c.Local); changed {
+		if err := SaveConfigurationMigration(path, migrated, ".before-families"); err != nil {
 			return config{}, fmt.Errorf("family migration: %w", err)
 		}
-		c.local = migrated
+		c.Local = migrated
 	}
-	if migrated, changed := migratePoolSettings(c); changed {
-		if err := saveConfigurationMigration(path, migrated, ".before-pool-settings"); err != nil {
+	if migrated, changed := MigratePoolSettings(c); changed {
+		if err := SaveConfigurationMigration(path, migrated, ".before-pool-settings"); err != nil {
 			return config{}, fmt.Errorf("pool settings migration: %w", err)
 		}
-		c.local = migrated
+		c.Local = migrated
 	}
 	return c, nil
 }
 
 // Only explicit routes can serve a model. Unknown and disabled models never
 // fall through to Anthropic or to another model's pool.
-func (c config) routeFor(model, effort string) modelRoute { return c.local.routeFor(model, effort) }
+func (c config) RouteFor(model, effort string) modelRoute { return c.Local.RouteFor(model, effort) }
 
-func (c config) forModel(model, effort string) config {
+func (c config) ForModel(model, effort string) config {
 	if effort == "" {
 		effort = "default"
 	}
-	route := c.routeFor(model, effort)
+	route := c.RouteFor(model, effort)
 	next := c
-	next.local = c.local.clone()
-	next.local.Models = nil
-	next.local.Preferred = ""
+	next.Local = c.Local.Clone()
+	next.Local.Models = nil
+	next.Local.Preferred = ""
 	var targets []poolTarget
 	switch route.Mode {
 	case "model":
 		targets = []poolTarget{{Model: route.Model, Effort: route.Effort}}
-		next.failover = false
+		next.Failover = false
 	case "pool":
-		targets = c.local.ModelPools[route.Pool]
-		next.poolName, next.poolType = route.Pool, poolFailover
-		if settings, ok := c.local.PoolSettings[route.Pool]; ok {
-			next = settings.apply(next)
-			if settings.Type == poolBalance {
-				next.poolType = poolBalance
+		targets = c.Local.ModelPools[route.Pool]
+		next.PoolName, next.PoolType = route.Pool, PoolFailover
+		if settings, ok := c.Local.PoolSettings[route.Pool]; ok {
+			next = settings.Apply(next)
+			if settings.Type == PoolBalance {
+				next.PoolType = PoolBalance
 			}
 		}
 	default:
@@ -159,12 +159,12 @@ func (c config) forModel(model, effort string) config {
 	if len(targets) == 0 {
 		return next
 	}
-	next.local.Preferred = targets[0].Model
+	next.Local.Preferred = targets[0].Model
 	for _, target := range targets {
-		for _, m := range c.local.Models {
+		for _, m := range c.Local.Models {
 			if m.Key() == target.Model {
 				m.Efforts = map[string]string{effort: target.Effort}
-				next.local.Models = append(next.local.Models, m)
+				next.Local.Models = append(next.Local.Models, m)
 				break
 			}
 		}
@@ -181,11 +181,11 @@ func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error)
 	if effort == "" {
 		effort = "default"
 	}
-	route := cfg.routeFor(probe.Model, effort)
+	route := cfg.RouteFor(probe.Model, effort)
 	if route.Mode == "disabled" {
 		return probe.Model, route, fmt.Errorf("Для %s / %s маршрут не настроен. Назначьте Anthropic или пул моделей в настройках роутера.", probe.Model, effort)
 	}
-	if route.Mode == "pool" && len(cfg.local.ModelPools[route.Pool]) == 0 {
+	if route.Mode == "pool" && len(cfg.Local.ModelPools[route.Pool]) == 0 {
 		return probe.Model, route, fmt.Errorf("Пул %s пуст. Добавьте модели в настройках роутера.", route.Pool)
 	}
 	return probe.Model, route, nil
@@ -196,7 +196,7 @@ func newMainHandler(cfg config, cs *configStore, st *history.Store, hl *health, 
 }
 
 func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health, u *uiServer, life *lifecycle) http.Handler {
-	proxy := httputil.NewSingleHostReverseProxy(cfg.upstream)
+	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
@@ -212,7 +212,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.ContentLength = int64(len(body))
 		}
-		r.Host = cfg.upstream.Host
+		r.Host = cfg.Upstream.Host
 		proxy.ServeHTTP(w, r)
 	}
 
@@ -226,7 +226,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 	})
 
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
-		cfg := cs.get()
+		cfg := cs.Get()
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, "read body", http.StatusBadRequest)
@@ -264,17 +264,17 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 			// gzip itself and hands the proxy a decoded body, so the capture
 			// sees plain bytes. Only done while the UI is on: without it the
 			// upstream path stays byte-for-byte.
-			if cfg.uiListen != "" {
+			if cfg.UIListen != "" {
 				r.Header.Del("Accept-Encoding")
 			}
 			pass(rw, r, body)
 			return
 		}
-		handleLocal(rw, r, cfg.forModel(probe.Model, probe.OutputConfig.Effort), body, tr, hl, st)
+		handleLocal(rw, r, cfg.ForModel(probe.Model, probe.OutputConfig.Effort), body, tr, hl, st)
 	})
 
 	mux.HandleFunc("/v1/messages/count_tokens", func(w http.ResponseWriter, r *http.Request) {
-		cfg := cs.get()
+		cfg := cs.Get()
 		body, _ := io.ReadAll(r.Body)
 		_, target, err := configuredRequestRoute(cfg, body)
 		if err != nil {
@@ -318,13 +318,13 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 
 func main() {
 	serve := cli.Entry{Name: "serve", Run: func(context.Context, []string, io.Writer, io.Writer) error {
-		loadEnvFile()
+		LoadEnvFile()
 		codexAuth = newCodexAuthStore()
 		cfg := loadConfig()
 		life := newLifecycle(routerStartsStandby())
 		server := newRouterServer(cfg, life, statePath())
 		if life.mode() != modeStandby {
-			if err := server.cs.ensureProfiles(); err != nil {
+			if err := server.cs.EnsureProfiles(); err != nil {
 				return fmt.Errorf("profile migration: %w", err)
 			}
 		}
@@ -335,7 +335,7 @@ func main() {
 		SlotLabels:   runServiceLabels,
 		ClientURL:    routerClientURL,
 		SetClaudeURL: func(url string) error { return newClaudeProxy().set(url, true) },
-		ReadEnv:      readEnv,
+		ReadEnv:      ReadEnv,
 	}, cli.SystemHost())
 	table := append(append([]cli.Entry{serve}, service...),
 		cli.Entry{Name: "deploy", Run: func(ctx context.Context, args []string, stdout, _ io.Writer) error {

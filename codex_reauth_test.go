@@ -34,7 +34,7 @@ func TestCodexRefreshesRevokedUnexpiredToken(t *testing.T) {
 		return usageResponse(200, `{"ok":true}`), nil
 	})
 	cand := candidate{Key: "codex/gpt-test", Provider: provider{Name: "codex", Type: "codex"}}
-	res := tryModel(httptest.NewRequest("POST", "/", nil), config{firstByte: time.Second}, cand, []byte(`{}`), false)
+	res := tryModel(httptest.NewRequest("POST", "/", nil), config{FirstByte: time.Second}, cand, []byte(`{}`), false)
 	if res.err != nil {
 		t.Fatalf("revoked unexpired token was not recovered: %v", res.err)
 	}
@@ -63,7 +63,7 @@ func TestCodexFailedRefreshDoesNotStormOrExposeSecrets(t *testing.T) {
 		return usageResponse(401, `{"error":{"code":"token_revoked"}}`), nil
 	})
 	for range 3 {
-		res := tryModel(httptest.NewRequest("POST", "/", nil), config{firstByte: time.Second}, candidate{Key: "codex/gpt-test", Provider: provider{Name: "codex", Type: "codex"}}, []byte(`{}`), false)
+		res := tryModel(httptest.NewRequest("POST", "/", nil), config{FirstByte: time.Second}, candidate{Key: "codex/gpt-test", Provider: provider{Name: "codex", Type: "codex"}}, []byte(`{}`), false)
 		if res.err == nil || !strings.Contains(res.err.Error(), "войдите") || strings.Contains(res.err.Error(), "private-secret") {
 			t.Fatalf("unclear or unsafe error: %v", res.err)
 		}

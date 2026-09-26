@@ -62,7 +62,7 @@ type localSetup struct {
 	ModelPools    map[string][]poolTarget          `json:"model_pools"`
 }
 
-func providersPath() string {
+func ProvidersPath() string {
 	if v, ok := os.LookupEnv("ROUTER_PROVIDERS_FILE"); ok {
 		return v
 	}
@@ -72,7 +72,7 @@ func providersPath() string {
 	return "providers.json"
 }
 
-func (l localSetup) provider(name string) (provider, bool) {
+func (l localSetup) Provider(name string) (provider, bool) {
 	for _, p := range l.Providers {
 		if p.Name == name {
 			return p, true
@@ -81,7 +81,7 @@ func (l localSetup) provider(name string) (provider, bool) {
 	return provider{}, false
 }
 
-func (l localSetup) hasModel(key string) bool {
+func (l localSetup) HasModel(key string) bool {
 	for _, m := range l.Models {
 		if m.Key() == key {
 			return true
@@ -90,8 +90,8 @@ func (l localSetup) hasModel(key string) bool {
 	return false
 }
 
-// ordered is the preferred model first, then the rest as configured.
-func (l localSetup) ordered() []localModel {
+// Ordered is the preferred model first, then the rest as configured.
+func (l localSetup) Ordered() []localModel {
 	out := make([]localModel, 0, len(l.Models))
 	for _, m := range l.Models {
 		if m.Key() == l.Preferred {
@@ -119,8 +119,8 @@ func providerNameOK(n string) bool {
 	return n != "" && !strings.ContainsAny(n, "/, \t\n\"'")
 }
 
-// validate normalises in place and rejects anything the router could not act on.
-func (l *localSetup) validate() error {
+// Validate normalises in place and rejects anything the router could not act on.
+func (l *localSetup) Validate() error {
 	seen := map[string]bool{}
 	authIDs := map[string]bool{}
 	for i := range l.Providers {
@@ -132,15 +132,15 @@ func (l *localSetup) validate() error {
 		}
 		if p.Type == "codex" {
 			if p.BaseURL == "" {
-				p.BaseURL = codexBaseURL
+				p.BaseURL = CodexBaseURL
 			}
-			if p.BaseURL != codexBaseURL || p.APIKey != "" {
+			if p.BaseURL != CodexBaseURL || p.APIKey != "" {
 				return fmt.Errorf("provider %q: Codex использует фиксированный адрес и подписку, без API key", p.Name)
 			}
 			if p.AuthID == "" && p.Name != "codex" {
 				return fmt.Errorf("provider %q: у подключения Codex нет auth_id; удалите его и добавьте заново через дашборд", p.Name)
 			}
-			if p.AuthID != "" && !authIDOK(p.AuthID) {
+			if p.AuthID != "" && !AuthIDOK(p.AuthID) {
 				return fmt.Errorf("provider %q: неверный auth_id", p.Name)
 			}
 			if len(p.Name) > 64 {
@@ -176,7 +176,7 @@ func (l *localSetup) validate() error {
 			return fmt.Errorf("model %q: провайдер %q не существует", m.Model, m.Provider)
 		}
 		for source, target := range m.Efforts {
-			if !validClaudeEffort(source) || !validProviderEffort(target) {
+			if !validClaudeEffort(source) || !ValidProviderEffort(target) {
 				return fmt.Errorf("model %q: неверное соответствие effort %q → %q", m.Key(), source, target)
 			}
 		}
@@ -220,13 +220,13 @@ func (l *localSetup) validate() error {
 			if !keys[target.Model] || seen[target.Model] {
 				return fmt.Errorf("пул %s: модель %q отсутствует или повторяется", name, target.Model)
 			}
-			if target.Effort != "" && !validProviderEffort(target.Effort) {
+			if target.Effort != "" && !ValidProviderEffort(target.Effort) {
 				return fmt.Errorf("%s: неверный effort %q", target.Model, target.Effort)
 			}
 			seen[target.Model] = true
 		}
 	}
-	for model, efforts := range l.allRouteRules() {
+	for model, efforts := range l.AllRouteRules() {
 		if !modelIDOK(model) {
 			return fmt.Errorf("неверный id модели %q", model)
 		}
@@ -250,7 +250,7 @@ func (l *localSetup) validate() error {
 				if route.Pool != "" || !keys[route.Model] {
 					return fmt.Errorf("%s / %s: модель %q не настроена", model, effort, route.Model)
 				}
-				if route.Effort != "" && !validProviderEffort(route.Effort) {
+				if route.Effort != "" && !ValidProviderEffort(route.Effort) {
 					return fmt.Errorf("%s / %s: неверный effort %q", model, effort, route.Effort)
 				}
 			default:
@@ -260,7 +260,7 @@ func (l *localSetup) validate() error {
 	}
 
 	for family := range l.FamilyRoutes {
-		if claudeFamily(family) != family {
+		if ClaudeFamily(family) != family {
 			return fmt.Errorf("неверное семейство %q", family)
 		}
 	}
@@ -279,7 +279,7 @@ func validClaudeEffort(value string) bool {
 	return false
 }
 
-func validProviderEffort(value string) bool {
+func ValidProviderEffort(value string) bool {
 	switch value {
 	case "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
 		return true
@@ -287,7 +287,7 @@ func validProviderEffort(value string) bool {
 	return false
 }
 
-func readProviders(path string) (localSetup, error) {
+func ReadProviders(path string) (localSetup, error) {
 	l, _, err := readProvidersWith(path, nil)
 	return l, err
 }
@@ -355,7 +355,7 @@ func readProvidersRaw(path string) (localSetup, error) {
 		return l, dirErr
 	}
 	if l.Profiles != nil {
-		if err := l.useProfile(l.ActiveProfile); err != nil {
+		if err := l.UseProfile(l.ActiveProfile); err != nil {
 			return l, fmt.Errorf("%s: %w", path, err)
 		}
 	}
@@ -377,7 +377,7 @@ func writeAtomicIfChanged(path string, data []byte) error {
 	return platform.ReplaceFile(tmp, path)
 }
 
-func writeActiveProfile(path, name string) error {
+func WriteActiveProfile(path, name string) error {
 	data, err := json.Marshal(name)
 	if err != nil {
 		return err
@@ -385,8 +385,8 @@ func writeActiveProfile(path, name string) error {
 	return writeAtomicIfChanged(path+".active-profile", append(data, '\n'))
 }
 
-func writeProviders(path string, l localSetup) error {
-	l = l.clone()
+func WriteProviders(path string, l localSetup) error {
+	l = l.Clone()
 	active := l.ActiveProfile
 	l.Preferred = "" // priority belongs to each pool, never the model catalog
 	for i := range l.Models {
@@ -430,14 +430,14 @@ func writeProviders(path string, l localSetup) error {
 		return err
 	}
 	if active != "" {
-		return writeActiveProfile(path, active)
+		return WriteActiveProfile(path, active)
 	}
 	return nil
 }
 
-// seedFromEnv builds the initial setup from ROUTER_LOCAL_* for a router that
+// SeedFromEnv builds the initial setup from ROUTER_LOCAL_* for a router that
 // has no providers.json yet. The provider is named after the host.
-func seedFromEnv() localSetup {
+func SeedFromEnv() localSetup {
 	base := strings.TrimSuffix(env("ROUTER_LOCAL_BASE_URL", "http://127.0.0.1:1234/v1"), "/")
 	name := "local"
 	if u, err := url.Parse(base); err == nil && u.Hostname() != "" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
@@ -452,7 +452,7 @@ func seedFromEnv() localSetup {
 		}
 	}
 	l.Preferred = l.Models[0].Key()
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		log.Printf("ROUTER_LOCAL_* seed: %v", err)
 	}
 	return l
@@ -462,7 +462,7 @@ func seedFromEnv() localSetup {
 // must stop startup before any migration can write to disk. assigned reports
 // that a Codex provider without auth_id got a fresh ID in memory; the caller
 // persists it once (startup only). The seed path returns false.
-func loadLocalSetupChecked(path string) (localSetup, bool, error) {
+func LoadLocal(path string) (localSetup, bool, error) {
 	if path != "" {
 		l, assigned, err := readProvidersWith(path, assignCodexAuthIDs)
 		if err == nil {
@@ -477,15 +477,15 @@ func loadLocalSetupChecked(path string) (localSetup, bool, error) {
 			return localSetup{}, false, statErr
 		}
 	}
-	return seedFromEnv(), false, nil
+	return SeedFromEnv(), false, nil
 }
 
-// clone copies the slices so an edit never touches the snapshot readers hold.
-func (l localSetup) clone() localSetup {
+// Clone copies the slices so an edit never touches the snapshot readers hold.
+func (l localSetup) Clone() localSetup {
 	if l.Profiles != nil {
 		profiles := make(map[string]routingProfile, len(l.Profiles))
 		for name, p := range l.Profiles {
-			c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
+			c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.Clone()
 			profiles[name] = routingProfile{c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings}
 		}
 		l.Profiles = profiles
@@ -544,27 +544,27 @@ func (l localSetup) clone() localSetup {
 		}
 		l.FamilyRoutes = families
 	}
-	l.Catalog = l.Catalog.clone()
+	l.Catalog = l.Catalog.Clone()
 
 	return l
 }
 
 // Exact effort overrides win; otherwise the named model family supplies it.
-func (l localSetup) routeFor(model, effort string) modelRoute {
+func (l localSetup) RouteFor(model, effort string) modelRoute {
 	if effort == "" {
 		effort = "default"
 	}
 	if route, ok := l.Routes[model][effort]; ok {
 		return route
 	}
-	if route, ok := l.FamilyRoutes[claudeFamily(model)][effort]; ok {
+	if route, ok := l.FamilyRoutes[ClaudeFamily(model)][effort]; ok {
 		return route
 	}
 	return modelRoute{Mode: "disabled"}
 }
 
 // Flatten only for validation/reference checks; preserve independent override maps.
-func (l localSetup) allRouteRules() map[string]map[string]modelRoute {
+func (l localSetup) AllRouteRules() map[string]map[string]modelRoute {
 	out := map[string]map[string]modelRoute{}
 	for key, rules := range l.Routes {
 		out[key] = rules

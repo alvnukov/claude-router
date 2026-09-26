@@ -38,10 +38,10 @@ func TestClaudePoolsSelectModelAndEffort(t *testing.T) {
 			"claude-haiku-4-5": {"default": {Mode: "anthropic"}},
 		},
 	}
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config{local: l, failover: false}
+	cfg := config{Local: l, Failover: false}
 	for _, tc := range []struct{ Model, Effort, Want string }{
 		{"claude-opus-5", "high", "a:xhigh"},
 		{"claude-opus-5", "low", "b:low"},
@@ -49,20 +49,20 @@ func TestClaudePoolsSelectModelAndEffort(t *testing.T) {
 	} {
 		w := httptest.NewRecorder()
 		body := fmt.Sprintf(`{"model":%q,"output_config":{"effort":%q},"messages":[{"role":"user","content":"hi"}]}`, tc.Model, tc.Effort)
-		handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.forModel(tc.Model, tc.Effort), []byte(body), nil, newHealth(""))
+		handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.ForModel(tc.Model, tc.Effort), []byte(body), nil, newHealth(""))
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"text":"`+tc.Want+`"`) {
 			t.Fatalf("%s: %d %s", tc.Model, w.Code, w.Body.String())
 		}
 	}
-	bad := l.clone()
+	bad := l.Clone()
 	bad.ModelPools["deep"] = []poolTarget{{Model: "missing/model"}}
-	if err := bad.validate(); err == nil {
+	if err := bad.Validate(); err == nil {
 		t.Fatal("dangling pool target accepted")
 	}
 }
 
 func TestCodexEffortMapping(t *testing.T) {
-	if !validProviderEffort("ultra") || validProviderEffort("bogus") {
+	if !ValidProviderEffort("ultra") || ValidProviderEffort("bogus") {
 		t.Fatal("effort validation")
 	}
 	req := openaiRequest{Model: "gpt-test", Messages: []openaiMsg{{Role: "user", Content: "hello"}}, ReasoningEffort: "xhigh"}
@@ -77,7 +77,7 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "auth.json")}
 	defer func() { codexAuth = oldAuth }()
 	upstream, _ := url.Parse("https://api.anthropic.com")
-	cs := newConfigStore(config{upstream: upstream}, filepath.Join(t.TempDir(), "providers.json"))
+	cs := NewStore(config{Upstream: upstream}, filepath.Join(t.TempDir(), "providers.json"))
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	form := url.Values{"op": {"add"}, "name": {"codex"}, "type": {"codex"}, "base_url": {"http://127.0.0.1:1234/v1"}}
 	w := httptest.NewRecorder()
@@ -87,13 +87,13 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "class=\"note err\"") {
 		t.Fatalf("add Codex provider: %d %s", w.Code, w.Body.String())
 	}
-	l := cs.get().local.clone()
-	if len(l.Providers) != 1 || l.Providers[0].BaseURL != codexBaseURL {
+	l := cs.Get().Local.Clone()
+	if len(l.Providers) != 1 || l.Providers[0].BaseURL != CodexBaseURL {
 		t.Fatalf("Codex endpoint not set: %+v", l.Providers)
 	}
 	l.Models = []localModel{{Provider: "codex", Model: "gpt-test"}}
 	l.ModelPools = map[string][]poolTarget{"deep": {{Model: "codex/gpt-test"}}}
-	if err := cs.applyLocal(l, true); err != nil {
+	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
 	form = url.Values{"op": {"remove"}, "key": {"codex/gpt-test"}}
@@ -101,7 +101,7 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w = httptest.NewRecorder()
 	u.settingsModels(w, r)
-	if w.Code != http.StatusOK || len(cs.get().local.Models) != 0 || len(cs.get().local.ModelPools["deep"]) != 0 {
-		t.Fatalf("remove model and pool reference: %d %+v", w.Code, cs.get().local)
+	if w.Code != http.StatusOK || len(cs.Get().Local.Models) != 0 || len(cs.Get().Local.ModelPools["deep"]) != 0 {
+		t.Fatalf("remove model and pool reference: %d %+v", w.Code, cs.Get().Local)
 	}
 }

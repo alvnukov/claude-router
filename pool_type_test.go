@@ -23,7 +23,7 @@ func twoMemberPool(settings map[string]poolSettings) config {
 		ModelPools:   map[string][]poolTarget{"pair": {{Model: "p/a"}, {Model: "q/b"}}},
 		PoolSettings: settings,
 	}
-	return config{local: l, failover: true, balance: 3, firstByte: 5 * time.Second}
+	return config{Local: l, Failover: true, Balance: 3, FirstByte: 5 * time.Second}
 }
 
 func TestPoolWithoutTypeIsFailover(t *testing.T) {
@@ -32,7 +32,7 @@ func TestPoolWithoutTypeIsFailover(t *testing.T) {
 		"entry without type": {"pair": {Failover: true, FirstByteSec: 5}},
 		"explicit failover":  {"pair": {Type: "failover", Failover: true, FirstByteSec: 5}},
 	} {
-		cfg := twoMemberPool(settings).forModel("local-model", "")
+		cfg := twoMemberPool(settings).ForModel("local-model", "")
 		hl := newHealth("")
 		// The second member looks better on every rating signal and is idle;
 		// the first is busy. Failover still starts with the first.
@@ -46,7 +46,7 @@ func TestPoolWithoutTypeIsFailover(t *testing.T) {
 }
 
 func TestFailoverPoolCoolingLast(t *testing.T) {
-	cfg := twoMemberPool(nil).forModel("local-model", "")
+	cfg := twoMemberPool(nil).ForModel("local-model", "")
 	hl := newHealth("")
 	hl.m["p/a"] = &modelStat{Score: 1, CoolUntil: time.Now().Add(time.Minute)}
 	hl.m["q/b"] = &modelStat{Score: 1}
@@ -67,8 +67,8 @@ func TestFailoverPoolCoolingLast(t *testing.T) {
 }
 
 func TestPoolTypeUnknownRejected(t *testing.T) {
-	l := twoMemberPool(map[string]poolSettings{"pair": {Type: "roundrobin"}}).local
-	err := l.validate()
+	l := twoMemberPool(map[string]poolSettings{"pair": {Type: "roundrobin"}}).Local
+	err := l.Validate()
 	if err == nil || !strings.Contains(err.Error(), "roundrobin") || !strings.Contains(err.Error(), "pair") {
 		t.Fatalf("unknown pool type: %v", err)
 	}
@@ -76,12 +76,12 @@ func TestPoolTypeUnknownRejected(t *testing.T) {
 
 func TestPoolSaveKeepsType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: poolFailover, FirstByteSec: 5}})
-	cfg.upstream, _ = url.Parse("https://api.anthropic.com")
-	if err := writeProviders(path, cfg.local); err != nil {
+	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: PoolFailover, FirstByteSec: 5}})
+	cfg.Upstream, _ = url.Parse("https://api.anthropic.com")
+	if err := WriteProviders(path, cfg.Local); err != nil {
 		t.Fatal(err)
 	}
-	cs := newConfigStore(cfg, path)
+	cs := NewStore(cfg, path)
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	// The form has neither a type (until Task 12) nor the numeric balance.
 	values := url.Values{"name": {"pair"}, "failover": {"1"}, "first_byte": {"7"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
@@ -103,11 +103,11 @@ func TestPoolSaveKeepsType(t *testing.T) {
 	if strings.Contains(string(raw), `"balance":`) {
 		t.Fatalf("saved file still has the numeric balance: %s", raw)
 	}
-	l, err := readProviders(path)
+	l, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := l.PoolSettings["pair"]; got.Type != poolFailover || got.FirstByteSec != 7 {
+	if got := l.PoolSettings["pair"]; got.Type != PoolFailover || got.FirstByteSec != 7 {
 		t.Fatalf("saved %+v", got)
 	}
 }

@@ -174,8 +174,8 @@ func TestCodexUsagePanelAndManualButton(t *testing.T) {
 	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
 	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
 	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
-	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
-	u := newUIServer(history.New(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	providers := []provider{{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}, {Name: "work", Type: "codex", BaseURL: CodexBaseURL, AuthID: testAuthB}}
+	u := newUIServer(history.New(10, ""), NewStore(config{Local: localSetup{Providers: providers}}, ""), newHealth(""))
 	calls := 0
 	var accounts []string
 	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
@@ -300,8 +300,8 @@ func TestCodexUsageRefreshEveryConnection(t *testing.T) {
 	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
 	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
 	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
-	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
-	u := newUIServer(history.New(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	providers := []provider{{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}, {Name: "work", Type: "codex", BaseURL: CodexBaseURL, AuthID: testAuthB}}
+	u := newUIServer(history.New(10, ""), NewStore(config{Local: localSetup{Providers: providers}}, ""), newHealth(""))
 	calls := make(chan string, 10)
 	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {
 		calls <- r.Header.Get("ChatGPT-Account-Id")

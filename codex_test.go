@@ -198,7 +198,7 @@ func TestCodexCredentialRefreshAndPin(t *testing.T) {
 		t.Fatal("refresh token not rotated")
 	}
 	requirePrivateFile(t, s.path)
-	req := httptest.NewRequest("POST", codexBaseURL+"/responses", nil)
+	req := httptest.NewRequest("POST", CodexBaseURL+"/responses", nil)
 	if err := s.authorize(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -220,23 +220,23 @@ func testJWT(exp time.Time) string {
 
 func TestCodexProviderValidationAndRouting(t *testing.T) {
 	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex"}}, Models: []localModel{{Provider: "codex", Model: "gpt-test"}}}
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if l.Providers[0].BaseURL != codexBaseURL {
+	if l.Providers[0].BaseURL != CodexBaseURL {
 		t.Fatal("Codex endpoint not pinned")
 	}
-	c := config{local: l}
-	if c.routeFor("codex/gpt-test", "default").Mode != "disabled" {
+	c := config{Local: l}
+	if c.RouteFor("codex/gpt-test", "default").Mode != "disabled" {
 		t.Fatal("backend bypasses explicit routes")
 	}
-	c.local.ModelPools = map[string][]poolTarget{"codex": {{Model: "codex/gpt-test", Effort: "high"}}}
-	c.local.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "codex"}}}
-	if len(c.forModel("claude-opus-5", "high").local.Models) != 1 {
+	c.Local.ModelPools = map[string][]poolTarget{"codex": {{Model: "codex/gpt-test", Effort: "high"}}}
+	c.Local.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "codex"}}}
+	if len(c.ForModel("claude-opus-5", "high").Local.Models) != 1 {
 		t.Fatal("Codex pool missing")
 	}
 	l.Providers[0].BaseURL = "https://other.test"
-	if err := l.validate(); err == nil {
+	if err := l.Validate(); err == nil {
 		t.Fatal("accepted alternate OAuth endpoint")
 	}
 }
@@ -253,7 +253,7 @@ func TestIncomingNameCannotOverridePoolOrder(t *testing.T) {
 	}))
 	defer server.Close()
 	l := localSetup{Providers: []provider{{Name: "p", BaseURL: server.URL}}, Models: []localModel{{Provider: "p", Model: "a"}, {Provider: "p", Model: "b"}}, Preferred: "p/a"}
-	cfg := config{local: l, failover: false}
+	cfg := config{Local: l, Failover: false}
 	request := httptest.NewRequest("POST", "/v1/messages", nil)
 	w := httptest.NewRecorder()
 	handleLocal(w, request, cfg, []byte(`{"model":"p/b","messages":[{"role":"user","content":"hi"}]}`), nil, newHealth(""))
@@ -336,7 +336,7 @@ func codexLoginUI(t *testing.T) (*uiServer, http.Handler) {
 	codexLoginAddr = "127.0.0.1:0"
 	t.Cleanup(func() { codexLoginAddr = old })
 	u, h := codexUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	return u, h
 }
 
@@ -399,7 +399,7 @@ func TestCodexLoginForReplacedProviderIsDiscarded(t *testing.T) {
 	}
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"remove"}, "name": {"work"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"add"}, "name": {"work"}, "type": {"codex"}})
-	now, ok := u.cs.get().local.provider("work")
+	now, ok := u.cs.Get().Local.Provider("work")
 	if !ok || now.AuthID == testAuthB {
 		t.Fatal("work was not recreated with a new id")
 	}

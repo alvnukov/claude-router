@@ -122,8 +122,8 @@ func TestCodexOrphanedResultIsStoppedBeforeUpstream(t *testing.T) {
 		upstreamCalls++
 		return usageResponse(400, "upstream rejected orphaned result"), nil
 	})
-	cfg := config{local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}},
-		Models: []localModel{{Provider: "codex", Model: "gpt-test"}}, Preferred: "codex/gpt-test"}, firstByte: time.Second}
+	cfg := config{Local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}},
+		Models: []localModel{{Provider: "codex", Model: "gpt-test"}}, Preferred: "codex/gpt-test"}, FirstByte: time.Second}
 	body := []byte(`{"model":"claude-opus-5-5","stream":true,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"private result"}]}]}`)
 	w := httptest.NewRecorder()
 	handleLocal(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), cfg, body, nil, newHealth(""), history.New(10, ""))
@@ -180,8 +180,8 @@ func TestCodexRestoredCallStreamsWithoutAnotherError(t *testing.T) {
 		}, "\n\n")
 		return usageResponse(200, stream), nil
 	})
-	cfg := config{local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}},
-		Models: []localModel{{Provider: "codex", Model: "gpt-test"}}, Preferred: "codex/gpt-test"}, firstByte: time.Second}
+	cfg := config{Local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}},
+		Models: []localModel{{Provider: "codex", Model: "gpt-test"}}, Preferred: "codex/gpt-test"}, FirstByte: time.Second}
 	body := []byte(`{"model":"claude-opus-5-5","stream":true,"metadata":{"user_id":"{\"session_id\":\"session-a\"}"},"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"call-1","content":"file contents"}]}]}`)
 	w := httptest.NewRecorder()
 	handleLocal(w, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(string(body))), cfg, body, nil, newHealth(""), hist)

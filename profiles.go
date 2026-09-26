@@ -17,22 +17,22 @@ type routingProfile struct {
 	PoolSettings map[string]poolSettings          `json:"pool_settings,omitempty"`
 }
 
-func (l localSetup) routing() routingProfile {
+func (l localSetup) Routing() routingProfile {
 	c := l.cloneRouting()
 	return routingProfile{FamilyRoutes: c.FamilyRoutes, Routes: c.Routes, ModelPools: c.ModelPools, PoolSettings: c.PoolSettings}
 }
 
 func (l localSetup) cloneRouting() localSetup {
 	c := localSetup{FamilyRoutes: l.FamilyRoutes, Routes: l.Routes, ModelPools: l.ModelPools, PoolSettings: l.PoolSettings}
-	return c.clone()
+	return c.Clone()
 }
 
-func (l *localSetup) useProfile(name string) error {
+func (l *localSetup) UseProfile(name string) error {
 	p, ok := l.Profiles[name]
 	if !ok {
 		return fmt.Errorf("профиль %q не найден", name)
 	}
-	c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
+	c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.Clone()
 	l.FamilyRoutes, l.Routes, l.ModelPools, l.PoolSettings = c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings
 	l.ActiveProfile = name
 	return nil
@@ -45,13 +45,13 @@ func (l *localSetup) syncActiveProfile() error {
 	if _, ok := l.Profiles[l.ActiveProfile]; !ok {
 		return fmt.Errorf("активный профиль %q не найден", l.ActiveProfile)
 	}
-	l.Profiles[l.ActiveProfile] = l.routing()
+	l.Profiles[l.ActiveProfile] = l.Routing()
 	return nil
 }
 
 func (l *localSetup) validateProfiles() error {
 	if l.Profiles == nil {
-		return l.validate()
+		return l.Validate()
 	}
 	if len(l.Profiles) == 0 {
 		return fmt.Errorf("нужен хотя бы один профиль")
@@ -59,7 +59,7 @@ func (l *localSetup) validateProfiles() error {
 	if _, ok := l.Profiles[l.ActiveProfile]; !ok {
 		return fmt.Errorf("активный профиль %q не найден", l.ActiveProfile)
 	}
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		return fmt.Errorf("профиль %q: %w", l.ActiveProfile, err)
 	}
 	if err := l.syncActiveProfile(); err != nil {
@@ -69,11 +69,11 @@ func (l *localSetup) validateProfiles() error {
 		if !profileNameOK(name) {
 			return fmt.Errorf("неверное имя профиля %q", name)
 		}
-		candidate := l.clone()
-		if err := candidate.useProfile(name); err != nil {
+		candidate := l.Clone()
+		if err := candidate.UseProfile(name); err != nil {
 			return err
 		}
-		if err := candidate.validate(); err != nil {
+		if err := candidate.Validate(); err != nil {
 			return fmt.Errorf("профиль %q: %w", name, err)
 		}
 	}
@@ -98,7 +98,7 @@ func (l *localSetup) repairInactiveProfiles() {
 		if name == l.ActiveProfile {
 			continue
 		}
-		c := localSetup{FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.clone()
+		c := localSetup{FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.Clone()
 		for poolName, members := range c.ModelPools {
 			kept := make([]poolTarget, 0, len(members))
 			for _, member := range members {
@@ -108,23 +108,23 @@ func (l *localSetup) repairInactiveProfiles() {
 			}
 			c.ModelPools[poolName] = kept
 		}
-		for _, rules := range c.allRouteRules() {
+		for _, rules := range c.AllRouteRules() {
 			for effort, route := range rules {
 				if route.Mode == "model" && !known[route.Model] {
 					rules[effort] = modelRoute{Mode: "disabled"}
 				}
 			}
 		}
-		l.Profiles[name] = c.routing()
+		l.Profiles[name] = c.Routing()
 	}
 }
 
-func (l *localSetup) renameInactiveProvider(oldName, newName string) {
+func (l *localSetup) RenameInactiveProvider(oldName, newName string) {
 	for name, profile := range l.Profiles {
 		if name == l.ActiveProfile {
 			continue
 		}
-		c := localSetup{FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.clone()
+		c := localSetup{FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.Clone()
 		for poolName, members := range c.ModelPools {
 			for i := range members {
 				if strings.HasPrefix(members[i].Model, oldName+"/") {
@@ -133,7 +133,7 @@ func (l *localSetup) renameInactiveProvider(oldName, newName string) {
 			}
 			c.ModelPools[poolName] = members
 		}
-		for _, rules := range c.allRouteRules() {
+		for _, rules := range c.AllRouteRules() {
 			for effort, route := range rules {
 				if route.Mode == "model" && strings.HasPrefix(route.Model, oldName+"/") {
 					route.Model = newName + strings.TrimPrefix(route.Model, oldName)
@@ -141,7 +141,7 @@ func (l *localSetup) renameInactiveProvider(oldName, newName string) {
 				}
 			}
 		}
-		l.Profiles[name] = c.routing()
+		l.Profiles[name] = c.Routing()
 	}
 }
 
@@ -162,10 +162,10 @@ func profilesMtime(path string) time.Time {
 	return latest
 }
 
-func (s *configStore) ensureProfiles() error {
+func (s *configStore) EnsureProfiles() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.c.local.Profiles != nil {
+	if s.c.Local.Profiles != nil {
 		if s.provPath == "" {
 			return nil
 		}
@@ -174,35 +174,35 @@ func (s *configStore) ensureProfiles() error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if err := saveConfigurationMigration(s.provPath, s.c.local, ".before-profiles"); err != nil {
+		if err := SaveConfigurationMigration(s.provPath, s.c.Local, ".before-profiles"); err != nil {
 			return err
 		}
 		s.wroteProviders()
 		return nil
 	}
-	l := s.c.local.clone()
-	l.Profiles = map[string]routingProfile{"default": l.routing()}
+	l := s.c.Local.Clone()
+	l.Profiles = map[string]routingProfile{"default": l.Routing()}
 	l.ActiveProfile = "default"
 	if err := l.validateProfiles(); err != nil {
 		return err
 	}
 	if s.provPath != "" {
-		if err := saveConfigurationMigration(s.provPath, l, ".before-profiles"); err != nil {
+		if err := SaveConfigurationMigration(s.provPath, l, ".before-profiles"); err != nil {
 			return err
 		}
 		s.wroteProviders()
 	}
-	s.c.local = l
+	s.c.Local = l
 	return nil
 }
 
-func (s *configStore) createProfile(name string, clone bool) error {
+func (s *configStore) CreateProfile(name string, clone bool) error {
 	if !profileNameOK(name) {
 		return fmt.Errorf("неверное имя профиля %q", name)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l := s.c.local.clone()
+	l := s.c.Local.Clone()
 	if l.Profiles == nil {
 		return fmt.Errorf("профили не инициализированы")
 	}
@@ -211,7 +211,7 @@ func (s *configStore) createProfile(name string, clone bool) error {
 	}
 	p := routingProfile{FamilyRoutes: map[string]map[string]modelRoute{}, Routes: map[string]map[string]modelRoute{}, ModelPools: map[string][]poolTarget{}}
 	if clone {
-		p = l.routing()
+		p = l.Routing()
 	}
 	l.Profiles[name] = p
 	if err := l.validateProfiles(); err != nil {
@@ -220,21 +220,21 @@ func (s *configStore) createProfile(name string, clone bool) error {
 	if err := s.persistLocalLocked(l); err != nil {
 		return err
 	}
-	s.c.local = l
+	s.c.Local = l
 	return nil
 }
 
-func (s *configStore) activateProfile(name string, h *health) error {
+func (s *configStore) ActivateProfile(name string, h *health) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l := s.c.local.clone()
+	l := s.c.Local.Clone()
 	if l.Profiles == nil {
 		return fmt.Errorf("профили не инициализированы")
 	}
 	if name == l.ActiveProfile {
 		return nil
 	}
-	if err := l.useProfile(name); err != nil {
+	if err := l.UseProfile(name); err != nil {
 		return err
 	}
 	if err := l.validateProfiles(); err != nil {
@@ -243,21 +243,21 @@ func (s *configStore) activateProfile(name string, h *health) error {
 	if s.provPath == "" {
 		return fmt.Errorf("файл провайдеров отключён")
 	}
-	if err := writeActiveProfile(s.provPath, name); err != nil {
+	if err := WriteActiveProfile(s.provPath, name); err != nil {
 		return err
 	}
 	s.wroteProfiles()
-	s.c.local = l
+	s.c.Local = l
 	if h != nil {
 		h.clearSessions()
 	}
 	return nil
 }
 
-func (s *configStore) deleteProfile(name string) error {
+func (s *configStore) DeleteProfile(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l := s.c.local.clone()
+	l := s.c.Local.Clone()
 	if _, ok := l.Profiles[name]; !ok {
 		return fmt.Errorf("профиль %q не найден", name)
 	}
@@ -271,7 +271,7 @@ func (s *configStore) deleteProfile(name string) error {
 	if err := os.Remove(profileFile(s.provPath, name)); err != nil {
 		return err
 	}
-	s.c.local = l
+	s.c.Local = l
 	s.wroteProfiles()
 	return nil
 }
@@ -280,7 +280,7 @@ func (s *configStore) persistLocalLocked(l localSetup) error {
 	if s.provPath == "" {
 		return fmt.Errorf("файл провайдеров отключён")
 	}
-	if err := writeProviders(s.provPath, l); err != nil {
+	if err := WriteProviders(s.provPath, l); err != nil {
 		return err
 	}
 	s.wroteProviders()
@@ -288,18 +288,18 @@ func (s *configStore) persistLocalLocked(l localSetup) error {
 }
 
 // A hand edit can still be loaded through the existing mtime watcher.
-func (s *configStore) reloadProfiles(h *health) error {
-	return s.reloadProfilesFrom(h, readProviders)
+func (s *configStore) Reload(h *health) error {
+	return s.ReloadProfilesFrom(h, ReadProviders)
 }
 
-func (s *configStore) reloadProfilesFrom(h *health, read func(string) (localSetup, error)) error {
+func (s *configStore) ReloadProfilesFrom(h *health, read func(string) (localSetup, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, err := read(s.provPath)
 	if err != nil {
 		return err
 	}
-	before := s.c.local.ActiveProfile
+	before := s.c.Local.ActiveProfile
 	if err := s.applyLocalLocked(l, false); err != nil {
 		return err
 	}

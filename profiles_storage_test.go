@@ -15,28 +15,28 @@ import (
 
 func TestProfileStaleSnapshotCannotReactivateOldProfile(t *testing.T) {
 	cs, h, _ := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	stale := cs.get().local.clone()
-	if err := cs.activateProfile("cloud", h); err != nil {
+	stale := cs.Get().Local.Clone()
+	if err := cs.ActivateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
 	stale.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "disabled"}
-	if err := cs.applyLocal(stale, true); err == nil || cs.get().local.ActiveProfile != "cloud" {
+	if err := cs.ApplyLocal(stale, true); err == nil || cs.Get().Local.ActiveProfile != "cloud" {
 		t.Fatalf("stale edit changed active profile: %v", err)
 	}
 }
 
 func TestProfilesActivationWritesOnlyPointer(t *testing.T) {
 	cs, h, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
@@ -51,7 +51,7 @@ func TestProfilesActivationWritesOnlyPointer(t *testing.T) {
 	if bytes.Contains(before, []byte(`"profiles"`)) || bytes.Contains(before, []byte(`"active_profile"`)) {
 		t.Fatalf("globals include profiles or pointer: %s", before)
 	}
-	if err := cs.activateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
 	after, err := os.ReadFile(path)
@@ -92,7 +92,7 @@ func TestCorruptExistingProvidersDoesNotFallbackToEnv(t *testing.T) {
 
 func TestProfileMigrationSecondStartupPreservesFilesAndBackup(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	paths := []string{path, path + ".active-profile", path + ".profiles/default.json", path + ".before-profiles"}
@@ -104,12 +104,12 @@ func TestProfileMigrationSecondStartupPreservesFilesAndBackup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	reloaded, err := readProviders(path)
+	reloaded, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted := newConfigStore(config{local: reloaded}, path)
-	if err := restarted.ensureProfiles(); err != nil {
+	restarted := NewStore(config{Local: reloaded}, path)
+	if err := restarted.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	for i, p := range paths {
@@ -122,10 +122,10 @@ func TestProfileMigrationSecondStartupPreservesFilesAndBackup(t *testing.T) {
 
 func TestProfilePointerFailedWritePreservesOldValue(t *testing.T) {
 	cs, h, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
 	pointer := path + ".active-profile"
@@ -136,18 +136,18 @@ func TestProfilePointerFailedWritePreservesOldValue(t *testing.T) {
 	if err := os.Mkdir(pointer+".tmp", 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.activateProfile("cloud", h); err == nil {
+	if err := cs.ActivateProfile("cloud", h); err == nil {
 		t.Fatal("expected failed pointer write")
 	}
 	current, err := os.ReadFile(pointer)
-	if err != nil || !bytes.Equal(original, current) || cs.get().local.ActiveProfile != "default" {
+	if err != nil || !bytes.Equal(original, current) || cs.Get().Local.ActiveProfile != "default" {
 		t.Fatal("failed activation changed pointer or memory")
 	}
 }
 
 func TestProfileFileFailedWritePreservesOldValue(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	profile := path + ".profiles/default.json"
@@ -158,9 +158,9 @@ func TestProfileFileFailedWritePreservesOldValue(t *testing.T) {
 	if err := os.Mkdir(profile+".tmp", 0700); err != nil {
 		t.Fatal(err)
 	}
-	l := cs.get().local.clone()
+	l := cs.Get().Local.Clone()
 	l.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "disabled"}
-	if err := cs.applyLocal(l, true); err == nil {
+	if err := cs.ApplyLocal(l, true); err == nil {
 		t.Fatal("expected failed profile write")
 	}
 	current, err := os.ReadFile(profile)
@@ -171,34 +171,34 @@ func TestProfileFileFailedWritePreservesOldValue(t *testing.T) {
 
 func TestProfilePointerHandEditIsWatched(t *testing.T) {
 	cs, h, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
 	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
-	if err := writeActiveProfile(path, "cloud"); err != nil {
+	if err := WriteActiveProfile(path, "cloud"); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.reloadProfiles(h); err != nil {
+	if err := cs.Reload(h); err != nil {
 		t.Fatal(err)
 	}
-	if cs.get().local.ActiveProfile != "cloud" || len(h.sessions) != 0 {
+	if cs.Get().Local.ActiveProfile != "cloud" || len(h.sessions) != 0 {
 		t.Fatal("hand edit did not switch and clear sessions")
 	}
 }
 
 func TestStaleRoutingFormRejectedAfterActivation(t *testing.T) {
 	cs, h, _ := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
 	u := newUIServer(history.New(10, ""), cs, h)
-	if err := cs.activateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
 	values := url.Values{"profile": {"default"}, "scope": {"family"}, "model": {"opus"}, "high": {"anthropic"}}
@@ -206,27 +206,27 @@ func TestStaleRoutingFormRejectedAfterActivation(t *testing.T) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	u.handler().ServeHTTP(w, req)
-	if cs.get().local.FamilyRoutes["opus"]["high"].Mode == "anthropic" {
+	if cs.Get().Local.FamilyRoutes["opus"]["high"].Mode == "anthropic" {
 		t.Fatal("stale routing form edited new active profile")
 	}
 }
 
 func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 	cs, h, _ := profileFixture(t)
-	l := cs.get().local.clone()
+	l := cs.Get().Local.Clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/a"}}}
 	l.PoolSettings = map[string]poolSettings{"work": {FirstByteSec: 2}}
-	if err := cs.applyLocal(l, true); err != nil {
+	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", true); err != nil {
+	if err := cs.CreateProfile("cloud", true); err != nil {
 		t.Fatal(err)
 	}
 	u := newUIServer(history.New(10, ""), cs, h)
-	if err := cs.activateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
 	values := url.Values{"profile": {"default"}, "name": {"work"}, "first_byte": {"1"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
@@ -234,16 +234,16 @@ func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	u.handler().ServeHTTP(w, req)
-	if cs.get().local.PoolSettings["work"].FirstByteSec != 2 {
+	if cs.Get().Local.PoolSettings["work"].FirstByteSec != 2 {
 		t.Fatal("stale pool settings changed new active profile")
 	}
 }
 
 func TestInlineProfilesMigrateToSeparateFiles(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	l := cs.get().local.clone()
+	l := cs.Get().Local.Clone()
 	l.ActiveProfile = "default"
-	l.Profiles = map[string]routingProfile{"default": l.routing(), "cloud": l.routing()}
+	l.Profiles = map[string]routingProfile{"default": l.Routing(), "cloud": l.Routing()}
 	inline, err := json.Marshal(l)
 	if err != nil {
 		t.Fatal(err)
@@ -251,12 +251,12 @@ func TestInlineProfilesMigrateToSeparateFiles(t *testing.T) {
 	if err := os.WriteFile(path, inline, 0600); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := readProviders(path)
+	loaded, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	restarted := newConfigStore(config{local: loaded}, path)
-	if err := restarted.ensureProfiles(); err != nil {
+	restarted := NewStore(config{Local: loaded}, path)
+	if err := restarted.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	disk, err := os.ReadFile(path)
@@ -277,7 +277,7 @@ func TestInlineProfilesMigrateToSeparateFiles(t *testing.T) {
 
 func TestProfileFailedGlobalWriteKeepsActivePointer(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	pointer, err := os.ReadFile(path + ".active-profile")
@@ -287,9 +287,9 @@ func TestProfileFailedGlobalWriteKeepsActivePointer(t *testing.T) {
 	if err := os.Mkdir(path+".tmp", 0700); err != nil {
 		t.Fatal(err)
 	}
-	l := cs.get().local.clone()
+	l := cs.Get().Local.Clone()
 	l.Catalog.Anthropic = []string{"claude-opus-5"}
-	if err := cs.applyLocal(l, true); err == nil {
+	if err := cs.ApplyLocal(l, true); err == nil {
 		t.Fatal("expected failed global write")
 	}
 	after, err := os.ReadFile(path + ".active-profile")
@@ -300,19 +300,19 @@ func TestProfileFailedGlobalWriteKeepsActivePointer(t *testing.T) {
 
 func TestProfileDeleteRemovesFileForRestart(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.deleteProfile("cloud"); err != nil {
+	if err := cs.DeleteProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path + ".profiles/cloud.json"); !os.IsNotExist(err) {
 		t.Fatalf("deleted profile still on disk: %v", err)
 	}
-	loaded, err := readProviders(path)
+	loaded, err := ReadProviders(path)
 	if err != nil || len(loaded.Profiles) != 1 {
 		t.Fatalf("deleted profile returned on restart: %v %+v", err, loaded.Profiles)
 	}
@@ -320,7 +320,7 @@ func TestProfileDeleteRemovesFileForRestart(t *testing.T) {
 
 func TestMissingProfileDirectoryDoesNotFallbackToEnv(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	original, err := os.ReadFile(path)
@@ -342,40 +342,40 @@ func TestMissingProfileDirectoryDoesNotFallbackToEnv(t *testing.T) {
 
 func TestFormProfileGuardUsesSubmittedNameUnderLock(t *testing.T) {
 	cs, h, _ := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.activateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
 	// Simulates activation between the handler's initial check and its snapshot.
-	current := cs.get().local.clone()
+	current := cs.Get().Local.Clone()
 	current.FamilyRoutes["opus"] = map[string]modelRoute{"high": {Mode: "anthropic"}}
-	if err := cs.applyLocal(current, true, "default"); err == nil {
+	if err := cs.ApplyLocal(current, true, "default"); err == nil {
 		t.Fatal("form from default edited cloud after activation")
 	}
-	if cs.get().local.FamilyRoutes["opus"]["high"].Mode == "anthropic" {
+	if cs.Get().Local.FamilyRoutes["opus"]["high"].Mode == "anthropic" {
 		t.Fatal("stale form changed active route")
 	}
 }
 
 func TestInterruptedProfileMigrationDoesNotReplaceSavedRoutes(t *testing.T) {
 	cs, _, path := profileFixture(t)
-	original := cs.get().local.FamilyRoutes["opus"]["high"]
+	original := cs.Get().Local.FamilyRoutes["opus"]["high"]
 	if err := os.Mkdir(path+".active-profile.tmp", 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ensureProfiles(); err == nil {
+	if err := cs.EnsureProfiles(); err == nil {
 		t.Fatal("expected pointer write failure")
 	}
 	saved, err := os.ReadFile(path + ".profiles/default.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := loadLocalSetupChecked(path); err == nil {
+	if _, _, err := LoadLocal(path); err == nil {
 		t.Fatal("interrupted migration loaded as legacy configuration")
 	}
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)
@@ -396,18 +396,18 @@ func TestInterruptedProfileMigrationDoesNotReplaceSavedRoutes(t *testing.T) {
 // a new pointer. Otherwise an older reload can undo the activation in memory.
 func TestReloadReadBeforeActivationKeepsNewProfile(t *testing.T) {
 	cs, h, path := profileFixture(t)
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.createProfile("cloud", false); err != nil {
+	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
 	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
 	readOld, release := make(chan struct{}), make(chan struct{})
 	reloadDone := make(chan error, 1)
 	go func() {
-		reloadDone <- cs.reloadProfilesFrom(h, func(path string) (localSetup, error) {
-			l, err := readProviders(path)
+		reloadDone <- cs.ReloadProfilesFrom(h, func(path string) (localSetup, error) {
+			l, err := ReadProviders(path)
 			close(readOld)
 			<-release
 			return l, err
@@ -418,7 +418,7 @@ func TestReloadReadBeforeActivationKeepsNewProfile(t *testing.T) {
 	activationStarted := make(chan struct{})
 	go func() {
 		close(activationStarted)
-		activated <- cs.activateProfile("cloud", h)
+		activated <- cs.ActivateProfile("cloud", h)
 	}()
 	<-activationStarted
 	close(release)
@@ -428,11 +428,11 @@ func TestReloadReadBeforeActivationKeepsNewProfile(t *testing.T) {
 	if err := <-activated; err != nil {
 		t.Fatal(err)
 	}
-	disk, err := readProviders(path)
+	disk, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disk.ActiveProfile != "cloud" || cs.get().local.ActiveProfile != "cloud" || cs.get().routeFor("claude-opus-5", "high").Mode != "disabled" || len(h.sessions) != 0 {
-		t.Fatalf("activation lost: disk=%s memory=%s route=%+v sessions=%d", disk.ActiveProfile, cs.get().local.ActiveProfile, cs.get().routeFor("claude-opus-5", "high"), len(h.sessions))
+	if disk.ActiveProfile != "cloud" || cs.Get().Local.ActiveProfile != "cloud" || cs.Get().RouteFor("claude-opus-5", "high").Mode != "disabled" || len(h.sessions) != 0 {
+		t.Fatalf("activation lost: disk=%s memory=%s route=%+v sessions=%d", disk.ActiveProfile, cs.Get().Local.ActiveProfile, cs.Get().RouteFor("claude-opus-5", "high"), len(h.sessions))
 	}
 }

@@ -40,17 +40,17 @@ func TestDirectRouteUsesOnlySelectedModelAndEffort(t *testing.T) {
 			"opus": {"high": {Mode: "model", Model: "p/chosen", Effort: "xhigh"}},
 		},
 	}
-	if err := l.validate(); err != nil {
+	if err := l.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config{local: l, failover: true}
+	cfg := config{Local: l, Failover: true}
 	body := []byte(`{"model":"claude-opus-5","output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`)
 	_, route, err := configuredRequestRoute(cfg, body)
 	if err != nil || route.Mode != "model" {
 		t.Fatalf("direct route: %+v, %v", route, err)
 	}
 	w := httptest.NewRecorder()
-	handleLocal(w, httptest.NewRequest(http.MethodPost, "/v1/messages", nil), cfg.forModel("claude-opus-5", "high"), body, nil, newHealth(""))
+	handleLocal(w, httptest.NewRequest(http.MethodPost, "/v1/messages", nil), cfg.ForModel("claude-opus-5", "high"), body, nil, newHealth(""))
 	if w.Code != http.StatusServiceUnavailable || otherCalls.Load() != 0 {
 		t.Fatalf("direct route fell through: status=%d other calls=%d body=%s", w.Code, otherCalls.Load(), w.Body.String())
 	}
@@ -70,9 +70,9 @@ func TestDirectRouteRejectsInvalidTargets(t *testing.T) {
 		{"pool on direct route", modelRoute{Mode: "model", Model: "p/chosen", Pool: "other"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			l := base.clone()
+			l := base.Clone()
 			l.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": tc.route}}
-			if err := l.validate(); err == nil {
+			if err := l.Validate(); err == nil {
 				t.Fatal("invalid direct route accepted")
 			}
 		})
@@ -81,48 +81,48 @@ func TestDirectRouteRejectsInvalidTargets(t *testing.T) {
 
 func TestDirectRouteProviderRenameAndModelRemoval(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/m1:high"}})
-	get(t, h, "POST", "/settings/providers", url.Values{"op": {"update"}, "orig": {"p"}, "name": {"renamed"}, "base_url": {u.cs.get().local.Providers[0].BaseURL}})
-	got := u.cs.get().routeFor("claude-opus-5", "high")
+	get(t, h, "POST", "/settings/providers", url.Values{"op": {"update"}, "orig": {"p"}, "name": {"renamed"}, "base_url": {u.cs.Get().Local.Providers[0].BaseURL}})
+	got := u.cs.Get().RouteFor("claude-opus-5", "high")
 	if got.Mode != "model" || got.Model != "renamed/m1" || got.Effort != "high" {
 		t.Fatalf("provider rename broke direct route: %+v", got)
 	}
 	get(t, h, "POST", "/settings/models", url.Values{"op": {"remove"}, "key": {"renamed/m1"}})
-	if got := u.cs.get().routeFor("claude-opus-5", "high"); got.Mode != "disabled" {
+	if got := u.cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "disabled" {
 		t.Fatalf("removed model left direct route: %+v", got)
 	}
 }
 
 func TestDirectRouteProviderRemovalDisablesAssignment(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/m1:high"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"remove"}, "name": {"p"}})
-	if got := u.cs.get().routeFor("claude-opus-5", "high"); got.Mode != "disabled" {
+	if got := u.cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "disabled" {
 		t.Fatalf("removed provider left direct route: %+v", got)
 	}
 }
 
 func TestDirectRouteParsesModelIDWithColon(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
-	l := u.cs.get().local.clone()
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	l := u.cs.Get().Local.Clone()
 	l.Models = append(l.Models, localModel{Provider: "p", Model: "model:version"})
-	if err := u.cs.applyLocal(l, false); err != nil {
+	if err := u.cs.ApplyLocal(l, false); err != nil {
 		t.Fatal(err)
 	}
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/model:version:high"}})
-	if got := u.cs.get().routeFor("claude-opus-5", "high"); got.Mode != "model" || got.Model != "p/model:version" || got.Effort != "high" {
+	if got := u.cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "model" || got.Model != "p/model:version" || got.Effort != "high" {
 		t.Fatalf("colon in model ID parsed incorrectly: %+v", got)
 	}
 }
 
 func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
-	l := u.cs.get().local.clone()
-	if err := u.cs.applyLocal(l, false); err != nil {
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	l := u.cs.Get().Local.Clone()
+	if err := u.cs.ApplyLocal(l, false); err != nil {
 		t.Fatal(err)
 	}
 	u.probe = map[string]probeResult{"p": {At: time.Now(), Base: l.Providers[0].BaseURL, Info: []probeModel{{ID: "m1", Efforts: []string{"low"}}}}}
@@ -135,7 +135,7 @@ func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 func TestSettingsSaveDirectRouteAndReload(t *testing.T) {
 	u, h := testUI(t)
 	path := filepath.Join(t.TempDir(), "providers.json")
-	u.cs = newConfigStore(u.cs.get(), path)
+	u.cs = NewStore(u.cs.Get(), path)
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	if !strings.Contains(body, `value="model:p/m1:high"`) ||
 		!strings.Contains(body, `>p/m1/high</option>`) ||
@@ -149,11 +149,11 @@ func TestSettingsSaveDirectRouteAndReload(t *testing.T) {
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `class="note err"`) {
 		t.Fatalf("save direct route: %d %s", w.Code, w.Body.String())
 	}
-	loaded, err := readProviders(path)
+	loaded, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := loaded.routeFor("claude-opus-5-5", "high")
+	got := loaded.RouteFor("claude-opus-5-5", "high")
 	if got.Mode != "model" || got.Model != "p/m1" || got.Effort != "high" {
 		t.Fatalf("inherited direct route not persisted: %+v", got)
 	}

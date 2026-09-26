@@ -11,7 +11,7 @@ func TestExplicitModelEffortRoutes(t *testing.T) {
 	l.Routes = map[string]map[string]modelRoute{
 		"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}, "low": {Mode: "anthropic"}, "max": {Mode: "pool", Pool: "empty"}},
 	}
-	cfg := config{local: l}
+	cfg := config{Local: l}
 	for _, tc := range []struct {
 		model, effort, mode string
 		rejected            bool

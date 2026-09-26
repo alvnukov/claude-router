@@ -42,12 +42,12 @@ func poolsOver(providers []provider, members []string, types map[string]string) 
 // firstFor is the member a session's request starts on, chosen the way
 // handleLocal chooses it.
 func firstFor(hl *health, l localSetup, pool, session string) string {
-	cfg := config{local: l}.forModel(pool, "")
-	return hl.bindCandidates(pool+":"+session, poolRoute{cfg.poolName, cfg.poolType}, hl.pick(cfg))[0].Key
+	cfg := config{Local: l}.ForModel(pool, "")
+	return hl.bindCandidates(pool+":"+session, poolRoute{cfg.PoolName, cfg.PoolType}, hl.pick(cfg))[0].Key
 }
 
 func TestBalancePoolSpreadsNewSessions(t *testing.T) {
-	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": poolBalance, "fo": poolFailover})
+	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": PoolBalance, "fo": PoolFailover})
 	hl := newHealth("")
 	count := map[string]int{}
 	for i := 0; i < 10; i++ {
@@ -80,17 +80,17 @@ func TestBalancePoolSpreadsNewSessions(t *testing.T) {
 
 func TestCodexSingleConnectionKeepsOrder(t *testing.T) {
 	codex := []provider{
-		{Name: "codex", Type: "codex", BaseURL: codexBaseURL},
-		{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB},
+		{Name: "codex", Type: "codex", BaseURL: CodexBaseURL},
+		{Name: "work", Type: "codex", BaseURL: CodexBaseURL, AuthID: testAuthB},
 	}
 	hl := newHealth("")
-	one := poolsOver(codex, []string{"codex/gpt", "codex/mini"}, map[string]string{"solo": poolBalance})
+	one := poolsOver(codex, []string{"codex/gpt", "codex/mini"}, map[string]string{"solo": PoolBalance})
 	for i := 0; i < 4; i++ {
 		if got := firstFor(hl, one, "solo", fmt.Sprint("s", i)); got != "codex/gpt" {
 			t.Fatalf("one connection: session %d started on %s", i, got)
 		}
 	}
-	two := poolsOver(codex, []string{"codex/gpt", "codex/mini", "work/gpt"}, map[string]string{"bal": poolBalance})
+	two := poolsOver(codex, []string{"codex/gpt", "codex/mini", "work/gpt"}, map[string]string{"bal": PoolBalance})
 	var got []string
 	for i := 0; i < 4; i++ {
 		got = append(got, firstFor(hl, two, "bal", fmt.Sprint("s", i)))
@@ -101,7 +101,7 @@ func TestCodexSingleConnectionKeepsOrder(t *testing.T) {
 }
 
 func TestBalanceCountsPerPool(t *testing.T) {
-	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": poolBalance, "fo": poolFailover})
+	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": PoolBalance, "fo": PoolFailover})
 	hl := newHealth("")
 	for i := 0; i < 3; i++ {
 		firstFor(hl, l, "fo", fmt.Sprint("s", i)) // three sessions on p, in another pool
@@ -112,7 +112,7 @@ func TestBalanceCountsPerPool(t *testing.T) {
 }
 
 func TestBalanceSkipsCoolingConnection(t *testing.T) {
-	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": poolBalance})
+	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": PoolBalance})
 	hl := newHealth("")
 	hl.m["p/x"] = &modelStat{CoolUntil: time.Now().Add(time.Minute)}
 	for i := 0; i < 4; i++ {
@@ -123,7 +123,7 @@ func TestBalanceSkipsCoolingConnection(t *testing.T) {
 }
 
 func TestBalanceCriterionIsOneFunction(t *testing.T) {
-	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": poolBalance})
+	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": PoolBalance})
 	hl := newHealth("")
 	hl.balanceBy = func(h *health, pool string, p provider) int {
 		if p.Name == "q" {
@@ -139,7 +139,7 @@ func TestBalanceCriterionIsOneFunction(t *testing.T) {
 }
 
 func TestBalanceBoundSessionStays(t *testing.T) {
-	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": poolBalance})
+	l := poolsOver(twoProviders, []string{"p/x", "q/y"}, map[string]string{"bal": PoolBalance})
 	hl := newHealth("")
 	if a, b := firstFor(hl, l, "bal", "s1"), firstFor(hl, l, "bal", "s2"); a != "p/x" || b != "q/y" {
 		t.Fatalf("setup: %s,%s", a, b)
@@ -152,7 +152,7 @@ func TestBalanceBoundSessionStays(t *testing.T) {
 	}
 	// s1's connection fails: the session moves to q and stays there,
 	// although p now has fewer sessions.
-	cfg := config{local: l}.forModel("bal", "")
+	cfg := config{Local: l}.ForModel("bal", "")
 	for _, c := range hl.pick(cfg) {
 		if c.Key == "q/y" {
 			hl.moveSession("bal:s1", "p/x", c)
@@ -167,12 +167,12 @@ func TestBalanceBoundSessionStays(t *testing.T) {
 
 func TestPoolSettingsFormSetsType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: poolFailover, FirstByteSec: 5}})
-	cfg.upstream, _ = url.Parse("https://api.anthropic.com")
-	if err := writeProviders(path, cfg.local); err != nil {
+	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: PoolFailover, FirstByteSec: 5}})
+	cfg.Upstream, _ = url.Parse("https://api.anthropic.com")
+	if err := WriteProviders(path, cfg.Local); err != nil {
 		t.Fatal(err)
 	}
-	u := newUIServer(history.New(10, ""), newConfigStore(cfg, path), newHealth(""))
+	u := newUIServer(history.New(10, ""), NewStore(cfg, path), newHealth(""))
 	post := func(typ string) string {
 		values := url.Values{"name": {"pair"}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
 		if typ != "" {
@@ -185,23 +185,23 @@ func TestPoolSettingsFormSetsType(t *testing.T) {
 		return w.Body.String()
 	}
 	stored := func() poolSettings {
-		l, err := readProviders(path)
+		l, err := ReadProviders(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return l.PoolSettings["pair"]
 	}
-	html := post(poolBalance)
-	if !strings.Contains(html, "Настройки пула сохранены") || stored().Type != poolBalance {
+	html := post(PoolBalance)
+	if !strings.Contains(html, "Настройки пула сохранены") || stored().Type != PoolBalance {
 		t.Fatalf("balance not saved: %+v\n%s", stored(), html)
 	}
 	if !strings.Contains(html, `name="type"`) || strings.Contains(html, `name="balance"`) {
 		t.Fatal("pool form must offer the type and not the numeric balance")
 	}
-	if post(""); stored().Type != poolBalance {
+	if post(""); stored().Type != PoolBalance {
 		t.Fatalf("a form without a type reset it: %+v", stored())
 	}
-	if html := post("zzz"); !strings.Contains(html, `тип пула &#34;zzz&#34; не поддерживается`) || stored().Type != poolBalance {
+	if html := post("zzz"); !strings.Contains(html, `тип пула &#34;zzz&#34; не поддерживается`) || stored().Type != PoolBalance {
 		t.Fatalf("unknown type: %+v\n%s", stored(), html)
 	}
 	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), `"balance":`) {

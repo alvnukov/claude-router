@@ -19,7 +19,7 @@ import (
 
 func TestSettingsUsesAnthropicPools(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	for _, model := range []string{"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"} {
 		if !strings.Contains(body, `data-model="`+model+`"`) {
@@ -33,20 +33,20 @@ func TestSettingsUsesAnthropicPools(t *testing.T) {
 	}
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"create"}, "name": {"Сложные задачи"}})
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"add"}, "name": {"Сложные задачи"}, "key": {"p/m1"}, "effort": {"high"}})
-	pool := u.cs.get().local.ModelPools["Сложные задачи"]
+	pool := u.cs.Get().Local.ModelPools["Сложные задачи"]
 	if len(pool) != 1 || pool[0].Model != "p/m1" || pool[0].Effort != "high" {
 		t.Fatalf("pool not saved: %+v", pool)
 	}
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"claude-opus-5"}, "high": {"pool:Сложные задачи"}, "low": {"anthropic"}})
-	cfg := u.cs.get()
-	if cfg.routeFor("claude-opus-5", "high").Pool != "Сложные задачи" || cfg.routeFor("claude-opus-5", "low").Mode != "anthropic" {
+	cfg := u.cs.Get()
+	if cfg.RouteFor("claude-opus-5", "high").Pool != "Сложные задачи" || cfg.RouteFor("claude-opus-5", "low").Mode != "anthropic" {
 		t.Fatal("routes not saved")
 	}
-	if cfg.routeFor("claude-sonnet-5", "high").Mode != "disabled" || cfg.routeFor("claude-opus-5", "default").Mode != "disabled" {
+	if cfg.RouteFor("claude-sonnet-5", "high").Mode != "disabled" || cfg.RouteFor("claude-opus-5", "default").Mode != "disabled" {
 		t.Fatal("unassigned routes enabled")
 	}
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"delete"}, "name": {"Сложные задачи"}})
-	if _, ok := u.cs.get().local.ModelPools["Сложные задачи"]; !ok {
+	if _, ok := u.cs.Get().Local.ModelPools["Сложные задачи"]; !ok {
 		t.Fatal("deleted a referenced pool")
 	}
 	// A normal navigation must render settings as a full-width page too.
@@ -76,7 +76,7 @@ func testUI(t *testing.T, sessions ...string) (*uiServer, http.Handler) {
 	}))
 	t.Cleanup(prov.Close)
 	t.Setenv("ROUTER_ENV_FILE", filepath.Join(t.TempDir(), "env"))
-	cs := newConfigStore(config{local: oneProvider(prov.URL, "m1"), failover: true, firstByte: 45 * time.Second}, "")
+	cs := NewStore(config{Local: oneProvider(prov.URL, "m1"), Failover: true, FirstByte: 45 * time.Second}, "")
 	st := history.New(100, "")
 	for _, sid := range sessions {
 		meta := fmt.Sprintf(`{"metadata":{"user_id":"{\"session_id\":\"%s\"}"},"messages":[{"role":"user","content":"hello"}]}`, sid)
@@ -163,7 +163,7 @@ func TestListCountsAndSessions(t *testing.T) {
 
 func TestSettingsShowsModelStats(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"create"}, "name": {"work"}})
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"add"}, "name": {"work"}, "key": {"p/m1"}})
 	u.hl.recordProbe("p/m1", true, time.Second, "")
@@ -215,7 +215,7 @@ func withBadProvider(t *testing.T, good []byte) string {
 		t.Fatal(err)
 	}
 	providers, _ := doc["providers"].([]any)
-	doc["providers"] = append([]any{map[string]any{"name": "work", "type": "codex", "base_url": codexBaseURL}}, providers...)
+	doc["providers"] = append([]any{map[string]any{"name": "work", "type": "codex", "base_url": CodexBaseURL}}, providers...)
 	bad, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -233,18 +233,18 @@ func TestReloadErrorBanner(t *testing.T) {
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	v := u.settingsView()
 	if len(v.ReloadErrors) != 1 || !strings.Contains(v.ReloadErrors[0].Err, "auth_id") || v.ReloadErrors[0].Snapshot.IsZero() {
 		t.Fatalf("banner: %+v", v.ReloadErrors)
 	}
-	if _, ok := cs.get().local.provider("work"); ok {
+	if _, ok := cs.Get().Local.Provider("work"); ok {
 		t.Fatal("rejected file was applied")
 	}
 	if data, _ := os.ReadFile(path); string(data) != bad {
 		t.Fatal("rejected file was rewritten")
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if again := u.settingsView().ReloadErrors; len(again) != 1 || !again[0].At.Equal(v.ReloadErrors[0].At) {
 		t.Fatal("same error re-stamped or duplicated")
 	}
@@ -253,7 +253,7 @@ func TestReloadErrorBanner(t *testing.T) {
 	if err := os.Chtimes(path, later, later); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if left := u.settingsView().ReloadErrors; len(left) != 0 {
 		t.Fatalf("banner not cleared: %+v", left)
 	}
@@ -261,7 +261,7 @@ func TestReloadErrorBanner(t *testing.T) {
 
 func TestReloadErrorBannerRenders(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.noteReload("/x/providers.json", errors.New("boom"))
+	u.cs.NoteReload("/x/providers.json", errors.New("boom"))
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	if !strings.Contains(body, "файл providers.json не применён: boom; действует снимок от") {
 		t.Fatal("banner not rendered")
@@ -343,14 +343,14 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if err := os.Chtimes(path, future, future); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad providers file not reported")
 	}
-	if err := cs.applyLocal(cs.get().local, true); err != nil {
+	if err := cs.ApplyLocal(cs.Get().Local, true); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if left := u.settingsView().ReloadErrors; len(left) != 0 {
 		t.Fatalf("banner outlived the save: %+v", left)
 	}
@@ -359,20 +359,20 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if err := os.Chtimes(env, future, future); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad env file not reported")
 	}
-	if err := cs.apply(inputFromConfig(cs.get()), true); err != nil {
+	if err := cs.Apply(InputFromConfig(cs.Get()), true); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if left := u.settingsView().ReloadErrors; len(left) != 0 {
 		t.Fatalf("env banner outlived the save: %+v", left)
 	}
 
 	stray := filepath.Join(path+".profiles", "stray.json")
-	if err := cs.ensureProfiles(); err != nil {
+	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	writeRaw(t, stray, "{")
@@ -383,14 +383,14 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if err := os.Chtimes(path+".profiles", later, later); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad profile file not reported")
 	}
-	if err := cs.applyLocal(cs.get().local, true); err != nil {
+	if err := cs.ApplyLocal(cs.Get().Local, true); err != nil {
 		t.Fatal(err)
 	}
-	cs.pollOnce()
+	cs.Poll()
 	if left := u.settingsView().ReloadErrors; len(left) != 1 {
 		t.Fatalf("save hid a bad file it did not replace: %+v", left)
 	}

@@ -10,7 +10,7 @@ import (
 var claudeFamilyPattern = regexp.MustCompile(`^(?:claude-)?([a-z]+)(?:-([0-9]+(?:-[0-9]+)*)(?:-latest)?)?$`)
 var codexFamilyPattern = regexp.MustCompile(`^(gpt-)([0-9]+(?:\.[0-9]+)*)(.*)$`)
 
-func claudeFamily(model string) string {
+func ClaudeFamily(model string) string {
 	match := claudeFamilyPattern.FindStringSubmatch(strings.ToLower(model))
 	if match == nil {
 		return ""
@@ -35,7 +35,7 @@ func modelVersion(model string) []int {
 	return version
 }
 
-func newerModel(a, b string) bool {
+func NewerModel(a, b string) bool {
 	av, bv := modelVersion(a), modelVersion(b)
 	for i := 0; i < max(len(av), len(bv)); i++ {
 		x, y := 0, 0
@@ -53,7 +53,7 @@ func newerModel(a, b string) bool {
 }
 
 // Keep named variants separate: GPT Sol never inherits from Astra or Luna.
-func codexFamily(model string) string {
+func CodexFamily(model string) string {
 	match := codexFamilyPattern.FindStringSubmatch(model)
 	if match == nil {
 		return ""
@@ -63,20 +63,20 @@ func codexFamily(model string) string {
 
 // The latest explicitly configured version supplies the initial family rules.
 // Existing version overrides are preserved; subsequent family edits are live.
-func migrateFamilyRoutes(l localSetup) (localSetup, bool) {
+func MigrateFamilyRoutes(l localSetup) (localSetup, bool) {
 	if l.FamilyRoutes != nil {
 		return l, false
 	}
-	l = l.clone()
+	l = l.Clone()
 	l.FamilyRoutes = map[string]map[string]modelRoute{}
 	latest := map[string]string{}
 	for model := range l.Routes {
-		family := claudeFamily(model)
+		family := ClaudeFamily(model)
 		if family == "" {
 			continue
 		}
 		old, exists := latest[family]
-		if !exists || newerModel(model, old) || !newerModel(old, model) && model < old {
+		if !exists || NewerModel(model, old) || !NewerModel(old, model) && model < old {
 			latest[family] = model
 		}
 	}
@@ -90,7 +90,7 @@ func migrateFamilyRoutes(l localSetup) (localSetup, bool) {
 	// Equal version rules now inherit dynamically. Keep genuinely different
 	// version-specific rules as overrides.
 	for model, rules := range l.Routes {
-		if family := claudeFamily(model); family != "" && reflect.DeepEqual(rules, l.FamilyRoutes[family]) {
+		if family := ClaudeFamily(model); family != "" && reflect.DeepEqual(rules, l.FamilyRoutes[family]) {
 			delete(l.Routes, model)
 		}
 	}

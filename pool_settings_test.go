@@ -12,36 +12,36 @@ import (
 )
 
 func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
-	c := config{local: oneProvider("http://example.test/v1", "a"), failover: true, firstByte: 45 * time.Second, balance: 3, probeEvery: 30 * time.Second, maxInputChars: 9000}
-	c.local.ModelPools = map[string][]poolTarget{"old": {{Model: "p/a"}}, "zero": {{Model: "p/a"}}}
-	c.local.PoolSettings = map[string]poolSettings{"zero": {}}
-	c.local.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "old"}, "low": {Mode: "pool", Pool: "zero"}}}
-	migrated, changed := migratePoolSettings(c)
+	c := config{Local: oneProvider("http://example.test/v1", "a"), Failover: true, FirstByte: 45 * time.Second, Balance: 3, ProbeEvery: 30 * time.Second, MaxInputChars: 9000}
+	c.Local.ModelPools = map[string][]poolTarget{"old": {{Model: "p/a"}}, "zero": {{Model: "p/a"}}}
+	c.Local.PoolSettings = map[string]poolSettings{"zero": {}}
+	c.Local.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "old"}, "low": {Mode: "pool", Pool: "zero"}}}
+	migrated, changed := MigratePoolSettings(c)
 	if !changed || migrated.PoolSettings["old"].FirstByteSec != 45 || migrated.PoolSettings["zero"] != (poolSettings{}) {
 		t.Fatal("migration lost existing settings")
 	}
-	if len(c.local.PoolSettings) != 1 {
+	if len(c.Local.PoolSettings) != 1 {
 		t.Fatal("migration mutated previous snapshot")
 	}
-	c.local = migrated
-	if _, changed := migratePoolSettings(c); changed {
+	c.Local = migrated
+	if _, changed := MigratePoolSettings(c); changed {
 		t.Fatal("migration is not idempotent")
 	}
 	path := filepath.Join(t.TempDir(), "providers.json")
-	if err := writeProviders(path, c.local); err != nil {
+	if err := WriteProviders(path, c.Local); err != nil {
 		t.Fatal(err)
 	}
 	var err error
-	c.local, err = readProviders(path)
+	c.Local, err = ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c.firstByte, c.probeEvery, c.maxInputChars = time.Second, time.Hour, 1
-	old, zero := c.forModel("claude-opus-5", "high"), c.forModel("claude-opus-5", "low")
-	if old.firstByte != 45*time.Second || !old.failover || old.probeEvery != 30*time.Second || old.maxInputChars != 9000 {
+	c.FirstByte, c.ProbeEvery, c.MaxInputChars = time.Second, time.Hour, 1
+	old, zero := c.ForModel("claude-opus-5", "high"), c.ForModel("claude-opus-5", "low")
+	if old.FirstByte != 45*time.Second || !old.Failover || old.ProbeEvery != 30*time.Second || old.MaxInputChars != 9000 {
 		t.Fatal("saved pool settings overridden by globals")
 	}
-	if zero.firstByte != 0 || zero.failover || zero.probeEvery != 0 || zero.maxInputChars != 0 {
+	if zero.FirstByte != 0 || zero.Failover || zero.ProbeEvery != 0 || zero.MaxInputChars != 0 {
 		t.Fatal("explicit zeros did not disable settings")
 	}
 }
@@ -49,7 +49,7 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	up, _ := url.Parse("https://api.anthropic.com")
 	path := filepath.Join(t.TempDir(), "providers.json")
-	cs := newConfigStore(config{upstream: up, firstByte: 45 * time.Second, local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, path)
+	cs := NewStore(config{Upstream: up, FirstByte: 45 * time.Second, Local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, path)
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	post := func(values url.Values) string {
 		t.Helper()
@@ -67,7 +67,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	if !strings.Contains(html, "Настройки пула сохранены") || strings.Count(html, `class="behavior-form"`) != 2 || strings.Contains(html, `id="behavior"`) {
 		t.Fatal("pool forms not rendered independently")
 	}
-	saved, err := readProviders(path)
+	saved, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 		t.Fatal("settings leaked to other pool")
 	}
 	values.Set("first_byte", "-1")
-	if !strings.Contains(post(values), "нужно целое число") || cs.get().local.PoolSettings["a"] != want {
+	if !strings.Contains(post(values), "нужно целое число") || cs.Get().Local.PoolSettings["a"] != want {
 		t.Fatal("invalid settings were applied")
 	}
 	values.Set("first_byte", "7")
@@ -85,10 +85,10 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 		t.Fatal("missing pool accepted")
 	}
 	// A stale settings form cannot resurrect a deleted pool.
-	l := cs.get().local.clone()
+	l := cs.Get().Local.Clone()
 	delete(l.ModelPools, "a")
 	delete(l.PoolSettings, "a")
-	if err := cs.applyLocal(l, true); err != nil {
+	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
 	values.Set("name", "a")
@@ -101,17 +101,17 @@ func TestPoolsUseIndependentTimeoutAndFailover(t *testing.T) {
 	var calls testCalls
 	server := fakeEndpoint(t, &calls)
 	defer server.Close()
-	c := config{local: oneProvider(server.URL, "slow", "good")}
-	c.local.ModelPools = map[string][]poolTarget{"fast": {{Model: "p/slow"}, {Model: "p/good"}}, "patient": {{Model: "p/slow"}, {Model: "p/good"}}, "stop": {{Model: "p/slow"}, {Model: "p/good"}}}
-	c.local.PoolSettings = map[string]poolSettings{"fast": {Failover: true, FirstByteSec: 1}, "patient": {FirstByteSec: 3}, "stop": {FirstByteSec: 1}}
-	c.local.Routes = map[string]map[string]modelRoute{"local-model": {}}
+	c := config{Local: oneProvider(server.URL, "slow", "good")}
+	c.Local.ModelPools = map[string][]poolTarget{"fast": {{Model: "p/slow"}, {Model: "p/good"}}, "patient": {{Model: "p/slow"}, {Model: "p/good"}}, "stop": {{Model: "p/slow"}, {Model: "p/good"}}}
+	c.Local.PoolSettings = map[string]poolSettings{"fast": {Failover: true, FirstByteSec: 1}, "patient": {FirstByteSec: 3}, "stop": {FirstByteSec: 1}}
+	c.Local.Routes = map[string]map[string]modelRoute{"local-model": {}}
 	for _, tc := range []struct {
 		pool, served string
 		attempts     int
 	}{{"fast", "p/good", 2}, {"patient", "p/slow", 1}, {"stop", "", 1}} {
 		t.Run(tc.pool, func(t *testing.T) {
-			c.local.Routes["local-model"]["default"] = modelRoute{Mode: "pool", Pool: tc.pool}
-			_, trace := runLocal(t, c.forModel("local-model", "default"), newHealth(""))
+			c.Local.Routes["local-model"]["default"] = modelRoute{Mode: "pool", Pool: tc.pool}
+			_, trace := runLocal(t, c.ForModel("local-model", "default"), newHealth(""))
 			if trace.Served != tc.served || len(trace.Attempts) != tc.attempts {
 				t.Fatalf("served %q attempts %+v", trace.Served, trace.Attempts)
 			}
@@ -120,17 +120,17 @@ func TestPoolsUseIndependentTimeoutAndFailover(t *testing.T) {
 }
 
 func TestPoolProbesRespectMembershipAndIntervals(t *testing.T) {
-	c := config{local: oneProvider("http://example.test/v1", "shared", "only-disabled", "unpooled"), probeEvery: time.Second}
-	c.local.Providers = append(c.local.Providers, provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL})
-	c.local.Models = append(c.local.Models, localModel{Provider: "codex", Model: "gpt-test"})
-	c.local.ModelPools = map[string][]poolTarget{"a": {{Model: "p/shared"}, {Model: "codex/gpt-test"}}, "b": {{Model: "p/shared"}}, "off": {{Model: "p/only-disabled"}}}
-	c.local.PoolSettings = map[string]poolSettings{"a": {ProbeSec: 60, FirstByteSec: 40}, "b": {ProbeSec: 10, FirstByteSec: 5}, "off": {}}
+	c := config{Local: oneProvider("http://example.test/v1", "shared", "only-disabled", "unpooled"), ProbeEvery: time.Second}
+	c.Local.Providers = append(c.Local.Providers, provider{Name: "codex", Type: "codex", BaseURL: CodexBaseURL})
+	c.Local.Models = append(c.Local.Models, localModel{Provider: "codex", Model: "gpt-test"})
+	c.Local.ModelPools = map[string][]poolTarget{"a": {{Model: "p/shared"}, {Model: "codex/gpt-test"}}, "b": {{Model: "p/shared"}}, "off": {{Model: "p/only-disabled"}}}
+	c.Local.PoolSettings = map[string]poolSettings{"a": {ProbeSec: 60, FirstByteSec: 40}, "b": {ProbeSec: 10, FirstByteSec: 5}, "off": {}}
 	planned := poolProbeConfigs(c)
-	if len(planned) != 1 || planned["p/shared"].probeEvery != 10*time.Second || planned["p/shared"].firstByte != 5*time.Second {
+	if len(planned) != 1 || planned["p/shared"].ProbeEvery != 10*time.Second || planned["p/shared"].FirstByte != 5*time.Second {
 		t.Fatal("probe settings not scoped/deduplicated")
 	}
-	c.local.PoolSettings["b"] = poolSettings{}
-	if got := poolProbeConfigs(c)["p/shared"].probeEvery; got != time.Minute {
+	c.Local.PoolSettings["b"] = poolSettings{}
+	if got := poolProbeConfigs(c)["p/shared"].ProbeEvery; got != time.Minute {
 		t.Fatalf("disabled pool still schedules probes: %v", got)
 	}
 }

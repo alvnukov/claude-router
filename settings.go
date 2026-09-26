@@ -43,7 +43,7 @@ type reloadFailure struct {
 	Snapshot time.Time
 }
 
-func (s *configStore) noteReload(file string, err error) {
+func (s *configStore) NoteReload(file string, err error) {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	if err == nil {
@@ -61,7 +61,7 @@ func (s *configStore) noteReload(file string, err error) {
 	s.reloadErrs[file] = reloadFailure{File: file, Err: err.Error(), At: time.Now(), Snapshot: s.appliedAt}
 }
 
-func (s *configStore) reloadFailures() []reloadFailure {
+func (s *configStore) ReloadFailures() []reloadFailure {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	out := make([]reloadFailure, 0, len(s.reloadErrs))
@@ -105,8 +105,8 @@ func (s *configStore) wroteEnv() {
 	}
 }
 
-// envFilePath is ROUTER_ENV_FILE or the env file beside the binary.
-func envFilePath() string {
+// EnvFilePath is ROUTER_ENV_FILE or the env file beside the binary.
+func EnvFilePath() string {
 	if p := os.Getenv("ROUTER_ENV_FILE"); p != "" {
 		return p
 	}
@@ -116,13 +116,13 @@ func envFilePath() string {
 	return "env"
 }
 
-// loadEnvFile exports the env file into the process before the config is
+// LoadEnvFile exports the env file into the process before the config is
 // read, so the binary can be started directly (by launchd or by hand) with
 // nothing sourcing the file first. The file wins over inherited variables,
 // the same as the hot reload does later; a missing file is fine.
-func loadEnvFile() {
-	p := envFilePath()
-	vals, err := readEnv(p)
+func LoadEnvFile() {
+	p := EnvFilePath()
+	vals, err := ReadEnv(p)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("env: %s: %v", p, err)
@@ -138,8 +138,8 @@ func loadEnvFile() {
 	log.Printf("env: %d vars from %s", len(vals), p)
 }
 
-func newConfigStore(c config, provPath string) *configStore {
-	p := envFilePath()
+func NewStore(c config, provPath string) *configStore {
+	p := EnvFilePath()
 	s := &configStore{c: c, envPath: p, provPath: provPath}
 	s.envMtime = mtime(p)
 	s.provMtime = mtime(provPath)
@@ -155,14 +155,14 @@ func mtime(p string) time.Time {
 	return time.Time{}
 }
 
-// migrate runs the config migrations a standby slot skipped at start.
-func (s *configStore) migrate() error {
+// Migrate runs the config migrations a standby slot skipped at start.
+func (s *configStore) Migrate() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.provPath == "" {
 		return nil
 	}
-	c, err := migrateConfig(s.c, s.provPath)
+	c, err := MigrateConfig(s.c, s.provPath)
 	if err != nil {
 		return err
 	}
@@ -171,17 +171,17 @@ func (s *configStore) migrate() error {
 	return nil
 }
 
-func (s *configStore) get() config {
+func (s *configStore) Get() config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.c
 }
 
-// watch applies hand edits to either file without a restart. Only the
+// Watch applies hand edits to either file without a restart. Only the
 // settings the UI can change are reloaded; addresses and the upstream URL are
 // bound at start and still need one. A write from the UI bumps the mtime too;
 // that reload is a no-op because the values already match.
-func (s *configStore) watch(ctx context.Context, every time.Duration, life *lifecycle) {
+func (s *configStore) Watch(ctx context.Context, every time.Duration, life *lifecycle) {
 	go func() {
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
@@ -194,67 +194,67 @@ func (s *configStore) watch(ctx context.Context, every time.Duration, life *life
 			if life.mode() != modeActive {
 				continue
 			}
-			s.pollOnce()
+			s.Poll()
 		}
 	}()
 }
 
-// pollOnce applies a hand edit of either file. A rejected edit keeps the
+// Poll applies a hand edit of either file. A rejected edit keeps the
 // previous snapshot and shows on the settings page until a good reload.
-func (s *configStore) pollOnce() {
+func (s *configStore) Poll() {
 	if m := mtime(s.envPath); !m.Equal(s.envMtime) {
 		s.envMtime = m
-		changed, err := s.reloadEnv()
-		s.noteReload(s.envPath, err)
+		changed, err := s.ReloadEnv()
+		s.NoteReload(s.envPath, err)
 		if err == nil && changed {
-			c := s.get()
+			c := s.Get()
 			log.Printf("env reloaded: failover=%v first-byte=%s balance=%d probe=%s budget=%d",
-				c.failover, c.firstByte, c.balance, c.probeEvery, c.maxInputChars)
+				c.Failover, c.FirstByte, c.Balance, c.ProbeEvery, c.MaxInputChars)
 		}
 	}
 	if s.provPath == "" {
 		return
 	}
 	if m, p := mtime(s.provPath), profilesMtime(s.provPath); !m.Equal(s.provMtime) || !p.Equal(s.profileMtime) {
-		if err := s.reloadProfiles(s.health); err != nil {
+		if err := s.Reload(s.health); err != nil {
 			if !os.IsNotExist(err) {
-				s.noteReload(s.provPath, err)
+				s.NoteReload(s.provPath, err)
 			}
 		} else {
 			s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
-			s.noteReload(s.provPath, nil)
-			log.Printf("providers reloaded: %s", s.get().local.summary())
+			s.NoteReload(s.provPath, nil)
+			log.Printf("providers reloaded: %s", s.Get().Local.Summary())
 		}
 	}
 }
 
-func (l localSetup) summary() string {
+func (l localSetup) Summary() string {
 	var ms []string
-	for _, m := range l.ordered() {
+	for _, m := range l.Ordered() {
 		ms = append(ms, m.Key())
 	}
 	return fmt.Sprintf("providers=%d models=%s", len(l.Providers), strings.Join(ms, ","))
 }
 
-func (s *configStore) reloadEnv() (bool, error) {
-	vals, err := readEnv(s.envPath)
+func (s *configStore) ReloadEnv() (bool, error) {
+	vals, err := ReadEnv(s.envPath)
 	if err != nil {
 		return false, err
 	}
-	before := s.get()
-	in := inputFromConfig(before)
+	before := s.Get()
+	in := InputFromConfig(before)
 	in.MaxInputChars = pick(vals, "ROUTER_LOCAL_MAX_INPUT_CHARS", in.MaxInputChars)
 	in.Failover = pick(vals, "ROUTER_LOCAL_FAILOVER", in.Failover)
 	in.FirstByte = pick(vals, "ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", in.FirstByte)
 	in.Balance = pick(vals, "ROUTER_LOCAL_BALANCE", in.Balance)
 	in.ProbeEvery = pick(vals, "ROUTER_LOCAL_PROBE_INTERVAL", in.ProbeEvery)
-	if err := s.apply(in, false); err != nil {
+	if err := s.Apply(in, false); err != nil {
 		return false, err
 	}
-	after := s.get()
-	return before.maxInputChars != after.maxInputChars ||
-		before.failover != after.failover || before.firstByte != after.firstByte ||
-		before.balance != after.balance || before.probeEvery != after.probeEvery, nil
+	after := s.Get()
+	return before.MaxInputChars != after.MaxInputChars ||
+		before.Failover != after.Failover || before.FirstByte != after.FirstByte ||
+		before.Balance != after.Balance || before.ProbeEvery != after.ProbeEvery, nil
 }
 
 // settingsInput is the env-backed part of the settings, as strings from a form.
@@ -267,23 +267,23 @@ type settingsInput struct {
 	Type          string // pool type; "" keeps the stored one
 }
 
-func inputFromConfig(c config) settingsInput {
+func InputFromConfig(c config) settingsInput {
 	fo := "0"
-	if c.failover {
+	if c.Failover {
 		fo = "1"
 	}
 	return settingsInput{
-		MaxInputChars: strconv.Itoa(c.maxInputChars),
+		MaxInputChars: strconv.Itoa(c.MaxInputChars),
 		Failover:      fo,
-		FirstByte:     strconv.Itoa(int(c.firstByte / time.Second)),
-		Balance:       strconv.Itoa(c.balance),
-		ProbeEvery:    strconv.Itoa(int(c.probeEvery / time.Second)),
+		FirstByte:     strconv.Itoa(int(c.FirstByte / time.Second)),
+		Balance:       strconv.Itoa(c.Balance),
+		ProbeEvery:    strconv.Itoa(int(c.ProbeEvery / time.Second)),
 	}
 }
 
-// apply validates and installs the env-backed settings; with write set it
+// Apply validates and installs the env-backed settings; with write set it
 // also rewrites the env file so they survive a restart.
-func (s *configStore) apply(in settingsInput, write bool) error {
+func (s *configStore) Apply(in settingsInput, write bool) error {
 	budget, err := strconv.Atoi(strings.TrimSpace(in.MaxInputChars))
 	if err != nil || budget < 0 {
 		return fmt.Errorf("max input chars: нужно целое число >= 0")
@@ -306,11 +306,11 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	next := s.c
-	next.maxInputChars = budget
-	next.failover = failover
-	next.firstByte = time.Duration(firstByte) * time.Second
-	next.balance = balance
-	next.probeEvery = time.Duration(probeEvery) * time.Second
+	next.MaxInputChars = budget
+	next.Failover = failover
+	next.FirstByte = time.Duration(firstByte) * time.Second
+	next.Balance = balance
+	next.ProbeEvery = time.Duration(probeEvery) * time.Second
 	if write {
 		foS := "0"
 		if failover {
@@ -323,7 +323,7 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 			"ROUTER_LOCAL_BALANCE":            strconv.Itoa(balance),
 			"ROUTER_LOCAL_PROBE_INTERVAL":     strconv.Itoa(probeEvery),
 		}
-		if err := writeEnv(s.envPath, updates); err != nil {
+		if err := WriteEnv(s.envPath, updates); err != nil {
 			return fmt.Errorf("запись %s: %w", s.envPath, err)
 		}
 		s.wroteEnv()
@@ -332,9 +332,9 @@ func (s *configStore) apply(in settingsInput, write bool) error {
 	return nil
 }
 
-// applyLocal validates and installs a providers/models setup; with write set
+// ApplyLocal validates and installs a providers/models setup; with write set
 // it also rewrites providers.json.
-func (s *configStore) applyLocal(l localSetup, write bool, expectedProfile ...string) error {
+func (s *configStore) ApplyLocal(l localSetup, write bool, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.applyLocalLocked(l, write, expectedProfile...)
@@ -344,7 +344,7 @@ func (s *configStore) applyLocal(l localSetup, write bool, expectedProfile ...st
 // disk read through installation so activation cannot interleave.
 func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile ...string) error {
 	next := s.c
-	if write && l.Profiles != nil && (l.ActiveProfile != next.local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.local.ActiveProfile) {
+	if write && l.Profiles != nil && (l.ActiveProfile != next.Local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.Local.ActiveProfile) {
 		return fmt.Errorf("активный профиль изменился; обновите страницу")
 	}
 	if err := l.syncActiveProfile(); err != nil {
@@ -354,10 +354,10 @@ func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile
 	if err := l.validateProfiles(); err != nil {
 		return err
 	}
-	next.local = l
-	if migrated, changed := migratePoolSettings(next); changed {
+	next.Local = l
+	if migrated, changed := MigratePoolSettings(next); changed {
 		l = migrated
-		next.local = l
+		next.Local = l
 	}
 	if err := l.syncActiveProfile(); err != nil {
 		return err
@@ -369,7 +369,7 @@ func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile
 		if s.provPath == "" {
 			return fmt.Errorf("providers file disabled (ROUTER_PROVIDERS_FILE пуст)")
 		}
-		if err := writeProviders(s.provPath, l); err != nil {
+		if err := WriteProviders(s.provPath, l); err != nil {
 			return fmt.Errorf("запись %s: %w", s.provPath, err)
 		}
 		s.wroteProviders()

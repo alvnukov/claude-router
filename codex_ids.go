@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// newCodexAuthID names one connection's credential slot for its whole life.
-func newCodexAuthID() string {
+// NewCodexAuthID names one connection's credential slot for its whole life.
+func NewCodexAuthID() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
@@ -15,7 +15,7 @@ func newCodexAuthID() string {
 	return hex.EncodeToString(b)
 }
 
-func authIDOK(id string) bool {
+func AuthIDOK(id string) bool {
 	if len(id) != 32 {
 		return false
 	}
@@ -35,7 +35,7 @@ func assignCodexAuthIDs(l *localSetup) bool {
 	for i := range l.Providers {
 		p := &l.Providers[i]
 		if p.Type == "codex" && p.AuthID == "" && strings.TrimSpace(p.Name) != "codex" {
-			p.AuthID = newCodexAuthID()
+			p.AuthID = NewCodexAuthID()
 			changed = true
 		}
 	}

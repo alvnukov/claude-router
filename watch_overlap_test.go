@@ -14,11 +14,11 @@ func TestConfigWatchPausesInQuiesceAndResumesOnRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ROUTER_ENV_FILE", path)
-	cs := newConfigStore(config{balance: 1}, "")
+	cs := NewStore(config{Balance: 1}, "")
 	life := newLifecycle(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	cs.watch(ctx, 10*time.Millisecond, life)
+	cs.Watch(ctx, 10*time.Millisecond, life)
 	if err := life.quiesce(); err != nil {
 		t.Fatal(err)
 	}
@@ -32,14 +32,14 @@ func TestConfigWatchPausesInQuiesceAndResumesOnRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(80 * time.Millisecond)
-	if got := cs.get().balance; got != 1 {
+	if got := cs.Get().Balance; got != 1 {
 		t.Fatalf("quiesced config watch changed balance to %d", got)
 	}
 	if err := life.activate(); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.After(time.Second)
-	for cs.get().balance != 5 {
+	for cs.Get().Balance != 5 {
 		select {
 		case <-deadline:
 			t.Fatal("config watch did not resume after rollback")

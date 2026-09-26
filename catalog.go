@@ -36,7 +36,7 @@ type modelCatalog struct {
 	Notes            []string                   `json:"notes,omitempty"`
 }
 
-func (c modelCatalog) clone() modelCatalog {
+func (c modelCatalog) Clone() modelCatalog {
 	c.Anthropic = append([]string(nil), c.Anthropic...)
 	c.Notes = append([]string(nil), c.Notes...)
 	providers := map[string]providerCatalog{}
@@ -136,7 +136,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	}
 	u.catalogMu.Lock()
 	defer u.catalogMu.Unlock()
-	snapshot := u.cs.get().local
+	snapshot := u.cs.Get().Local
 	ids, fetchErr := u.fetchAnthropic(ctx)
 	results := map[string]probeResult{}
 	for _, p := range snapshot.Providers {
@@ -150,7 +150,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	if u.life != nil && !u.life.writesSharedState() {
 		return fmt.Errorf("model catalog refresh requires active instance")
 	}
-	next := u.cs.c.local.clone()
+	next := u.cs.c.Local.Clone()
 	next.Catalog.CheckedAt = time.Now()
 	next.Catalog.Notes = nil
 	if fetchErr != nil {
@@ -161,7 +161,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	}
 	for _, p := range next.Providers {
 		res, exists := results[p.Name]
-		before, wasPresent := snapshot.provider(p.Name)
+		before, wasPresent := snapshot.Provider(p.Name)
 		if !exists || !wasPresent || before != p {
 			continue
 		}
@@ -175,7 +175,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 				cached.Models = append(cached.Models, catalogModel{ID: m.ID, Name: m.Name, Efforts: append([]string(nil), m.Efforts...)})
 			}
 			if p.Type == "codex" {
-				next.Catalog.Notes = append(next.Catalog.Notes, inheritCodexModels(&next, p.Name, cached.Models)...)
+				next.Catalog.Notes = append(next.Catalog.Notes, InheritCodexModels(&next, p.Name, cached.Models)...)
 			}
 		}
 		next.Catalog.Providers[p.Name] = cached
@@ -185,12 +185,12 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 		return err
 	}
 	if u.cs.provPath != "" {
-		if err := writeProviders(u.cs.provPath, next); err != nil {
+		if err := WriteProviders(u.cs.provPath, next); err != nil {
 			return err
 		}
 		u.cs.wroteProviders()
 	}
-	u.cs.c.local = next
+	u.cs.c.Local = next
 	log.Printf("model catalogs refreshed: anthropic=%d providers=%d notes=%d", len(next.Catalog.Anthropic), len(results), len(next.Catalog.Notes))
 	return nil
 }
@@ -198,7 +198,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 // New Codex versions append to each matching pool using that pool's newest
 // earlier member as the effort template. A removed model is not re-added on
 // the next refresh, and distinct named variants never inherit from each other.
-func inheritCodexModels(l *localSetup, providerName string, models []catalogModel) []string {
+func InheritCodexModels(l *localSetup, providerName string, models []catalogModel) []string {
 	if l.Catalog.CodexSeen == nil {
 		l.Catalog.CodexSeen = map[string][]string{}
 	}
@@ -206,7 +206,7 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 	for _, id := range l.Catalog.CodexSeen[providerName] {
 		seen[id] = true
 	}
-	original := l.clone()
+	original := l.Clone()
 	var notes []string
 	for _, m := range models {
 		if seen[m.ID] {
@@ -214,10 +214,10 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 		}
 		seen[m.ID] = true
 		key := providerName + "/" + m.ID
-		if !l.hasModel(key) {
+		if !l.HasModel(key) {
 			l.Models = append(l.Models, localModel{Provider: providerName, Model: m.ID})
 		}
-		family := codexFamily(m.ID)
+		family := CodexFamily(m.ID)
 		if family == "" {
 			continue
 		}
@@ -246,7 +246,7 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 					continue
 				}
 				id := strings.TrimPrefix(member.Model, prefix)
-				if codexFamily(id) == family && newerModel(m.ID, id) && (templateID == "" || newerModel(id, templateID)) {
+				if CodexFamily(id) == family && NewerModel(m.ID, id) && (templateID == "" || NewerModel(id, templateID)) {
 					template, templateID = member, id
 				}
 			}
@@ -283,7 +283,7 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 						continue
 					}
 					id := strings.TrimPrefix(member.Model, prefix)
-					if codexFamily(id) == family && newerModel(m.ID, id) && (templateID == "" || newerModel(id, templateID)) {
+					if CodexFamily(id) == family && NewerModel(m.ID, id) && (templateID == "" || NewerModel(id, templateID)) {
 						template, templateID = member, id
 					}
 				}

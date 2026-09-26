@@ -15,9 +15,9 @@ func pick(m map[string]string, key, def string) string {
 	return def
 }
 
-// readEnv parses the KEY=VALUE subset of shell syntax the env file uses:
+// ReadEnv parses the KEY=VALUE subset of shell syntax the env file uses:
 // optional `export`, double quotes with Go-style escapes, single quotes verbatim.
-func readEnv(path string) (map[string]string, error) {
+func ReadEnv(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -49,11 +49,11 @@ func readEnv(path string) (map[string]string, error) {
 	return out, nil
 }
 
-// writeEnv rewrites KEY=VALUE lines in place, keeping comments and every other
+// WriteEnv rewrites KEY=VALUE lines in place, keeping comments and every other
 // line as they are, and appends keys the file did not have. The file holds the
 // local endpoint's API key, so it is written 0600 through a temp file and a
 // rename rather than truncated in place.
-func writeEnv(path string, updates map[string]string) error {
+func WriteEnv(path string, updates map[string]string) error {
 	mode := os.FileMode(0o600)
 	var lines []string
 	if data, err := os.ReadFile(path); err == nil {

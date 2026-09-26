@@ -27,7 +27,7 @@ func TestLaunchdSlotAddressesOverrideLegacyEnvFile(t *testing.T) {
 	os.Setenv("ROUTER_UI_LISTEN", "127.0.0.1:8794")
 	os.Setenv("ROUTER_STANDBY", "1")
 	os.Setenv("ROUTER_ACTIVE_SLOT_FILE", "/slot/active-slot")
-	loadEnvFile()
+	LoadEnvFile()
 	if os.Getenv("ROUTER_LISTEN") != "127.0.0.1:8792" || os.Getenv("ROUTER_UI_LISTEN") != "127.0.0.1:8794" || os.Getenv("ROUTER_STANDBY") != "1" {
 		t.Fatalf("legacy env took slot ports or standby mode: %s %s %s", os.Getenv("ROUTER_LISTEN"), os.Getenv("ROUTER_UI_LISTEN"), os.Getenv("ROUTER_STANDBY"))
 	}

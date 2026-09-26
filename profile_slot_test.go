@@ -11,18 +11,18 @@ import (
 
 func TestStandbyActivationReloadsSeparateProfilePointerWithoutWritingConfig(t *testing.T) {
 	owner, h, path := profileFixture(t)
-	if err := owner.ensureProfiles(); err != nil {
+	if err := owner.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
-	if err := owner.createProfile("cloud", false); err != nil {
+	if err := owner.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	standbySetup, err := readProviders(path)
+	standbySetup, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	standby := newConfigStore(config{local: standbySetup}, path)
-	if err := owner.activateProfile("cloud", h); err != nil {
+	standby := NewStore(config{Local: standbySetup}, path)
+	if err := owner.ActivateProfile("cloud", h); err != nil {
 		t.Fatal(err)
 	}
 	providerBefore, err := os.ReadFile(path)
@@ -50,8 +50,8 @@ func TestStandbyActivationReloadsSeparateProfilePointerWithoutWritingConfig(t *t
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("standby activation: %d %s", w.Code, w.Body.String())
 	}
-	if life.mode() != modeActive || standby.get().local.ActiveProfile != "cloud" {
-		t.Fatalf("active mode=%s profile=%q", life.mode(), standby.get().local.ActiveProfile)
+	if life.mode() != modeActive || standby.Get().Local.ActiveProfile != "cloud" {
+		t.Fatalf("active mode=%s profile=%q", life.mode(), standby.Get().Local.ActiveProfile)
 	}
 	providerAfter, err := os.ReadFile(path)
 	if err != nil {
@@ -77,7 +77,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"p","base_url":"http://h/v1"}],"models":[{"provider":"p","model":"a"}],"pools":{"opus":["p/a"]}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := readProviders(path)
+	legacy, err := ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte(`{"stats":{},"sessions":{}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	standby := newConfigStore(config{local: legacy}, path)
+	standby := NewStore(config{Local: legacy}, path)
 	r := &routerServer{cs: standby, health: newHealth(""), life: newLifecycle(true)}
 	w := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
@@ -99,8 +99,8 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 			t.Fatalf("activation skipped a migration: %v", err)
 		}
 	}
-	saved, err := readProviders(path)
-	if err != nil || saved.Pools != nil || saved.Routes == nil || standby.get().local.Routes == nil {
+	saved, err := ReadProviders(path)
+	if err != nil || saved.Pools != nil || saved.Routes == nil || standby.Get().Local.Routes == nil {
 		t.Fatalf("migrated routes not saved and served: %v", err)
 	}
 }
@@ -109,7 +109,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 // only writes it once activation makes it the only writer.
 func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + codexBaseURL + `"}]}`
+	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + CodexBaseURL + `"}]}`
 	writeRaw(t, path, raw)
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)
 	t.Setenv("ROUTER_STANDBY", "1")
@@ -127,7 +127,7 @@ func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte(`{"stats":{},"sessions":{}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	standby := newConfigStore(c, path)
+	standby := NewStore(c, path)
 	r := &routerServer{cs: standby, health: newHealth(""), life: newLifecycle(true)}
 	w := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
@@ -136,13 +136,13 @@ func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("standby activation: %d %s", w.Code, w.Body.String())
 	}
-	saved, err := readProviders(path)
+	saved, err := ReadProviders(path)
 	if err != nil {
 		t.Fatalf("activation left providers.json without auth_id: %v", err)
 	}
-	onDisk, _ := saved.provider("work")
-	served, _ := standby.get().local.provider("work")
-	if !authIDOK(onDisk.AuthID) || served.AuthID != onDisk.AuthID {
+	onDisk, _ := saved.Provider("work")
+	served, _ := standby.Get().Local.Provider("work")
+	if !AuthIDOK(onDisk.AuthID) || served.AuthID != onDisk.AuthID {
 		t.Fatalf("auth_id on disk %q, served %q", onDisk.AuthID, served.AuthID)
 	}
 	if backup, _ := os.ReadFile(path + ".before-codex-ids"); string(backup) != raw {

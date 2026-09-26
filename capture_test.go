@@ -48,7 +48,7 @@ func TestBuildContext(t *testing.T) {
 func TestWriteEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "# comment\nROUTER_LOCAL_MODEL=old\nOTHER=keep\n")
-	err := writeEnv(p, map[string]string{"ROUTER_LOCAL_MODEL": "new", "ROUTER_CLOUD_ONLY": "a,b", "ROUTER_LOCAL_API_KEY": "k y"})
+	err := WriteEnv(p, map[string]string{"ROUTER_LOCAL_MODEL": "new", "ROUTER_CLOUD_ONLY": "a,b", "ROUTER_LOCAL_API_KEY": "k y"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,9 +61,9 @@ func TestWriteEnv(t *testing.T) {
 }
 
 func TestUnassignedBackendIsDisabled(t *testing.T) {
-	c := config{local: oneProvider("http://h/v1", "new")}
+	c := config{Local: oneProvider("http://h/v1", "new")}
 	for _, model := range []string{"old", "new", "p/new", "local-model"} {
-		if c.routeFor(model, "default").Mode != "disabled" {
+		if c.RouteFor(model, "default").Mode != "disabled" {
 			t.Fatalf("unassigned %s is enabled", model)
 		}
 	}
@@ -72,7 +72,7 @@ func TestUnassignedBackendIsDisabled(t *testing.T) {
 func TestReadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "# c\nexport A=1\nB=\"x y\"\nC='q'\nD=\nbad line\n")
-	m, err := readEnv(p)
+	m, err := ReadEnv(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,47 +88,47 @@ func TestReloadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n")
 	t.Setenv("ROUTER_ENV_FILE", p)
-	cs := newConfigStore(config{failover: true, firstByte: 45 * time.Second}, "")
-	changed, err := cs.reloadEnv()
+	cs := NewStore(config{Failover: true, FirstByte: 45 * time.Second}, "")
+	changed, err := cs.ReloadEnv()
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
 	}
-	c := cs.get()
-	if c.failover || c.routeFor("claude-opus-5", "default").Mode != "disabled" || c.firstByte != 45*time.Second {
+	c := cs.Get()
+	if c.Failover || c.RouteFor("claude-opus-5", "default").Mode != "disabled" || c.FirstByte != 45*time.Second {
 		t.Fatalf("%+v", c)
 	}
-	if changed, _ = cs.reloadEnv(); changed {
+	if changed, _ = cs.ReloadEnv(); changed {
 		t.Fatal("second reload should be a no-op")
 	}
 }
 
 func TestProvidersFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "providers.json")
-	cs := newConfigStore(config{local: oneProvider("http://h/v1", "zero")}, p)
+	cs := NewStore(config{Local: oneProvider("http://h/v1", "zero")}, p)
 	l := localSetup{
 		Providers:  []provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
 		Models:     []localModel{{Provider: "a", Model: "m1"}, {Provider: "b", Model: "m2"}, {Provider: "a", Model: "m1"}},
 		ModelPools: map[string][]poolTarget{"work": {{Model: "b/m2", Effort: "high"}}},
 		Routes:     map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}}},
 	}
-	if err := cs.applyLocal(l, true); err != nil {
+	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
 	requirePrivateFile(t, p)
-	c := cs.get()
-	if len(c.local.Models) != 2 || c.local.Providers[0].BaseURL != "http://a/v1" || c.routeFor("zero", "default").Mode != "disabled" || c.routeFor("m2", "default").Mode != "disabled" {
-		t.Fatalf("%+v", c.local)
+	c := cs.Get()
+	if len(c.Local.Models) != 2 || c.Local.Providers[0].BaseURL != "http://a/v1" || c.RouteFor("zero", "default").Mode != "disabled" || c.RouteFor("m2", "default").Mode != "disabled" {
+		t.Fatalf("%+v", c.Local)
 	}
-	got, err := readProviders(p)
-	if err != nil || got.Preferred != "" || got.routeFor("claude-opus-5", "high").Pool != "work" || got.ModelPools["work"][0].Effort != "high" || got.Providers[1].APIKey != "k" {
+	got, err := ReadProviders(p)
+	if err != nil || got.Preferred != "" || got.RouteFor("claude-opus-5", "high").Pool != "work" || got.ModelPools["work"][0].Effort != "high" || got.Providers[1].APIKey != "k" {
 		t.Fatalf("%+v %v", got, err)
 	}
 	bad := localSetup{Providers: []provider{{Name: "x", BaseURL: "http://x/v1"}}, Models: []localModel{{Provider: "nope", Model: "m"}}}
-	if err := cs.applyLocal(bad, false); err == nil {
+	if err := cs.ApplyLocal(bad, false); err == nil {
 		t.Fatal("model on unknown provider accepted")
 	}
 	bad = localSetup{Providers: []provider{{Name: "a/b", BaseURL: "http://x/v1"}}}
-	if err := cs.applyLocal(bad, false); err == nil {
+	if err := cs.ApplyLocal(bad, false); err == nil {
 		t.Fatal("slash in provider name accepted")
 	}
 }

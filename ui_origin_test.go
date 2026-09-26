@@ -11,11 +11,11 @@ import (
 
 func TestSettingsRejectCrossOriginMutations(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
-	l := u.cs.get().local.clone()
+	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	l := u.cs.Get().Local.Clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/m1"}}}
 	l.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "anthropic"}}}
-	if err := u.cs.applyLocal(l, false); err != nil {
+	if err := u.cs.ApplyLocal(l, false); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -41,16 +41,16 @@ func TestSettingsRejectCrossOriginMutations(t *testing.T) {
 			}
 		})
 	}
-	cfg := u.cs.get()
-	if cfg.routeFor("claude-opus-5", "high").Mode != "anthropic" || len(cfg.local.ModelPools["work"]) != 1 || len(cfg.local.Providers) != 1 || len(cfg.local.Models) != 1 {
-		t.Fatalf("cross-origin POST changed settings: %+v", cfg.local)
+	cfg := u.cs.Get()
+	if cfg.RouteFor("claude-opus-5", "high").Mode != "anthropic" || len(cfg.Local.ModelPools["work"]) != 1 || len(cfg.Local.Providers) != 1 || len(cfg.Local.Models) != 1 {
+		t.Fatalf("cross-origin POST changed settings: %+v", cfg.Local)
 	}
 	r := httptest.NewRequest(http.MethodPost, "http://localhost:8788/settings/route", strings.NewReader(url.Values{"model": {"claude-opus-5"}, "high": {"pool:work"}}.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "http://localhost:8788")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != http.StatusOK || u.cs.get().routeFor("claude-opus-5", "high").Pool != "work" {
-		t.Fatalf("same-origin update rejected: status=%d, route=%+v", w.Code, u.cs.get().routeFor("claude-opus-5", "high"))
+	if w.Code != http.StatusOK || u.cs.Get().RouteFor("claude-opus-5", "high").Pool != "work" {
+		t.Fatalf("same-origin update rejected: status=%d, route=%+v", w.Code, u.cs.Get().RouteFor("claude-opus-5", "high"))
 	}
 }
