@@ -41,7 +41,7 @@ func TestFailedWritesChangeNothing(t *testing.T) {
 			l := h.s.Get().Local.Clone()
 			l.Models = append(l.Models, Model{Provider: "lab", Model: "qwen-coder-next"})
 			return h.s.Update(Replace(l, ""))
-		}, "запись " + h.path + ": open " + h.path + ".tmp: permission denied"},
+		}, "запись настроек провайдеров: open " + h.path + ".tmp: permission denied"},
 		{"settings", func() error {
 			return h.s.UpdateSettings(func(in *SettingsInput) error {
 				in.MaxInputChars = "150000"
@@ -50,8 +50,8 @@ func TestFailedWritesChangeNothing(t *testing.T) {
 		}, "запись " + h.dir + "/env: open " + h.dir + "/.env.*: permission denied"},
 		{"pool settings", func() error {
 			return h.s.SavePoolSettings("work", PoolSettings{Type: PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15})
-		}, "запись " + h.path + ": open " + profiles + "/default.json.tmp: permission denied"},
-		{"create profile", func() error { return h.s.CreateProfile("night", true) }, "запись " + h.path + ": open " + profiles + "/night.json.tmp: permission denied"},
+		}, "запись настроек провайдеров: open " + profiles + "/default.json.tmp: permission denied"},
+		{"create profile", func() error { return h.s.CreateProfile("night", true) }, "запись настроек провайдеров: open " + profiles + "/night.json.tmp: permission denied"},
 		{"activate profile", func() error { return h.s.ActivateProfile("cloud") }, "open " + h.path + ".active-profile.tmp: permission denied"},
 		{"delete profile", func() error { return h.s.DeleteProfile("cloud") }, "remove " + profiles + "/cloud.json: permission denied"},
 	}

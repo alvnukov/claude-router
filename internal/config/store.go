@@ -471,8 +471,10 @@ func (s *Store) update(backup string, fn func(*Local) error) error {
 	if s.provPath == "" {
 		return fmt.Errorf("providers file disabled (ROUTER_PROVIDERS_FILE пуст)")
 	}
+	// persist writes providers.json and the profile files; its error names
+	// the one that failed.
 	if err := persist(s.provPath, next.Local, backup); err != nil {
-		return fmt.Errorf("запись %s: %w", s.provPath, err)
+		return fmt.Errorf("запись настроек провайдеров: %w", err)
 	}
 	s.commit(kindProviders)
 	s.c = next
