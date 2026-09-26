@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -26,6 +27,12 @@ type Config struct {
 
 	UIListen  string
 	UIHistory int
+}
+
+// MarshalJSON refuses: Local carries the providers' API keys, and a JSON
+// answer built from the whole Config would send them out.
+func (Config) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("config.Config не кодируется в JSON")
 }
 
 // Whole seconds, as pool settings store them.

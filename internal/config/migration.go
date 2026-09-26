@@ -106,22 +106,31 @@ func SaveConfigurationMigration(path string, l Local, suffix string) error {
 	if path == "" {
 		return nil
 	}
-	if data, err := os.ReadFile(path); err == nil {
-		backup, err := os.OpenFile(path+suffix, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err == nil {
-			_, err = backup.Write(data)
-			closeErr := backup.Close()
-			if err != nil {
-				return err
+	return persist(path, l, suffix)
+}
+
+// persist is the one writer of providers.json and its profiles. With backup
+// set it first keeps the file as it was in path+backup; an existing backup
+// stays, so it holds the state before the first such write.
+func persist(path string, l Local, backup string) error {
+	if backup != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			f, err := os.OpenFile(path+backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+			if err == nil {
+				_, err = f.Write(data)
+				closeErr := f.Close()
+				if err != nil {
+					return err
+				}
+				if closeErr != nil {
+					return closeErr
+				}
+			} else if !os.IsExist(err) {
+				return fmt.Errorf("backup: %w", err)
 			}
-			if closeErr != nil {
-				return closeErr
-			}
-		} else if !os.IsExist(err) {
-			return fmt.Errorf("backup: %w", err)
+		} else if !os.IsNotExist(err) {
+			return err
 		}
-	} else if !os.IsNotExist(err) {
-		return err
 	}
 	return WriteProviders(path, l)
 }

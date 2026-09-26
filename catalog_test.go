@@ -117,7 +117,7 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	<-entered
 	l := u.cs.Get().Local.Clone()
 	l.FamilyRoutes = map[string]map[string]modelRoute{"opus": {"high": {Mode: "anthropic"}}}
-	if err := u.cs.ApplyLocal(l, true); err != nil {
+	if err := u.cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -178,6 +178,7 @@ func TestCodexEffortControlsUseSelectedModelCatalog(t *testing.T) {
 
 func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 	u, h := testUI(t)
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return []string{"claude-opus-5-5"}, nil }
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/settings/refresh-models", nil))

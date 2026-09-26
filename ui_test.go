@@ -348,7 +348,7 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad providers file not reported")
 	}
-	if err := cs.ApplyLocal(cs.Get().Local, true); err != nil {
+	if err := cs.Update(conf.Replace(cs.Get().Local, "")); err != nil {
 		t.Fatal(err)
 	}
 	cs.Poll()
@@ -364,7 +364,7 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad env file not reported")
 	}
-	if err := cs.Apply(conf.InputFromConfig(cs.Get()), true); err != nil {
+	if err := cs.UpdateSettings(func(*conf.SettingsInput) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	cs.Poll()
@@ -388,7 +388,7 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad profile file not reported")
 	}
-	if err := cs.ApplyLocal(cs.Get().Local, true); err != nil {
+	if err := cs.Update(conf.Replace(cs.Get().Local, "")); err != nil {
 		t.Fatal(err)
 	}
 	cs.Poll()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -326,21 +327,18 @@ func TestConfigPinStoreWritesDoNotReload(t *testing.T) {
 		{name: "add model", fixture: "home", writes: true, op: func(p *configPin) error {
 			l := p.cs.Get().Local.Clone()
 			l.Models = append(l.Models, localModel{Provider: "lab", Model: "qwen-coder-next"})
-			return p.cs.ApplyLocal(l, true)
+			return p.cs.Update(conf.Replace(l, ""))
 		}},
 		{name: "drop model, repair inactive profile", fixture: "home", writes: true, op: func(p *configPin) error {
-			return p.cs.ApplyLocal(configPinModels(p), true)
+			return p.cs.Update(conf.Replace(configPinModels(p), ""))
 		}},
 		{name: "settings, budget", fixture: "home", writes: true, op: func(p *configPin) error {
-			in := conf.InputFromConfig(p.cs.Get())
-			in.MaxInputChars = "150000"
-			return p.cs.Apply(in, true)
+			return p.cs.UpdateSettings(func(in *conf.SettingsInput) error {
+				in.MaxInputChars = "150000"
+				return nil
+			})
 		}},
-		{name: "settings, failover", fixture: "home", writes: true, op: func(p *configPin) error {
-			in := conf.InputFromConfig(p.cs.Get())
-			in.Failover = "0"
-			return p.cs.Apply(in, true)
-		}},
+		{name: "settings, failover", fixture: "home", writes: true, op: func(p *configPin) error { return p.cs.SetFailover(false) }},
 		{name: "pool settings", fixture: "home", writes: true, op: func(p *configPin) error {
 			return p.cs.SavePoolSettings("work", poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15, MaxInputChars: 120000})
 		}},
@@ -353,6 +351,7 @@ func TestConfigPinStoreWritesDoNotReload(t *testing.T) {
 		{name: "catalog refresh", fixture: "home", writes: true, op: func(p *configPin) error { return p.srv.ui.refreshModels(context.Background()) }},
 		{name: "reload", fixture: "home", op: func(p *configPin) error { return p.cs.Reload() }},
 		{name: "migrate", fixture: "legacy", standby: true, writes: true, op: func(p *configPin) error { return p.cs.Migrate() }},
+		{name: "save codex ids", fixture: "legacy", standby: true, prepare: codexWork, writes: true, op: func(p *configPin) error { return p.cs.SaveCodexIDs() }},
 		{name: "activate standby", fixture: "legacy", standby: true, prepare: codexWork, writes: true, op: func(p *configPin) error {
 			if err := p.srv.runtimeAdmin(filepath.Join(p.dir, "state.json")).activate(); err != nil {
 				return err
@@ -481,21 +480,28 @@ func TestConfigPinRefusalsWriteNothing(t *testing.T) {
 		{"pool settings, other profile", func() error { return p.cs.SavePoolSettings("work", settings, "cloud") }, "активный профиль изменился; обновите страницу"},
 		{"create profile, exists", func() error { return p.cs.CreateProfile("cloud", true) }, `профиль "cloud" уже существует`},
 		{"create profile, bad name", func() error { return p.cs.CreateProfile("night/1", true) }, `неверное имя профиля "night/1"`},
-		{"replace, other profile expected", func() error { return p.cs.ApplyLocal(configPinModels(p), true, "cloud") }, "активный профиль изменился; обновите страницу"},
+		{"replace, other profile expected", func() error { return p.cs.Update(conf.Replace(configPinModels(p), "cloud")) }, "активный профиль изменился; обновите страницу"},
 		{"replace, other profile in setup", func() error {
 			l := configPinModels(p)
 			l.ActiveProfile = "cloud"
-			return p.cs.ApplyLocal(l, true)
+			return p.cs.Update(conf.Replace(l, ""))
 		}, "активный профиль изменился; обновите страницу"},
 		{"replace, route to no pool", func() error {
 			l := configPinModels(p)
 			l.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "pool", Pool: "ghost"}
-			return p.cs.ApplyLocal(l, true)
+			return p.cs.Update(conf.Replace(l, ""))
 		}, `профиль "default": пул "ghost" не существует`},
+		{"update, fn returned an error", func() error {
+			return p.cs.Update(func(l *localSetup) error {
+				l.Models = nil
+				return errors.New("stop")
+			})
+		}, "stop"},
 		{"settings, bad budget", func() error {
-			in := conf.InputFromConfig(p.cs.Get())
-			in.MaxInputChars = "-1"
-			return p.cs.Apply(in, true)
+			return p.cs.UpdateSettings(func(in *conf.SettingsInput) error {
+				in.MaxInputChars = "-1"
+				return nil
+			})
 		}, "max input chars: нужно целое число >= 0"},
 	}
 	p.seat()

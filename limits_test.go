@@ -76,7 +76,7 @@ func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store) 
 	if local != "" {
 		l.Providers[0].BaseURL = local
 	}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	u := newUIServer(st, cs, h)

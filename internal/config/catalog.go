@@ -65,7 +65,22 @@ func (s *Store) UpdateCatalog(snapshot Local, anthropic []string, anthropicErr e
 	if gate != nil && !gate.WritesSharedState() {
 		return fmt.Errorf("model catalog refresh requires active instance")
 	}
-	next := s.c.Local.Clone()
+	var anthropicCount, notes int
+	err := s.update("", func(next *Local) error {
+		mergeCatalog(next, snapshot, anthropic, anthropicErr, probes)
+		anthropicCount, notes = len(next.Catalog.Anthropic), len(next.Catalog.Notes)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	log.Printf("model catalogs refreshed: anthropic=%d providers=%d notes=%d", anthropicCount, len(probes), notes)
+	return nil
+}
+
+// mergeCatalog is the catalog part of UpdateCatalog; the store checks and
+// writes the result like any other change.
+func mergeCatalog(next *Local, snapshot Local, anthropic []string, anthropicErr error, probes map[string]ProviderProbe) {
 	next.Catalog.CheckedAt = time.Now()
 	next.Catalog.Notes = nil
 	if anthropicErr != nil {
@@ -87,24 +102,11 @@ func (s *Store) UpdateCatalog(snapshot Local, anthropic []string, anthropicErr e
 		} else {
 			cached = ProviderCatalog{UpdatedAt: res.At, Models: res.Models}
 			if p.Type == "codex" {
-				next.Catalog.Notes = append(next.Catalog.Notes, InheritCodexModels(&next, p.Name, cached.Models)...)
+				next.Catalog.Notes = append(next.Catalog.Notes, InheritCodexModels(next, p.Name, cached.Models)...)
 			}
 		}
 		next.Catalog.Providers[p.Name] = cached
 	}
-	next.repairInactiveProfiles()
-	if err := next.validateProfiles(); err != nil {
-		return err
-	}
-	if s.provPath != "" {
-		if err := WriteProviders(s.provPath, next); err != nil {
-			return err
-		}
-		s.wroteProviders()
-	}
-	s.c.Local = next
-	log.Printf("model catalogs refreshed: anthropic=%d providers=%d notes=%d", len(next.Catalog.Anthropic), len(probes), len(next.Catalog.Notes))
-	return nil
 }
 
 // New Codex versions append to each matching pool using that pool's newest

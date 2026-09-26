@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -80,29 +81,33 @@ func (s *Store) reloadFailing(file string) bool {
 	return ok
 }
 
-// wroteProviders records the router's own write of the providers file and its
-// profiles, so the watcher skips it. While a hand edit stands rejected the
-// watcher reads them back once instead: the write replaced the rejected file,
-// and the banner goes unless a file the write did not touch is still bad.
-func (s *Store) wroteProviders() {
-	s.provMtime = mtime(s.provPath)
-	s.wroteProfiles()
-}
+// written names what a write touched, for commit.
+type written int
 
-// wroteProfiles is wroteProviders for a write that leaves the providers file
-// alone, such as a profile switch or delete.
-func (s *Store) wroteProfiles() {
+const (
+	kindProviders written = iota // providers.json with its profiles
+	kindProfiles                 // the profiles alone: a switch or a delete
+	kindEnv                      // the env file
+)
+
+// commit records the router's own write so the watcher skips it. While a
+// hand edit stands rejected the watcher reads the files back once instead:
+// the write replaced the rejected file, and the banner goes unless a file the
+// write did not touch is still bad. It requires s.mu.
+func (s *Store) commit(kind written) {
+	switch kind {
+	case kindEnv:
+		s.envMtime = mtime(s.envPath)
+		if s.reloadFailing(s.envPath) {
+			s.envMtime = time.Time{}
+		}
+		return
+	case kindProviders:
+		s.provMtime = mtime(s.provPath)
+	}
 	s.profileMtime = profilesMtime(s.provPath)
 	if s.reloadFailing(s.provPath) {
 		s.provMtime = time.Time{}
-	}
-}
-
-// wroteEnv is wroteProviders for the env file.
-func (s *Store) wroteEnv() {
-	s.envMtime = mtime(s.envPath)
-	if s.reloadFailing(s.envPath) {
-		s.envMtime = time.Time{}
 	}
 }
 
@@ -143,6 +148,10 @@ func LoadEnvFile() {
 // may. The store asks it before a timed reload and a catalog merge.
 type Gate interface{ WritesSharedState() bool }
 
+// ErrProfileChanged refuses a form built for a profile that is no longer
+// active.
+var ErrProfileChanged = errors.New("активный профиль изменился; обновите страницу")
+
 func NewStore(c Config, provPath string) *Store {
 	p := EnvFilePath()
 	s := &Store{c: c, envPath: p, provPath: provPath}
@@ -180,13 +189,16 @@ func (s *Store) Migrate() error {
 		return err
 	}
 	s.c = c
-	s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
+	s.commit(kindProviders)
 	return nil
 }
 
 // SaveCodexIDs writes the auth_id values the start of an active router would
-// have written; a standby slot assigned them only in memory.
+// have written; a standby slot assigned them only in memory. It reads the
+// file, not the snapshot: the old slot may have changed it since.
 func (s *Store) SaveCodexIDs() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.provPath == "" {
 		return nil
 	}
@@ -194,7 +206,11 @@ func (s *Store) SaveCodexIDs() error {
 	if err != nil || !assigned {
 		return err
 	}
-	return SaveConfigurationMigration(s.provPath, local, ".before-codex-ids")
+	if err := persist(s.provPath, local, ".before-codex-ids"); err != nil {
+		return err
+	}
+	s.commit(kindProviders)
+	return nil
 }
 
 func (s *Store) Get() Config {
@@ -217,12 +233,18 @@ func (s *Store) Watch(ctx context.Context, every time.Duration, gate Gate) {
 				return
 			case <-ticker.C:
 			}
-			if gate != nil && !gate.WritesSharedState() {
-				continue
-			}
-			s.Poll()
+			s.tick(gate)
 		}
 	}()
+}
+
+// tick is one round of Watch. A slot that does not write shared state leaves
+// the files to the one that does.
+func (s *Store) tick(gate Gate) {
+	if gate != nil && !gate.WritesSharedState() {
+		return
+	}
+	s.Poll()
 }
 
 // Poll applies a hand edit of either file. A rejected edit keeps the
@@ -268,13 +290,15 @@ func (s *Store) ReloadEnv() (bool, error) {
 		return false, err
 	}
 	before := s.Get()
-	in := InputFromConfig(before)
-	in.MaxInputChars = pick(vals, "ROUTER_LOCAL_MAX_INPUT_CHARS", in.MaxInputChars)
-	in.Failover = pick(vals, "ROUTER_LOCAL_FAILOVER", in.Failover)
-	in.FirstByte = pick(vals, "ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", in.FirstByte)
-	in.Balance = pick(vals, "ROUTER_LOCAL_BALANCE", in.Balance)
-	in.ProbeEvery = pick(vals, "ROUTER_LOCAL_PROBE_INTERVAL", in.ProbeEvery)
-	if err := s.Apply(in, false); err != nil {
+	err = s.updateSettings(false, func(in *SettingsInput) error {
+		in.MaxInputChars = pick(vals, "ROUTER_LOCAL_MAX_INPUT_CHARS", in.MaxInputChars)
+		in.Failover = pick(vals, "ROUTER_LOCAL_FAILOVER", in.Failover)
+		in.FirstByte = pick(vals, "ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", in.FirstByte)
+		in.Balance = pick(vals, "ROUTER_LOCAL_BALANCE", in.Balance)
+		in.ProbeEvery = pick(vals, "ROUTER_LOCAL_PROBE_INTERVAL", in.ProbeEvery)
+		return nil
+	})
+	if err != nil {
 		return false, err
 	}
 	after := s.Get()
@@ -293,7 +317,7 @@ type SettingsInput struct {
 	Type          string // pool type; "" keeps the stored one
 }
 
-func InputFromConfig(c Config) SettingsInput {
+func inputFromConfig(c Config) SettingsInput {
 	fo := "0"
 	if c.Failover {
 		fo = "1"
@@ -307,9 +331,34 @@ func InputFromConfig(c Config) SettingsInput {
 	}
 }
 
-// Apply validates and installs the env-backed settings; with write set it
-// also rewrites the env file so they survive a restart.
-func (s *Store) Apply(in SettingsInput, write bool) error {
+// UpdateSettings changes the env-backed settings: fn edits the current ones as
+// form strings under the store lock, then the store checks them, rewrites the
+// env file and installs them.
+func (s *Store) UpdateSettings(fn func(*SettingsInput) error) error {
+	return s.updateSettings(true, fn)
+}
+
+// SetFailover switches failover and keeps the other settings as the store
+// holds them, not as a page showed them.
+func (s *Store) SetFailover(on bool) error {
+	return s.UpdateSettings(func(in *SettingsInput) error {
+		in.Failover = "0"
+		if on {
+			in.Failover = "1"
+		}
+		return nil
+	})
+}
+
+// updateSettings validates and installs the env-backed settings; with write
+// set it also rewrites the env file so they survive a restart.
+func (s *Store) updateSettings(write bool, fn func(*SettingsInput) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	in := inputFromConfig(s.c)
+	if err := fn(&in); err != nil {
+		return err
+	}
 	budget, err := strconv.Atoi(strings.TrimSpace(in.MaxInputChars))
 	if err != nil || budget < 0 {
 		return fmt.Errorf("max input chars: нужно целое число >= 0")
@@ -329,8 +378,6 @@ func (s *Store) Apply(in SettingsInput, write bool) error {
 	fo := strings.TrimSpace(in.Failover)
 	failover := fo != "0" && fo != ""
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	next := s.c
 	next.MaxInputChars = budget
 	next.Failover = failover
@@ -352,54 +399,80 @@ func (s *Store) Apply(in SettingsInput, write bool) error {
 		if err := WriteEnv(s.envPath, updates); err != nil {
 			return fmt.Errorf("запись %s: %w", s.envPath, err)
 		}
-		s.wroteEnv()
+		s.commit(kindEnv)
 	}
 	s.c = next
 	return nil
 }
 
-// ApplyLocal validates and installs a providers/models setup; with write set
-// it also rewrites providers.json.
-func (s *Store) ApplyLocal(l Local, write bool, expectedProfile ...string) error {
+// Update changes the providers setup: fn edits a copy of the latest one under
+// the store lock, then the store checks the result, rewrites providers.json
+// and installs it. A refusal leaves both as they were.
+func (s *Store) Update(fn func(*Local) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.applyLocalLocked(l, write, expectedProfile...)
+	return s.update("", fn)
 }
 
-// applyLocalLocked requires s.mu; reload uses it while holding the lock from
-// disk read through installation so activation cannot interleave.
-func (s *Store) applyLocalLocked(l Local, write bool, expectedProfile ...string) error {
-	next := s.c
-	if write && l.Profiles != nil && (l.ActiveProfile != next.Local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.Local.ActiveProfile) {
-		return fmt.Errorf("активный профиль изменился; обновите страницу")
+// Replace is fn for Update that installs next whole, unless the form was
+// built for another active profile.
+// Помощник форм до 8b-1; правки API — замыканиями Update по полям.
+func Replace(next Local, expectedProfile string) func(*Local) error {
+	return func(cur *Local) error {
+		if next.Profiles != nil && (next.ActiveProfile != cur.ActiveProfile || expectedProfile != "" && expectedProfile != cur.ActiveProfile) {
+			return ErrProfileChanged
+		}
+		*cur = next
+		return nil
+	}
+}
+
+// update is the one way a change of the providers setup reaches the file:
+// prepare, write with an optional backup, commit, install. It requires s.mu,
+// so a wrapper makes its own checks in the same hold of the lock.
+func (s *Store) update(backup string, fn func(*Local) error) error {
+	next, err := s.prepare(fn)
+	if err != nil {
+		return err
+	}
+	if s.provPath == "" {
+		return fmt.Errorf("providers file disabled (ROUTER_PROVIDERS_FILE пуст)")
+	}
+	if err := persist(s.provPath, next.Local, backup); err != nil {
+		return fmt.Errorf("запись %s: %w", s.provPath, err)
+	}
+	s.commit(kindProviders)
+	s.c = next
+	return nil
+}
+
+// prepare runs fn on a copy of the providers setup and checks the result: the
+// active profile takes the edited routing, inactive profiles drop models that
+// are gone, pools get their settings. It requires s.mu; a reload installs
+// what it returns without a write.
+func (s *Store) prepare(fn func(*Local) error) (Config, error) {
+	l := s.c.Local.Clone()
+	if err := fn(&l); err != nil {
+		return Config{}, err
 	}
 	if err := l.syncActiveProfile(); err != nil {
-		return err
+		return Config{}, err
 	}
 	l.repairInactiveProfiles()
 	if err := l.validateProfiles(); err != nil {
-		return err
+		return Config{}, err
 	}
+	next := s.c
 	next.Local = l
 	if migrated, changed := MigratePoolSettings(next); changed {
 		l = migrated
-		next.Local = l
 	}
 	if err := l.syncActiveProfile(); err != nil {
-		return err
+		return Config{}, err
 	}
 	if err := l.validateProfiles(); err != nil {
-		return err
+		return Config{}, err
 	}
-	if write {
-		if s.provPath == "" {
-			return fmt.Errorf("providers file disabled (ROUTER_PROVIDERS_FILE пуст)")
-		}
-		if err := WriteProviders(s.provPath, l); err != nil {
-			return fmt.Errorf("запись %s: %w", s.provPath, err)
-		}
-		s.wroteProviders()
-	}
-	s.c = next
-	return nil
+	next.Local = l
+	return next, nil
 }

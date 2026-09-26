@@ -17,7 +17,7 @@ func TestSettingsRejectCrossOriginMutations(t *testing.T) {
 	l := u.cs.Get().Local.Clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/m1"}}}
 	l.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "anthropic"}}}
-	if err := u.cs.ApplyLocal(l, false); err != nil {
+	if err := u.cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {

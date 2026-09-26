@@ -111,7 +111,7 @@ func TestDirectRouteParsesModelIDWithColon(t *testing.T) {
 	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.Get().Local.Clone()
 	l.Models = append(l.Models, localModel{Provider: "p", Model: "model:version"})
-	if err := u.cs.ApplyLocal(l, false); err != nil {
+	if err := u.cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/model:version:high"}})
@@ -124,7 +124,7 @@ func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 	u, h := testUI(t)
 	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.Get().Local.Clone()
-	if err := u.cs.ApplyLocal(l, false); err != nil {
+	if err := u.cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	u.probe = map[string]probeResult{"p": {At: time.Now(), Base: l.Providers[0].BaseURL, Info: []probeModel{{ID: "m1", Efforts: []string{"low"}}}}}

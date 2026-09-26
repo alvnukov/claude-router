@@ -85,7 +85,7 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	}
 	l := cs.Get().Local.Clone()
 	l.FamilyRoutes["opus"] = map[string]modelRoute{"high": {Mode: "anthropic"}}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.ActivateProfile("default"); err != nil {
@@ -127,7 +127,7 @@ func TestProfilesGlobalProviderAndIndependentEditsSurviveRestart(t *testing.T) {
 	l.Providers = append(l.Providers, provider{Name: "shared", BaseURL: "http://shared.test/v1"})
 	l.Models = append(l.Models, localModel{Provider: "shared", Model: "new"})
 	l.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "model", Model: "shared/new"}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.ActivateProfile("default"); err != nil {
@@ -187,7 +187,7 @@ func TestProfilesProviderRemovalRepairsEveryProfile(t *testing.T) {
 	l.Providers = nil
 	l.Models = nil
 	l.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "disabled"}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.ActivateProfile("copy"); err != nil {
@@ -235,7 +235,7 @@ func TestProfilesCatalogRefreshPreservesBothProfilesOnDisk(t *testing.T) {
 	}
 	l := cs.Get().Local.Clone()
 	l.FamilyRoutes["opus"] = map[string]modelRoute{"high": {Mode: "anthropic"}}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	u := newUIServer(history.New(10, ""), cs, h)
@@ -298,7 +298,7 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 	cs = conf.NewStore(c, path)
 	l := cs.Get().Local.Clone()
 	l.Providers[0].BaseURL = local.URL
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.EnsureProfiles(); err != nil {
@@ -312,7 +312,7 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 	}
 	l = cs.Get().Local.Clone()
 	l.FamilyRoutes["opus"] = map[string]modelRoute{"high": {Mode: "anthropic"}}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.ActivateProfile("default"); err != nil {
@@ -397,7 +397,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/a", Effort: "high"}, {Model: "p/b", Effort: "low"}}}
 	l.PoolSettings = map[string]poolSettings{"work": {Failover: true, FirstByteSec: 7}}
 	l.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "pool", Pool: "work"}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.EnsureProfiles(); err != nil {
@@ -411,7 +411,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	}
 	l = cs.Get().Local.Clone()
 	l.ModelPools["work"] = []poolTarget{{Model: "p/b", Effort: "xhigh"}, {Model: "p/a", Effort: "medium"}}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.SavePoolSettings("work", poolSettings{ProbeSec: 4, FirstByteSec: 11}); err != nil {

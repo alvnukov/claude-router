@@ -94,7 +94,7 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 	}
 	l.Models = []localModel{{Provider: "codex", Model: "gpt-test"}}
 	l.ModelPools = map[string][]poolTarget{"deep": {{Model: "codex/gpt-test"}}}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	form = url.Values{"op": {"remove"}, "key": {"codex/gpt-test"}}

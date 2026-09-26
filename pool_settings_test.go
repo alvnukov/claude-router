@@ -89,7 +89,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	l := cs.Get().Local.Clone()
 	delete(l.ModelPools, "a")
 	delete(l.PoolSettings, "a")
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	values.Set("name", "a")

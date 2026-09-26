@@ -111,7 +111,7 @@ func TestConfigCompatGenerate(t *testing.T) {
 		}
 	}
 	l.Models = append(models, localModel{Provider: "lab", Model: "qwen-coder-next"})
-	must("update", home.ApplyLocal(l, true))
+	must("update", home.Update(conf.Replace(l, "")))
 	dump("update", "home")
 
 	must("pool settings", home.SavePoolSettings("work", poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15, MaxInputChars: 120000}))
@@ -129,12 +129,11 @@ func TestConfigCompatGenerate(t *testing.T) {
 	must("catalog", u.refreshModels(context.Background()))
 	dump("catalog", "home")
 
-	in := conf.InputFromConfig(home.Get())
-	in.MaxInputChars = "150000"
-	must("settings", home.Apply(in, true))
-	in = conf.InputFromConfig(home.Get())
-	in.Failover = "0"
-	must("failover", home.Apply(in, true))
+	must("settings", home.UpdateSettings(func(in *conf.SettingsInput) error {
+		in.MaxInputChars = "150000"
+		return nil
+	}))
+	must("failover", home.SetFailover(false))
 	dump("settings", "home")
 
 	must("delete profile", home.DeleteProfile("cloud"))

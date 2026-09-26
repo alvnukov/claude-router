@@ -27,7 +27,7 @@ func TestProfileStaleSnapshotCannotReactivateOldProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "disabled"}
-	if err := cs.ApplyLocal(stale, true); err == nil || cs.Get().Local.ActiveProfile != "cloud" {
+	if err := cs.Update(conf.Replace(stale, "")); err == nil || cs.Get().Local.ActiveProfile != "cloud" {
 		t.Fatalf("stale edit changed active profile: %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestProfileFileFailedWritePreservesOldValue(t *testing.T) {
 	}
 	l := cs.Get().Local.Clone()
 	l.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "disabled"}
-	if err := cs.ApplyLocal(l, true); err == nil {
+	if err := cs.Update(conf.Replace(l, "")); err == nil {
 		t.Fatal("expected failed profile write")
 	}
 	current, err := os.ReadFile(profile)
@@ -217,7 +217,7 @@ func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 	l := cs.Get().Local.Clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/a"}}}
 	l.PoolSettings = map[string]poolSettings{"work": {FirstByteSec: 2}}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.EnsureProfiles(); err != nil {
@@ -290,7 +290,7 @@ func TestProfileFailedGlobalWriteKeepsActivePointer(t *testing.T) {
 	}
 	l := cs.Get().Local.Clone()
 	l.Catalog.Anthropic = []string{"claude-opus-5"}
-	if err := cs.ApplyLocal(l, true); err == nil {
+	if err := cs.Update(conf.Replace(l, "")); err == nil {
 		t.Fatal("expected failed global write")
 	}
 	after, err := os.ReadFile(path + ".active-profile")
@@ -355,7 +355,7 @@ func TestFormProfileGuardUsesSubmittedNameUnderLock(t *testing.T) {
 	// Simulates activation between the handler's initial check and its snapshot.
 	current := cs.Get().Local.Clone()
 	current.FamilyRoutes["opus"] = map[string]modelRoute{"high": {Mode: "anthropic"}}
-	if err := cs.ApplyLocal(current, true, "default"); err == nil {
+	if err := cs.Update(conf.Replace(current, "default")); err == nil {
 		t.Fatal("form from default edited cloud after activation")
 	}
 	if cs.Get().Local.FamilyRoutes["opus"]["high"].Mode == "anthropic" {

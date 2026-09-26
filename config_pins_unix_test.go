@@ -42,17 +42,18 @@ func TestConfigPinFailedWritesChangeNothing(t *testing.T) {
 		{"replace", func() error {
 			l := p.cs.Get().Local.Clone()
 			l.Models = append(l.Models, localModel{Provider: "lab", Model: "qwen-coder-next"})
-			return p.cs.ApplyLocal(l, true)
+			return p.cs.Update(conf.Replace(l, ""))
 		}, "запись " + p.path + ": open " + p.path + ".tmp: permission denied"},
 		{"settings", func() error {
-			in := conf.InputFromConfig(p.cs.Get())
-			in.MaxInputChars = "150000"
-			return p.cs.Apply(in, true)
+			return p.cs.UpdateSettings(func(in *conf.SettingsInput) error {
+				in.MaxInputChars = "150000"
+				return nil
+			})
 		}, "запись " + p.dir + "/env: open " + p.dir + "/.env.*: permission denied"},
 		{"pool settings", func() error {
 			return p.cs.SavePoolSettings("work", poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15})
-		}, "open " + profiles + "/default.json.tmp: permission denied"},
-		{"create profile", func() error { return p.cs.CreateProfile("night", true) }, "open " + profiles + "/night.json.tmp: permission denied"},
+		}, "запись " + p.path + ": open " + profiles + "/default.json.tmp: permission denied"},
+		{"create profile", func() error { return p.cs.CreateProfile("night", true) }, "запись " + p.path + ": open " + profiles + "/night.json.tmp: permission denied"},
 		{"activate profile", func() error { return p.cs.ActivateProfile("cloud") }, "open " + p.path + ".active-profile.tmp: permission denied"},
 		{"delete profile", func() error { return p.cs.DeleteProfile("cloud") }, "remove " + profiles + "/cloud.json: permission denied"},
 	}

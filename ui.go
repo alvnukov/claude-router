@@ -782,7 +782,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	} else {
 		l.Routes[model] = choices
 	}
-	u.renderSettingsResult(w, u.cs.ApplyLocal(l, true, r.FormValue("profile")), "Маршруты сохранены: "+model)
+	u.renderSettingsResult(w, u.cs.Update(conf.Replace(l, r.FormValue("profile"))), "Маршруты сохранены: "+model)
 }
 
 func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {
@@ -945,7 +945,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("unknown op %q", op)
 	}
 	if err == nil {
-		err = u.cs.ApplyLocal(l, true)
+		err = u.cs.Update(conf.Replace(l, ""))
 	}
 	v := u.settingsView()
 	if err != nil {
@@ -1130,7 +1130,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		err = u.validateTargetEffort(l, key, r.FormValue("effort"))
 	}
 	if err == nil {
-		err = u.cs.ApplyLocal(l, true, r.FormValue("profile"))
+		err = u.cs.Update(conf.Replace(l, r.FormValue("profile")))
 	}
 	u.renderSettingsResult(w, err, "Пул сохранён")
 }
@@ -1535,12 +1535,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 		disableDirectRoutes(&l, func(model string) bool { return model == key })
 	case "failover":
 		local = false
-		in := conf.InputFromConfig(c)
-		in.Failover = "0"
-		if r.FormValue("on") == "1" {
-			in.Failover = "1"
-		}
-		err = u.cs.Apply(in, true)
+		err = u.cs.SetFailover(r.FormValue("on") == "1")
 	case "reset":
 		local = false
 		u.hl.reset(key) // "" resets all
@@ -1549,7 +1544,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("unknown op %q", op)
 	}
 	if err == nil && local {
-		err = u.cs.ApplyLocal(l, true)
+		err = u.cs.Update(conf.Replace(l, ""))
 	}
 	v := u.settingsView()
 	if err != nil {

@@ -126,28 +126,24 @@ func (s *Store) SavePoolSettings(name string, settings PoolSettings, expectedPro
 func (s *Store) UpdatePoolSettings(name string, merge func(old PoolSettings) PoolSettings, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != s.c.Local.ActiveProfile {
-		return fmt.Errorf("активный профиль изменился; обновите страницу")
-	}
-	if _, ok := s.c.Local.ModelPools[name]; !ok {
-		return fmt.Errorf("пул %q не найден", name)
-	}
-	l, _ := MigratePoolSettings(s.c)
-	settings := merge(l.PoolSettings[name])
-	if err := settings.validate(); err != nil {
-		return err
-	}
-	l.PoolSettings[name] = settings
-	if s.provPath == "" {
-		return fmt.Errorf("файл настроек провайдеров отключён")
-	}
-	if err := l.syncActiveProfile(); err != nil {
-		return err
-	}
-	if err := WriteProviders(s.provPath, l); err != nil {
-		return err
-	}
-	s.wroteProviders()
-	s.c.Local = l
-	return nil
+	return s.update("", func(l *Local) error {
+		if len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != l.ActiveProfile {
+			return ErrProfileChanged
+		}
+		if _, ok := l.ModelPools[name]; !ok {
+			return fmt.Errorf("пул %q не найден", name)
+		}
+		c := s.c
+		c.Local = *l
+		*l, _ = MigratePoolSettings(c)
+		settings := merge(l.PoolSettings[name])
+		if err := settings.validate(); err != nil {
+			return err
+		}
+		l.PoolSettings[name] = settings
+		if s.provPath == "" {
+			return fmt.Errorf("файл настроек провайдеров отключён")
+		}
+		return nil
+	})
 }

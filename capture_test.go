@@ -113,7 +113,7 @@ func TestProvidersFile(t *testing.T) {
 		ModelPools: map[string][]poolTarget{"work": {{Model: "b/m2", Effort: "high"}}},
 		Routes:     map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}}},
 	}
-	if err := cs.ApplyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	requirePrivateFile(t, p)
@@ -126,11 +126,11 @@ func TestProvidersFile(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	bad := localSetup{Providers: []provider{{Name: "x", BaseURL: "http://x/v1"}}, Models: []localModel{{Provider: "nope", Model: "m"}}}
-	if err := cs.ApplyLocal(bad, false); err == nil {
+	if err := cs.Update(conf.Replace(bad, "")); err == nil {
 		t.Fatal("model on unknown provider accepted")
 	}
 	bad = localSetup{Providers: []provider{{Name: "a/b", BaseURL: "http://x/v1"}}}
-	if err := cs.ApplyLocal(bad, false); err == nil {
+	if err := cs.Update(conf.Replace(bad, "")); err == nil {
 		t.Fatal("slash in provider name accepted")
 	}
 }

@@ -174,25 +174,22 @@ func (s *Store) EnsureProfiles() error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if err := SaveConfigurationMigration(s.provPath, s.c.Local, ".before-profiles"); err != nil {
-			return err
-		}
-		s.wroteProviders()
+		return s.update(".before-profiles", func(*Local) error { return nil })
+	}
+	add := func(l *Local) error {
+		l.Profiles = map[string]Profile{"default": l.Routing()}
+		l.ActiveProfile = "default"
 		return nil
 	}
-	l := s.c.Local.Clone()
-	l.Profiles = map[string]Profile{"default": l.Routing()}
-	l.ActiveProfile = "default"
-	if err := l.validateProfiles(); err != nil {
+	if s.provPath != "" {
+		return s.update(".before-profiles", add)
+	}
+	// Without a providers file the profile lives in memory only.
+	next, err := s.prepare(add)
+	if err != nil {
 		return err
 	}
-	if s.provPath != "" {
-		if err := SaveConfigurationMigration(s.provPath, l, ".before-profiles"); err != nil {
-			return err
-		}
-		s.wroteProviders()
-	}
-	s.c.Local = l
+	s.c = next
 	return nil
 }
 
@@ -202,26 +199,23 @@ func (s *Store) CreateProfile(name string, clone bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	l := s.c.Local.Clone()
-	if l.Profiles == nil {
-		return fmt.Errorf("профили не инициализированы")
-	}
-	if _, exists := l.Profiles[name]; exists {
-		return fmt.Errorf("профиль %q уже существует", name)
-	}
-	p := Profile{FamilyRoutes: map[string]map[string]Route{}, Routes: map[string]map[string]Route{}, ModelPools: map[string][]PoolTarget{}}
-	if clone {
-		p = l.Routing()
-	}
-	l.Profiles[name] = p
-	if err := l.validateProfiles(); err != nil {
-		return err
-	}
-	if err := s.persistLocalLocked(l); err != nil {
-		return err
-	}
-	s.c.Local = l
-	return nil
+	return s.update("", func(l *Local) error {
+		if l.Profiles == nil {
+			return fmt.Errorf("профили не инициализированы")
+		}
+		if _, exists := l.Profiles[name]; exists {
+			return fmt.Errorf("профиль %q уже существует", name)
+		}
+		p := Profile{FamilyRoutes: map[string]map[string]Route{}, Routes: map[string]map[string]Route{}, ModelPools: map[string][]PoolTarget{}}
+		if clone {
+			p = l.Routing()
+		}
+		l.Profiles[name] = p
+		if s.provPath == "" {
+			return fmt.Errorf("файл провайдеров отключён")
+		}
+		return nil
+	})
 }
 
 func (s *Store) ActivateProfile(name string) error {
@@ -246,7 +240,7 @@ func (s *Store) ActivateProfile(name string) error {
 	if err := WriteActiveProfile(s.provPath, name); err != nil {
 		return err
 	}
-	s.wroteProfiles()
+	s.commit(kindProfiles)
 	s.c.Local = l
 	if s.onProfileChange != nil {
 		s.onProfileChange()
@@ -272,18 +266,7 @@ func (s *Store) DeleteProfile(name string) error {
 		return err
 	}
 	s.c.Local = l
-	s.wroteProfiles()
-	return nil
-}
-
-func (s *Store) persistLocalLocked(l Local) error {
-	if s.provPath == "" {
-		return fmt.Errorf("файл провайдеров отключён")
-	}
-	if err := WriteProviders(s.provPath, l); err != nil {
-		return err
-	}
-	s.wroteProviders()
+	s.commit(kindProfiles)
 	return nil
 }
 
@@ -300,9 +283,14 @@ func (s *Store) ReloadProfilesFrom(read func(string) (Local, error)) error {
 		return err
 	}
 	before := s.c.Local.ActiveProfile
-	if err := s.applyLocalLocked(l, false); err != nil {
+	next, err := s.prepare(func(cur *Local) error {
+		*cur = l
+		return nil
+	})
+	if err != nil {
 		return err
 	}
+	s.c = next
 	if s.onProfileChange != nil && before != l.ActiveProfile {
 		s.onProfileChange()
 	}
