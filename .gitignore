@@ -11,4 +11,8 @@ providers.json.tmp
 *.bak
 *.bak-*
 .claude/
+!/.claude/
+/.claude/*
+!/.claude/settings.json
+!/.claude/skill-map.md
 _parked/
