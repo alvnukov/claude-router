@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,90 @@ import (
 )
 
 func TestSettingsUsesAnthropicPools(t *testing.T) {
+	// «На все effort»: a model target takes each level it has, a level it
+	// lacks keeps the row's own choice and is named in the reply.
+	allEfforts := func(t *testing.T) (*uiServer, http.Handler, url.Values) {
+		u, h := testUI(t)
+		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+		u.probe = map[string]probeResult{"p": {At: time.Now(), Base: u.cs.get().local.Providers[0].BaseURL, Info: []probeModel{{ID: "m1", Efforts: []string{"low", "medium", "high"}}}}}
+		get(t, h, "POST", "/settings/route", url.Values{"model": {"claude-sonnet-5"}, "high": {"anthropic"}})
+		form := url.Values{"model": {"claude-opus-5"}, "all": {"model:p/m1:"}, "xhigh": {"anthropic"}}
+		for _, e := range []string{"default", "low", "medium", "high", "max"} {
+			form.Set(e, "inherit")
+		}
+		return u, h, form
+	}
+	t.Run("all efforts", func(t *testing.T) {
+		u, h, form := allEfforts(t)
+		if page := get(t, h, "GET", "/settings", nil).Body.String(); !strings.Contains(page, `<select name="all" aria-label="claude-opus-5 / все effort">`) || !strings.Contains(page, `<option value="model:p/m1:">p/m1 — тот же effort</option>`) {
+			t.Error("route card has no «На все effort» choice")
+		}
+		body := get(t, h, "POST", "/settings/route", form).Body.String()
+		want := map[string]modelRoute{
+			"default": {Mode: "model", Model: "p/m1"},
+			"low":     {Mode: "model", Model: "p/m1", Effort: "low"},
+			"medium":  {Mode: "model", Model: "p/m1", Effort: "medium"},
+			"high":    {Mode: "model", Model: "p/m1", Effort: "high"},
+			"xhigh":   {Mode: "anthropic"},
+		}
+		if got := u.cs.get().local.Routes["claude-opus-5"]; !maps.Equal(got, want) {
+			t.Errorf("routes %+v, want %+v", got, want)
+		}
+		if !strings.Contains(body, "У p/m1 нет effort xhigh, max") {
+			t.Errorf("no hint about the missing levels: %s", body)
+		}
+		if got := u.cs.get().local.Routes["claude-sonnet-5"]; !maps.Equal(got, map[string]modelRoute{"high": {Mode: "anthropic"}}) {
+			t.Errorf("another model changed: %+v", got)
+		}
+	})
+	t.Run("plain destination", func(t *testing.T) {
+		u, h, _ := allEfforts(t)
+		get(t, h, "POST", "/settings/route", url.Values{"model": {"claude-haiku-4-5"}, "all": {"anthropic"}, "high": {"disabled"}})
+		for _, e := range claudeEfforts {
+			if got := u.cs.get().routeFor("claude-haiku-4-5", e); got.Mode != "anthropic" {
+				t.Errorf("haiku %s → %+v, want anthropic", e, got)
+			}
+		}
+	})
+	t.Run("codex outside catalog", func(t *testing.T) {
+		u, h := testUI(t)
+		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+		u.cs.c.local = localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}}
+		u.probe = map[string]probeResult{"codex": {At: time.Now(), OK: true, Base: codexBaseURL, Models: []string{"gpt-6-luna"}}}
+		body := get(t, h, "POST", "/settings/route", url.Values{"model": {"claude-opus-5"}, "all": {"model:codex/gpt-6-sol:"}}).Body.String()
+		if !strings.Contains(body, "отсутствует в текущем каталоге Codex") || strings.Contains(body, "нет effort") {
+			t.Errorf("a model outside the catalog read as missing levels: %s", body)
+		}
+		if got := u.cs.get().local.Routes["claude-opus-5"]; got != nil {
+			t.Errorf("rejected save kept routes %+v", got)
+		}
+	})
+	t.Run("idempotent", func(t *testing.T) {
+		u, h, form := allEfforts(t)
+		get(t, h, "POST", "/settings/route", form)
+		first := maps.Clone(u.cs.get().local.Routes["claude-opus-5"])
+		// A save of unchanged routes rewrites no config file.
+		stamp := time.Unix(0, 0)
+		files, _ := filepath.Glob(u.cs.provPath + "*")
+		if len(files) == 0 {
+			t.Fatal("no config file to watch")
+		}
+		for _, f := range files {
+			if err := os.Chtimes(f, stamp, stamp); err != nil {
+				t.Fatal(err)
+			}
+		}
+		get(t, h, "POST", "/settings/route", form)
+		if got := u.cs.get().local.Routes["claude-opus-5"]; len(first) != 5 || !maps.Equal(got, first) {
+			t.Errorf("second save %+v, first %+v", got, first)
+		}
+		for _, f := range files {
+			if info, err := os.Stat(f); err != nil || !info.ModTime().Equal(stamp) {
+				t.Errorf("second identical save rewrote %s: %v", filepath.Base(f), err)
+			}
+		}
+	})
+
 	u, h := testUI(t)
 	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
 	body := get(t, h, "GET", "/settings", nil).Body.String()
