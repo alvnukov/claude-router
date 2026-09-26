@@ -121,6 +121,17 @@ func (h *home) appliedAt() time.Time {
 	return h.s.appliedAt
 }
 
+// swapApplied sets the reload stamp and gives the previous one. A test zeroes
+// it before a tick and reads it after: a Windows clock can give the reload
+// the stamp it already had, so comparing two readings misses it.
+func (h *home) swapApplied(at time.Time) time.Time {
+	h.s.reloadMu.Lock()
+	defer h.s.reloadMu.Unlock()
+	old := h.s.appliedAt
+	h.s.appliedAt = at
+	return old
+}
+
 // get is a deep copy of the live config, so a later in-place change shows.
 func (h *home) get() Config {
 	c := h.s.Get()
@@ -194,11 +205,12 @@ func (h *home) pollQuiet(t *testing.T) {
 // reloaded nor tried to.
 func (h *home) tickQuiet(t *testing.T, gate Gate) {
 	t.Helper()
-	want, applied, hooks := h.get(), h.appliedAt(), h.hooks
+	want, hooks := h.get(), h.hooks
+	last := h.swapApplied(time.Time{})
 	h.logs.Reset()
 	h.s.tick(gate)
-	if got := h.appliedAt(); !got.Equal(applied) {
-		t.Errorf("the tick applied a reload at %v; the last one was at %v", got, applied)
+	if got := h.swapApplied(last); !got.IsZero() {
+		t.Errorf("the tick applied a reload at %v", got)
 	}
 	if logs := h.logs.String(); strings.Contains(logs, "reload") {
 		t.Errorf("the tick reloaded:\n%s", logs)
@@ -417,12 +429,12 @@ func TestHandEditsReload(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			h := startHome(t, "home", false, nil)
-			applied := h.appliedAt()
+			h.swapApplied(time.Time{})
 			h.edit(t, row.file, row.from, row.to)
 			h.logs.Reset()
 			h.s.Poll()
-			if got := h.appliedAt(); !got.After(applied) {
-				t.Errorf("Poll applied no reload: applied at %v, before the edit %v", got, applied)
+			if h.appliedAt().IsZero() {
+				t.Error("Poll applied no reload")
 			}
 			if logs := h.logs.String(); !strings.Contains(logs, row.log) {
 				t.Errorf("log has no %q:\n%s", row.log, logs)
