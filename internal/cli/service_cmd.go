@@ -343,7 +343,8 @@ type slotLabels struct {
 }
 
 // slotLabels asks the service-labels command, which validates deploy.json,
-// for the agents' names.
+// for the agents' names. A name it leaves out is an error: an empty label
+// names no agent, so stop would pass over one that runs.
 func (c *commands) slotLabels(home string) (slotLabels, error) {
 	var out bytes.Buffer
 	if err := c.r.SlotLabels([]string{"-home", home}, &out); err != nil {
@@ -352,6 +353,9 @@ func (c *commands) slotLabels(home string) (slotLabels, error) {
 	var labels slotLabels
 	if err := json.Unmarshal(out.Bytes(), &labels); err != nil {
 		return slotLabels{}, fmt.Errorf("service-labels: %w", err)
+	}
+	if labels.Blue == "" || labels.Green == "" || labels.Caddy == "" {
+		return slotLabels{}, fmt.Errorf("service-labels: want blue, green and caddy labels, got %s", bytes.TrimSpace(out.Bytes()))
 	}
 	return labels, nil
 }

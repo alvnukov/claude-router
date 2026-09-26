@@ -84,7 +84,8 @@ type fixture struct {
 	killed   []string
 	stopped  []int
 	claude   string
-	labels   error // service-labels fails with this
+	labels   error  // service-labels fails with this
+	labelOut string // service-labels prints this instead of all three labels
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -138,7 +139,11 @@ func (f *fixture) commands() []Entry {
 			if f.labels != nil {
 				return f.labels
 			}
-			_, err := io.WriteString(out, `{"blue":"p.blue","caddy":"p.caddy","default_prefix":false,"green":"p.green","prefix":"p"}`+"\n")
+			labels := `{"blue":"p.blue","caddy":"p.caddy","default_prefix":false,"green":"p.green","prefix":"p"}`
+			if f.labelOut != "" {
+				labels = f.labelOut
+			}
+			_, err := io.WriteString(out, labels+"\n")
 			return err
 		},
 		ClientURL: func(listen string) (string, error) {
@@ -513,4 +518,20 @@ func TestSlotLabelsFailure(t *testing.T) {
 	f.labels = errors.New("deploy.json: invalid launchd label prefix \"x.blue\"")
 	code, stdout, stderr := f.run(t, "status")
 	expect(t, code, stdout, stderr, 1, "", "deploy.json: invalid launchd label prefix \"x.blue\"\n")
+}
+
+// A label missing from service-labels would name no agent: stop would
+// report Caddy stopped without touching it. The script failed there, and so
+// do the commands, before they touch any agent.
+func TestSlotLabelMissing(t *testing.T) {
+	for _, command := range []string{"start", "stop", "status"} {
+		t.Run(command, func(t *testing.T) {
+			f := newFixture(t)
+			f.slotMode(t, "blue\n")
+			f.labelOut = `{"blue":"p.blue","default_prefix":false,"green":"p.green","prefix":"p"}`
+			code, stdout, stderr := f.run(t, command)
+			expect(t, code, stdout, stderr, 1, "", "service-labels: want blue, green and caddy labels, got "+f.labelOut+"\n")
+			expectCalls(t, f)
+		})
+	}
 }
