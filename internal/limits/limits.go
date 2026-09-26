@@ -18,7 +18,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -346,10 +345,7 @@ func (l *Store) Save() error {
 		if err != nil {
 			return err
 		}
-		if err := platform.MkdirPrivate(filepath.Dir(l.path)); err != nil {
-			return err
-		}
-		return platform.WriteFileAtomic(l.path, append(data, '\n'), 0o600)
+		return platform.WritePrivateAtomic(l.path, append(data, '\n'))
 	})
 }
 

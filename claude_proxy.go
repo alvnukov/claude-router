@@ -184,7 +184,7 @@ func (p *claudeProxy) set(target string, enable bool) error {
 		if err != nil {
 			return err
 		}
-		if err = writePrivateAtomic(path+".router-proxy-backup", data); err != nil {
+		if err = platform.WritePrivateAtomic(path+".router-proxy-backup", data); err != nil {
 			return err
 		}
 		env[claudeBaseURLKey], _ = json.Marshal(target)
@@ -223,7 +223,7 @@ func (p *claudeProxy) set(target string, enable bool) error {
 			err = nil
 		}
 	} else {
-		err = writePrivateAtomic(path, append(data, '\n'))
+		err = platform.WritePrivateAtomic(path, append(data, '\n'))
 	}
 	if err != nil {
 		return err
@@ -234,13 +234,6 @@ func (p *claudeProxy) set(target string, enable bool) error {
 		}
 	}
 	return nil
-}
-
-func writePrivateAtomic(path string, data []byte) error {
-	if err := platform.MkdirPrivate(filepath.Dir(path)); err != nil {
-		return err
-	}
-	return platform.WriteFileAtomic(path, data, 0o600)
 }
 
 func (u *uiServer) claudeProxyView() claudeProxyView {
