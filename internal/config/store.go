@@ -322,10 +322,10 @@ func (l Local) Summary() string {
 // providers.json, so a settings write from the UI comes before the read or
 // after the apply and is never undone by an older read.
 func (s *Store) reloadEnv() (bool, error) {
+	before := s.Get()
 	if s.beforeEnvLock != nil {
 		s.beforeEnvLock()
 	}
-	before := s.Get()
 	err := s.updateSettings(false, func(in *SettingsInput) error {
 		vals, err := ReadEnv(s.envPath)
 		if err != nil {
