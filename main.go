@@ -40,14 +40,9 @@ type config struct {
 	uiHistory int
 }
 
-// Exported readers for the templates, which cannot see unexported fields.
-func (c config) Local() localSetup  { return c.local }
-func (c config) Failover() bool     { return c.failover }
-func (c config) FirstByteSec() int  { return int(c.firstByte / time.Second) }
-func (c config) Balance() int       { return c.balance }
-func (c config) ProbeSec() int      { return int(c.probeEvery / time.Second) }
-func (c config) MaxInputChars() int { return c.maxInputChars }
-func (c config) Upstream() string   { return c.upstream.String() }
+// Whole seconds, as pool settings store them.
+func (c config) FirstByteSec() int { return int(c.firstByte / time.Second) }
+func (c config) ProbeSec() int     { return int(c.probeEvery / time.Second) }
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
