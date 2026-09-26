@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 // The ChatGPT subscription endpoint rejects max_output_tokens with HTTP 400;
@@ -198,7 +200,7 @@ func TestCodexCredentialRefreshAndPin(t *testing.T) {
 		t.Fatal("refresh token not rotated")
 	}
 	requirePrivateFile(t, s.path)
-	req := httptest.NewRequest("POST", CodexBaseURL+"/responses", nil)
+	req := httptest.NewRequest("POST", conf.CodexBaseURL+"/responses", nil)
 	if err := s.authorize(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +225,7 @@ func TestCodexProviderValidationAndRouting(t *testing.T) {
 	if err := l.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if l.Providers[0].BaseURL != CodexBaseURL {
+	if l.Providers[0].BaseURL != conf.CodexBaseURL {
 		t.Fatal("Codex endpoint not pinned")
 	}
 	c := config{Local: l}
@@ -336,7 +338,7 @@ func codexLoginUI(t *testing.T) (*uiServer, http.Handler) {
 	codexLoginAddr = "127.0.0.1:0"
 	t.Cleanup(func() { codexLoginAddr = old })
 	u, h := codexUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	return u, h
 }
 

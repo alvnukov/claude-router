@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -62,7 +63,7 @@ func TestClaudePoolsSelectModelAndEffort(t *testing.T) {
 }
 
 func TestCodexEffortMapping(t *testing.T) {
-	if !ValidProviderEffort("ultra") || ValidProviderEffort("bogus") {
+	if !conf.ValidProviderEffort("ultra") || conf.ValidProviderEffort("bogus") {
 		t.Fatal("effort validation")
 	}
 	req := openaiRequest{Model: "gpt-test", Messages: []openaiMsg{{Role: "user", Content: "hello"}}, ReasoningEffort: "xhigh"}
@@ -77,7 +78,7 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "auth.json")}
 	defer func() { codexAuth = oldAuth }()
 	upstream, _ := url.Parse("https://api.anthropic.com")
-	cs := NewStore(config{Upstream: upstream}, filepath.Join(t.TempDir(), "providers.json"))
+	cs := conf.NewStore(config{Upstream: upstream}, filepath.Join(t.TempDir(), "providers.json"))
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	form := url.Values{"op": {"add"}, "name": {"codex"}, "type": {"codex"}, "base_url": {"http://127.0.0.1:1234/v1"}}
 	w := httptest.NewRecorder()
@@ -88,7 +89,7 @@ func TestDashboardCodexProviderAndPoolRemoval(t *testing.T) {
 		t.Fatalf("add Codex provider: %d %s", w.Code, w.Body.String())
 	}
 	l := cs.Get().Local.Clone()
-	if len(l.Providers) != 1 || l.Providers[0].BaseURL != CodexBaseURL {
+	if len(l.Providers) != 1 || l.Providers[0].BaseURL != conf.CodexBaseURL {
 		t.Fatalf("Codex endpoint not set: %+v", l.Providers)
 	}
 	l.Models = []localModel{{Provider: "codex", Model: "gpt-test"}}

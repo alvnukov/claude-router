@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"reflect"
@@ -63,12 +63,12 @@ func CodexFamily(model string) string {
 
 // The latest explicitly configured version supplies the initial family rules.
 // Existing version overrides are preserved; subsequent family edits are live.
-func MigrateFamilyRoutes(l localSetup) (localSetup, bool) {
+func MigrateFamilyRoutes(l Local) (Local, bool) {
 	if l.FamilyRoutes != nil {
 		return l, false
 	}
 	l = l.Clone()
-	l.FamilyRoutes = map[string]map[string]modelRoute{}
+	l.FamilyRoutes = map[string]map[string]Route{}
 	latest := map[string]string{}
 	for model := range l.Routes {
 		family := ClaudeFamily(model)
@@ -81,7 +81,7 @@ func MigrateFamilyRoutes(l localSetup) (localSetup, bool) {
 		}
 	}
 	for family, model := range latest {
-		rules := map[string]modelRoute{}
+		rules := map[string]Route{}
 		for effort, route := range l.Routes[model] {
 			rules[effort] = route
 		}

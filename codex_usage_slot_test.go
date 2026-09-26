@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -20,15 +21,15 @@ func TestCodexUsageRefreshStartsWhenASlotActivates(t *testing.T) {
 	defer func() { codexAuth = oldAuth }()
 	dir := t.TempDir()
 	providers := filepath.Join(dir, "providers.json")
-	if err := os.WriteFile(providers, []byte(`{"providers":[{"name":"codex","type":"codex","base_url":"`+CodexBaseURL+`"}],"models":[]}`), 0600); err != nil {
+	if err := os.WriteFile(providers, []byte(`{"providers":[{"name":"codex","type":"codex","base_url":"`+conf.CodexBaseURL+`"}],"models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	local, err := ReadProviders(providers)
+	local, err := conf.ReadProviders(providers)
 	if err != nil {
 		t.Fatal(err)
 	}
 	life := newLifecycle(true)
-	u := newUIServer(history.New(10, ""), NewStore(config{Local: local}, providers), newHealth(""))
+	u := newUIServer(history.New(10, ""), conf.NewStore(config{Local: local}, providers), newHealth(""))
 	u.life = life
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return nil, nil }
 	calls := make(chan struct{}, 10)

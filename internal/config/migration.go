@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"fmt"
@@ -9,13 +9,13 @@ import (
 )
 
 // Legacy fields are consumed once; their known routes become explicit entries.
-func MigrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
+func MigrateLegacyPools(l Local, cloudOnly []string) (Local, bool) {
 	if l.Routes != nil {
 		return l, false
 	}
 	l = l.Clone()
-	l.Routes = map[string]map[string]modelRoute{}
-	l.ModelPools = map[string][]poolTarget{}
+	l.Routes = map[string]map[string]Route{}
+	l.ModelPools = map[string][]PoolTarget{}
 	var keys []string
 	for _, m := range l.Ordered() {
 		keys = append(keys, m.Key())
@@ -65,9 +65,9 @@ func MigrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
 				targets = keys
 			}
 		}
-		l.Routes[model] = map[string]modelRoute{}
+		l.Routes[model] = map[string]Route{}
 		for _, effort := range ClaudeEfforts {
-			route := modelRoute{Mode: "disabled"}
+			route := Route{Mode: "disabled"}
 			if direct {
 				route.Mode = "anthropic"
 			} else if len(targets) > 0 {
@@ -86,7 +86,7 @@ func MigrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
 					}
 				}
 				l.ModelPools[name] = members
-				route = modelRoute{Mode: "pool", Pool: name}
+				route = Route{Mode: "pool", Pool: name}
 			}
 			l.Routes[model][effort] = route
 		}
@@ -98,11 +98,11 @@ func MigrateLegacyPools(l localSetup, cloudOnly []string) (localSetup, bool) {
 	return l, true
 }
 
-func SavePoolMigration(path string, l localSetup) error {
+func SavePoolMigration(path string, l Local) error {
 	return SaveConfigurationMigration(path, l, ".before-pools")
 }
 
-func SaveConfigurationMigration(path string, l localSetup, suffix string) error {
+func SaveConfigurationMigration(path string, l Local, suffix string) error {
 	if path == "" {
 		return nil
 	}
@@ -126,10 +126,10 @@ func SaveConfigurationMigration(path string, l localSetup, suffix string) error 
 	return WriteProviders(path, l)
 }
 
-func legacyTargets(l localSetup, keys []string, source string) []poolTarget {
-	targets := make([]poolTarget, 0, len(keys))
+func legacyTargets(l Local, keys []string, source string) []PoolTarget {
+	targets := make([]PoolTarget, 0, len(keys))
 	for _, key := range keys {
-		target := poolTarget{Model: key}
+		target := PoolTarget{Model: key}
 		for _, model := range l.Models {
 			if model.Key() == key {
 				target.Effort = model.Efforts[source]

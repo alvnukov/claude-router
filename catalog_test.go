@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 func TestFamiliesInheritPerEffortWithVersionOverrides(t *testing.T) {
@@ -22,7 +24,7 @@ func TestFamiliesInheritPerEffortWithVersionOverrides(t *testing.T) {
 		"claude-opus-4":   {"high": {Mode: "pool", Pool: "fast"}},
 		"claude-sonnet-5": {"high": {Mode: "pool", Pool: "fast"}},
 	}
-	migrated, changed := MigrateFamilyRoutes(l)
+	migrated, changed := conf.MigrateFamilyRoutes(l)
 	if !changed {
 		t.Fatal("not migrated")
 	}
@@ -51,7 +53,7 @@ func TestFamiliesInheritPerEffortWithVersionOverrides(t *testing.T) {
 	if migrated.RouteFor("claude-opus-5-5", "high").Mode != "disabled" || migrated.RouteFor("claude-opus-5-5", "low").Mode != "anthropic" {
 		t.Fatal("per-effort overrides not respected")
 	}
-	if _, changed := MigrateFamilyRoutes(migrated); changed {
+	if _, changed := conf.MigrateFamilyRoutes(migrated); changed {
 		t.Fatal("family migration repeats")
 	}
 	if l.FamilyRoutes != nil || len(l.Routes) != 3 {
@@ -71,11 +73,11 @@ func TestParseOfficialAnthropicCatalog(t *testing.T) {
 }
 
 func TestCodexNewVersionsInheritPoolAndSupportedEfforts(t *testing.T) {
-	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{
+	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{
 		"high": {{Model: "codex/gpt-6-sol", Effort: "high"}}, "max": {{Model: "codex/gpt-6-sol", Effort: "max"}},
 	}}
 	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high", "max"}}, {ID: "gpt-6.1-sol", Efforts: []string{"low", "high"}}, {ID: "gpt-6.1-luna", Efforts: []string{"high"}}, {ID: "gpt-5.6-sol", Efforts: []string{"high"}}}
-	notes := InheritCodexModels(&l, "codex", models)
+	notes := conf.InheritCodexModels(&l, "codex", models)
 	if len(l.Models) != 4 {
 		t.Fatalf("catalog not imported: %v", l.Models)
 	}
@@ -86,16 +88,16 @@ func TestCodexNewVersionsInheritPoolAndSupportedEfforts(t *testing.T) {
 	if len(l.ModelPools["max"]) != 1 || len(notes) != 1 || !strings.Contains(notes[0], "max") {
 		t.Fatalf("unsupported effort inherited: %v %v", l.ModelPools, notes)
 	}
-	InheritCodexModels(&l, "codex", models)
+	conf.InheritCodexModels(&l, "codex", models)
 	if len(l.ModelPools["high"]) != 2 || len(l.Models) != 4 {
 		t.Fatal("duplicate import")
 	}
 	l.ModelPools["high"] = l.ModelPools["high"][:1]
-	InheritCodexModels(&l, "codex", models)
+	conf.InheritCodexModels(&l, "codex", models)
 	if len(l.ModelPools["high"]) != 1 {
 		t.Fatal("manually removed member re-added")
 	}
-	if !NewerModel("gpt-5.10-sol", "gpt-5.9-sol") || CodexFamily("gpt-6-sol") == CodexFamily("gpt-6-luna") {
+	if !conf.NewerModel("gpt-5.10-sol", "gpt-5.9-sol") || conf.CodexFamily("gpt-6-sol") == conf.CodexFamily("gpt-6-luna") {
 		t.Fatal("version/family matching")
 	}
 }
@@ -103,7 +105,7 @@ func TestCodexNewVersionsInheritPoolAndSupportedEfforts(t *testing.T) {
 func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	u, _ := testUI(t)
 	path := filepath.Join(t.TempDir(), "providers.json")
-	u.cs = NewStore(u.cs.Get(), path)
+	u.cs = conf.NewStore(u.cs.Get(), path)
 	entered, release := make(chan struct{}), make(chan struct{})
 	u.fetchAnthropic = func(context.Context) ([]string, error) {
 		close(entered)
@@ -135,7 +137,7 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	if !reflect.DeepEqual(after.Catalog.Anthropic, current.Catalog.Anthropic) || !after.Catalog.AnthropicUpdated.Equal(updated) || len(after.Catalog.Notes) != 1 {
 		t.Fatal("failed refresh destroyed cache or hid failure")
 	}
-	reloaded, err := ReadProviders(path)
+	reloaded, err := conf.ReadProviders(path)
 	if err != nil || !reflect.DeepEqual(reloaded.Catalog.Anthropic, after.Catalog.Anthropic) || reloaded.RouteFor("claude-opus-6", "high").Mode != "anthropic" {
 		t.Fatalf("catalog persistence: %v", err)
 	}
@@ -143,12 +145,12 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 
 func TestCodexEffortControlsUseSelectedModelCatalog(t *testing.T) {
 	u, h := testUI(t)
-	p := provider{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}
+	p := provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}
 	l := localSetup{Providers: []provider{p}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}, {Provider: "codex", Model: "gpt-6-luna"}}, ModelPools: map[string][]poolTarget{"work": {}}}
 	c := u.cs.Get()
 	c.Local = l
-	u.cs = NewStore(c, filepath.Join(t.TempDir(), "providers.json"))
-	u.probe = map[string]probeResult{"codex": {At: time.Now(), OK: true, Base: CodexBaseURL, Models: []string{"gpt-6-sol", "gpt-6-luna"}, Info: []probeModel{{ID: "gpt-6-sol", Efforts: []string{"low", "high", "ultra"}}, {ID: "gpt-6-luna", Efforts: []string{"low", "high"}}}}}
+	u.cs = conf.NewStore(c, filepath.Join(t.TempDir(), "providers.json"))
+	u.probe = map[string]probeResult{"codex": {At: time.Now(), OK: true, Base: conf.CodexBaseURL, Models: []string{"gpt-6-sol", "gpt-6-luna"}, Info: []probeModel{{ID: "gpt-6-sol", Efforts: []string{"low", "high", "ultra"}}, {ID: "gpt-6-luna", Efforts: []string{"low", "high"}}}}}
 	for _, tc := range []struct {
 		key   string
 		ultra bool
@@ -185,18 +187,18 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 }
 
 func TestCodexInheritanceIncludesInactiveProfilesOnce(t *testing.T) {
-	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{"work": {{Model: "codex/gpt-6-sol", Effort: "high"}}}}
-	l.Profiles = map[string]routingProfile{"default": l.Routing(), "cloud": l.Routing()}
+	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{"work": {{Model: "codex/gpt-6-sol", Effort: "high"}}}}
+	l.Profiles = map[string]conf.Profile{"default": l.Routing(), "cloud": l.Routing()}
 	l.ActiveProfile = "default"
 	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high"}}, {ID: "gpt-6.1-sol", Efforts: []string{"high"}}}
-	InheritCodexModels(&l, "codex", models)
+	conf.InheritCodexModels(&l, "codex", models)
 	if len(l.ModelPools["work"]) != 2 || len(l.Profiles["cloud"].ModelPools["work"]) != 2 {
 		t.Fatalf("new version missed profile: %+v", l.Profiles)
 	}
 	cloud := l.Profiles["cloud"]
 	cloud.ModelPools["work"] = cloud.ModelPools["work"][:1]
 	l.Profiles["cloud"] = cloud
-	InheritCodexModels(&l, "codex", models)
+	conf.InheritCodexModels(&l, "codex", models)
 	if len(l.Profiles["cloud"].ModelPools["work"]) != 1 {
 		t.Fatal("manually removed version re-added")
 	}

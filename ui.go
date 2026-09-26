@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 )
@@ -477,8 +478,7 @@ type routeChoice struct {
 	Inherited   string
 }
 
-var ClaudeEfforts = []string{"default", "low", "medium", "high", "xhigh", "max"}
-var ProviderEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+var anthropicModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"}
 
 type poolRow struct {
 	Profile   string
@@ -553,7 +553,7 @@ type providerRow struct {
 
 func (u *uiServer) settingsView() settingsView {
 	c := u.cs.Get()
-	v := settingsView{ReloadErrors: u.cs.ReloadFailures(), ActiveProfile: c.Local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.Local.Catalog, C: c, Models: u.ranked(c), AllModels: c.Local.Models, Efforts: ProviderEfforts, Limits: u.limits.View(time.Now())}
+	v := settingsView{ReloadErrors: u.cs.ReloadFailures(), ActiveProfile: c.Local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.Local.Catalog, C: c, Models: u.ranked(c), AllModels: c.Local.Models, Efforts: conf.ProviderEfforts, Limits: u.limits.View(time.Now())}
 	for name := range c.Local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}
@@ -620,7 +620,7 @@ func (u *uiServer) settingsView() settingsView {
 	}
 	families := map[string]bool{}
 	for model := range models {
-		if family := ClaudeFamily(model); family != "" {
+		if family := conf.ClaudeFamily(model); family != "" {
 			families[family] = true
 		}
 	}
@@ -634,7 +634,7 @@ func (u *uiServer) settingsView() settingsView {
 	sort.Strings(familyNames)
 	for _, family := range familyNames {
 		row := routeRow{Profile: c.Local.ActiveProfile, Model: family, Label: strings.ToUpper(family[:1]) + family[1:], IsFamily: true, Pools: v.Pools, Targets: directTargets}
-		for _, effort := range ClaudeEfforts {
+		for _, effort := range conf.ClaudeEfforts {
 			route, ok := c.Local.FamilyRoutes[family][effort]
 			if !ok {
 				route.Mode = "disabled"
@@ -649,9 +649,9 @@ func (u *uiServer) settingsView() settingsView {
 	}
 	sort.Strings(ids)
 	for _, model := range ids {
-		family := ClaudeFamily(model)
+		family := conf.ClaudeFamily(model)
 		row := routeRow{Profile: c.Local.ActiveProfile, Model: model, Label: model, Family: family, Pools: v.Pools, Targets: directTargets}
-		for _, effort := range ClaudeEfforts {
+		for _, effort := range conf.ClaudeEfforts {
 			route, explicit := c.Local.Routes[model][effort]
 			choice := routeChoice{Effort: effort, Destination: "disabled"}
 			if explicit {
@@ -699,7 +699,7 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	settings, err := ParsePoolSettings(settingsInput{
+	settings, err := conf.ParsePoolSettings(settingsInput{
 		MaxInputChars: r.FormValue("max_input_chars"),
 		Failover:      r.FormValue("failover"),
 		FirstByte:     r.FormValue("first_byte"),
@@ -710,10 +710,6 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		err = u.cs.SavePoolSettings(r.FormValue("name"), settings, r.FormValue("profile"))
 	}
 	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены")
-}
-
-func SplitList(s string) []string {
-	return strings.FieldsFunc(s, func(c rune) bool { return c == ',' || c == '\n' || c == ' ' })
 }
 
 func disableDirectRoutes(l *localSetup, removed func(string) bool) {
@@ -750,9 +746,9 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	model := strings.TrimSpace(r.FormValue("model"))
 	familyScope := r.FormValue("scope") == "family"
 	choices := map[string]modelRoute{}
-	for _, effort := range ClaudeEfforts {
+	for _, effort := range conf.ClaudeEfforts {
 		dest := r.FormValue(effort)
-		if !familyScope && (dest == "inherit" || dest == "" && ClaudeFamily(model) != "") {
+		if !familyScope && (dest == "inherit" || dest == "" && conf.ClaudeFamily(model) != "") {
 			continue
 		}
 		route := modelRoute{Mode: dest}
@@ -842,7 +838,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		}
 		p := provider{Name: name, Type: r.FormValue("type"), BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")}
 		if p.Type == "codex" {
-			p.BaseURL, p.APIKey, p.AuthID = CodexBaseURL, "", NewCodexAuthID()
+			p.BaseURL, p.APIKey, p.AuthID = conf.CodexBaseURL, "", conf.NewCodexAuthID()
 		}
 		l.Providers = append(l.Providers, p)
 		flash = "Провайдер добавлен: " + name
@@ -1177,7 +1173,7 @@ func modelEffortOptions(l localSetup, key string, info map[string]probeModel) []
 			return m.Efforts
 		}
 		if p.Type != "codex" {
-			return ProviderEfforts
+			return conf.ProviderEfforts
 		}
 		for _, m := range l.Catalog.Providers[p.Name].Models {
 			if m.ID == model.Model {
@@ -1286,7 +1282,7 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 	defer func() { u.probe[p.Name] = res }()
 	endpoint := p.BaseURL + "/models"
 	if p.Type == "codex" {
-		endpoint = CodexBaseURL + "/models?client_version=0.156.0"
+		endpoint = conf.CodexBaseURL + "/models?client_version=0.156.0"
 	}
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
@@ -1349,7 +1345,7 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 			if m.Slug != "" && m.Visibility == "list" {
 				info := probeModel{ID: m.Slug, Name: m.Name}
 				for _, level := range m.Supported {
-					if ValidProviderEffort(level.Effort) {
+					if conf.ValidProviderEffort(level.Effort) {
 						info.Efforts = append(info.Efforts, level.Effort)
 					}
 				}
@@ -1514,7 +1510,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	local := true // op changes providers.json rather than env or ratings
 	switch op {
 	case "add":
-		for _, id := range SplitList(r.FormValue("model")) {
+		for _, id := range conf.SplitList(r.FormValue("model")) {
 			m := localModel{Provider: pname, Model: id}
 
 			l.Models = append(l.Models, m)
@@ -1539,7 +1535,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 		disableDirectRoutes(&l, func(model string) bool { return model == key })
 	case "failover":
 		local = false
-		in := InputFromConfig(c)
+		in := conf.InputFromConfig(c)
 		in.Failover = "0"
 		if r.FormValue("on") == "1" {
 			in.Failover = "1"

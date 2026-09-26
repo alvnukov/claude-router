@@ -46,14 +46,6 @@ func newClaudeProxy() *claudeProxy {
 	return &claudeProxy{path: filepath.Join(dir, "settings.json")}
 }
 
-// ClientListen is the address clients should use to reach the router.
-func (c config) ClientListen() string {
-	if c.PublicListen != "" {
-		return c.PublicListen
-	}
-	return c.Listen
-}
-
 func routerClientURL(listen string) (string, error) {
 	if listen == "" {
 		listen = "127.0.0.1:8787"

@@ -7,22 +7,24 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	conf "localrouter/internal/config"
 )
 
 func TestStandbyActivationReloadsSeparateProfilePointerWithoutWritingConfig(t *testing.T) {
-	owner, h, path := profileFixture(t)
+	owner, _, path := profileFixture(t)
 	if err := owner.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	if err := owner.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	standbySetup, err := ReadProviders(path)
+	standbySetup, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	standby := NewStore(config{Local: standbySetup}, path)
-	if err := owner.ActivateProfile("cloud", h); err != nil {
+	standby := conf.NewStore(config{Local: standbySetup}, path)
+	if err := owner.ActivateProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
 	providerBefore, err := os.ReadFile(path)
@@ -77,7 +79,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"providers":[{"name":"p","base_url":"http://h/v1"}],"models":[{"provider":"p","model":"a"}],"pools":{"opus":["p/a"]}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	legacy, err := ReadProviders(path)
+	legacy, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +87,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte(`{"stats":{},"sessions":{}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	standby := NewStore(config{Local: legacy}, path)
+	standby := conf.NewStore(config{Local: legacy}, path)
 	r := &routerServer{cs: standby, health: newHealth(""), life: newLifecycle(true)}
 	w := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
@@ -99,7 +101,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 			t.Fatalf("activation skipped a migration: %v", err)
 		}
 	}
-	saved, err := ReadProviders(path)
+	saved, err := conf.ReadProviders(path)
 	if err != nil || saved.Pools != nil || saved.Routes == nil || standby.Get().Local.Routes == nil {
 		t.Fatalf("migrated routes not saved and served: %v", err)
 	}
@@ -109,7 +111,7 @@ func TestStandbyActivationRunsConfigMigrations(t *testing.T) {
 // only writes it once activation makes it the only writer.
 func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + CodexBaseURL + `"}]}`
+	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + conf.CodexBaseURL + `"}]}`
 	writeRaw(t, path, raw)
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)
 	t.Setenv("ROUTER_STANDBY", "1")
@@ -127,7 +129,7 @@ func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte(`{"stats":{},"sessions":{}}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	standby := NewStore(c, path)
+	standby := conf.NewStore(c, path)
 	r := &routerServer{cs: standby, health: newHealth(""), life: newLifecycle(true)}
 	w := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/admin/activate", nil)
@@ -136,13 +138,13 @@ func TestStandbySlotAssignsCodexIDsOnActivation(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("standby activation: %d %s", w.Code, w.Body.String())
 	}
-	saved, err := ReadProviders(path)
+	saved, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatalf("activation left providers.json without auth_id: %v", err)
 	}
 	onDisk, _ := saved.Provider("work")
 	served, _ := standby.Get().Local.Provider("work")
-	if !AuthIDOK(onDisk.AuthID) || served.AuthID != onDisk.AuthID {
+	if !conf.AuthIDOK(onDisk.AuthID) || served.AuthID != onDisk.AuthID {
 		t.Fatalf("auth_id on disk %q, served %q", onDisk.AuthID, served.AuthID)
 	}
 	if backup, _ := os.ReadFile(path + ".before-codex-ids"); string(backup) != raw {

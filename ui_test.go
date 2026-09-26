@@ -14,12 +14,13 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
 func TestSettingsUsesAnthropicPools(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	for _, model := range []string{"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"} {
 		if !strings.Contains(body, `data-model="`+model+`"`) {
@@ -76,7 +77,7 @@ func testUI(t *testing.T, sessions ...string) (*uiServer, http.Handler) {
 	}))
 	t.Cleanup(prov.Close)
 	t.Setenv("ROUTER_ENV_FILE", filepath.Join(t.TempDir(), "env"))
-	cs := NewStore(config{Local: oneProvider(prov.URL, "m1"), Failover: true, FirstByte: 45 * time.Second}, "")
+	cs := conf.NewStore(config{Local: oneProvider(prov.URL, "m1"), Failover: true, FirstByte: 45 * time.Second}, "")
 	st := history.New(100, "")
 	for _, sid := range sessions {
 		meta := fmt.Sprintf(`{"metadata":{"user_id":"{\"session_id\":\"%s\"}"},"messages":[{"role":"user","content":"hello"}]}`, sid)
@@ -163,7 +164,7 @@ func TestListCountsAndSessions(t *testing.T) {
 
 func TestSettingsShowsModelStats(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"create"}, "name": {"work"}})
 	get(t, h, "POST", "/settings/pools", url.Values{"op": {"add"}, "name": {"work"}, "key": {"p/m1"}})
 	u.hl.recordProbe("p/m1", true, time.Second, "")
@@ -215,7 +216,7 @@ func withBadProvider(t *testing.T, good []byte) string {
 		t.Fatal(err)
 	}
 	providers, _ := doc["providers"].([]any)
-	doc["providers"] = append([]any{map[string]any{"name": "work", "type": "codex", "base_url": CodexBaseURL}}, providers...)
+	doc["providers"] = append([]any{map[string]any{"name": "work", "type": "codex", "base_url": conf.CodexBaseURL}}, providers...)
 	bad, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -363,7 +364,7 @@ func TestReloadErrorClearedByUISave(t *testing.T) {
 	if len(u.settingsView().ReloadErrors) != 1 {
 		t.Fatal("bad env file not reported")
 	}
-	if err := cs.Apply(InputFromConfig(cs.Get()), true); err != nil {
+	if err := cs.Apply(conf.InputFromConfig(cs.Get()), true); err != nil {
 		t.Fatal(err)
 	}
 	cs.Poll()

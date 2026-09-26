@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -76,12 +77,12 @@ func TestPoolTypeUnknownRejected(t *testing.T) {
 
 func TestPoolSaveKeepsType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: PoolFailover, FirstByteSec: 5}})
+	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: conf.PoolFailover, FirstByteSec: 5}})
 	cfg.Upstream, _ = url.Parse("https://api.anthropic.com")
-	if err := WriteProviders(path, cfg.Local); err != nil {
+	if err := conf.WriteProviders(path, cfg.Local); err != nil {
 		t.Fatal(err)
 	}
-	cs := NewStore(cfg, path)
+	cs := conf.NewStore(cfg, path)
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	// The form has neither a type (until Task 12) nor the numeric balance.
 	values := url.Values{"name": {"pair"}, "failover": {"1"}, "first_byte": {"7"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
@@ -103,11 +104,11 @@ func TestPoolSaveKeepsType(t *testing.T) {
 	if strings.Contains(string(raw), `"balance":`) {
 		t.Fatalf("saved file still has the numeric balance: %s", raw)
 	}
-	l, err := ReadProviders(path)
+	l, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := l.PoolSettings["pair"]; got.Type != PoolFailover || got.FirstByteSec != 7 {
+	if got := l.PoolSettings["pair"]; got.Type != conf.PoolFailover || got.FirstByteSec != 7 {
 		t.Fatalf("saved %+v", got)
 	}
 }

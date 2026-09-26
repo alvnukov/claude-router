@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	CodexBaseURL  = "https://chatgpt.com/backend-api/codex"
 	codexIssuer   = "https://auth.openai.com"
 	codexClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 )

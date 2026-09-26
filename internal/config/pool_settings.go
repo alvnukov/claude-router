@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ const PoolFailover = "failover"
 const PoolBalance = "balance"
 
 // Pool behavior is persisted independently of the legacy env defaults.
-type poolSettings struct {
+type PoolSettings struct {
 	Type          string `json:"type,omitempty"`
 	Failover      bool   `json:"failover"`
 	FirstByteSec  int    `json:"first_byte_seconds"`
@@ -28,8 +28,8 @@ type poolSettings struct {
 
 // UnmarshalJSON accepts files written before the pool type existed: their
 // numeric "balance" no longer does anything and is dropped at the next write.
-func (s *poolSettings) UnmarshalJSON(data []byte) error {
-	type plain poolSettings
+func (s *PoolSettings) UnmarshalJSON(data []byte) error {
+	type plain PoolSettings
 	var in struct {
 		plain
 		Balance *json.RawMessage `json:"balance"`
@@ -37,21 +37,21 @@ func (s *poolSettings) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &in); err != nil {
 		return err
 	}
-	*s = poolSettings(in.plain)
+	*s = PoolSettings(in.plain)
 	if in.Balance != nil {
 		log.Printf("pool_settings: поле balance устарело и не используется; тип пула задаёт поле type")
 	}
 	return nil
 }
 
-func (c config) PoolSettings(name string) poolSettings {
+func (c Config) PoolSettings(name string) PoolSettings {
 	if s, ok := c.Local.PoolSettings[name]; ok {
 		return s
 	}
-	return poolSettings{Failover: c.Failover, FirstByteSec: c.FirstByteSec(), ProbeSec: c.ProbeSec(), MaxInputChars: c.MaxInputChars}
+	return PoolSettings{Failover: c.Failover, FirstByteSec: c.FirstByteSec(), ProbeSec: c.ProbeSec(), MaxInputChars: c.MaxInputChars}
 }
 
-func (s poolSettings) Apply(c config) config {
+func (s PoolSettings) Apply(c Config) Config {
 	c.Failover = s.Failover
 	c.FirstByte = time.Duration(s.FirstByteSec) * time.Second
 	c.ProbeEvery = time.Duration(s.ProbeSec) * time.Second
@@ -59,7 +59,7 @@ func (s poolSettings) Apply(c config) config {
 	return c
 }
 
-func (s poolSettings) validate() error {
+func (s PoolSettings) validate() error {
 	if s.Type != "" && s.Type != PoolFailover && s.Type != PoolBalance {
 		return fmt.Errorf("тип пула %q не поддерживается (есть failover и balance)", s.Type)
 	}
@@ -74,8 +74,8 @@ func (s poolSettings) validate() error {
 	return nil
 }
 
-func ParsePoolSettings(in settingsInput) (poolSettings, error) {
-	s := poolSettings{Type: strings.TrimSpace(in.Type), Failover: in.Failover == "1"}
+func ParsePoolSettings(in SettingsInput) (PoolSettings, error) {
+	s := PoolSettings{Type: strings.TrimSpace(in.Type), Failover: in.Failover == "1"}
 	for _, field := range []struct {
 		name, value string
 		out         *int
@@ -94,11 +94,11 @@ func ParsePoolSettings(in settingsInput) (poolSettings, error) {
 }
 
 // Copy old global values once, preserving explicitly configured zero/false.
-func MigratePoolSettings(c config) (localSetup, bool) {
+func MigratePoolSettings(c Config) (Local, bool) {
 	l := c.Local.Clone()
 	changed := false
 	if l.PoolSettings == nil {
-		l.PoolSettings = map[string]poolSettings{}
+		l.PoolSettings = map[string]PoolSettings{}
 	}
 	for name := range l.ModelPools {
 		if _, ok := l.PoolSettings[name]; !ok {
@@ -110,8 +110,8 @@ func MigratePoolSettings(c config) (localSetup, bool) {
 }
 
 // SavePoolSettings stores settings as given; an empty Type keeps the stored one.
-func (s *configStore) SavePoolSettings(name string, settings poolSettings, expectedProfile ...string) error {
-	return s.UpdatePoolSettings(name, func(old poolSettings) poolSettings {
+func (s *Store) SavePoolSettings(name string, settings PoolSettings, expectedProfile ...string) error {
+	return s.UpdatePoolSettings(name, func(old PoolSettings) PoolSettings {
 		if settings.Type == "" {
 			settings.Type = old.Type
 		}
@@ -123,7 +123,7 @@ func (s *configStore) SavePoolSettings(name string, settings poolSettings, expec
 // a simultaneous catalog refresh or another pool's settings update cannot be
 // overwritten, and a form never overwrites a field it does not show with a
 // stale value.
-func (s *configStore) UpdatePoolSettings(name string, merge func(old poolSettings) poolSettings, expectedProfile ...string) error {
+func (s *Store) UpdatePoolSettings(name string, merge func(old PoolSettings) PoolSettings, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != s.c.Local.ActiveProfile {

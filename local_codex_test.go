@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -21,8 +22,8 @@ import (
 func twoCodexPool() config {
 	l := localSetup{
 		Providers: []provider{
-			{Name: "codex", Type: "codex", BaseURL: CodexBaseURL},
-			{Name: "work", Type: "codex", BaseURL: CodexBaseURL, AuthID: testAuthB},
+			{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL},
+			{Name: "work", Type: "codex", BaseURL: conf.CodexBaseURL, AuthID: testAuthB},
 		},
 		Models:     []localModel{{Provider: "codex", Model: "gpt"}, {Provider: "work", Model: "gpt"}},
 		Routes:     map[string]map[string]modelRoute{"local-model": {"default": {Mode: "pool", Pool: "gpt"}}},
@@ -250,8 +251,8 @@ func TestClientCancelKeepsBinding(t *testing.T) {
 func codexPoolSetup(members ...string) localSetup {
 	l := localSetup{
 		Providers: []provider{
-			{Name: "codex", Type: "codex", BaseURL: CodexBaseURL},
-			{Name: "work", Type: "codex", BaseURL: CodexBaseURL, AuthID: testAuthB},
+			{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL},
+			{Name: "work", Type: "codex", BaseURL: conf.CodexBaseURL, AuthID: testAuthB},
 		},
 		Routes:     map[string]map[string]modelRoute{"local-model": {"default": {Mode: "pool", Pool: "gpt"}}},
 		ModelPools: map[string][]poolTarget{"gpt": nil},
@@ -322,10 +323,11 @@ func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
 	start := config{Local: codexPoolSetup("codex/gpt", "work/gpt"), Failover: true, FirstByte: 5 * time.Second}
 	start.Local.PoolSettings = map[string]poolSettings{"gpt": {Failover: true, FirstByteSec: 5}}
 	start.Upstream, _ = url.Parse("https://api.anthropic.com")
-	if err := WriteProviders(path, start.Local); err != nil {
+	if err := conf.WriteProviders(path, start.Local); err != nil {
 		t.Fatal(err)
 	}
-	cs, hl := NewStore(start, path), newHealth("")
+	cs, hl := conf.NewStore(start, path), newHealth("")
+	cs.OnProfileChange(hl.clearSessions)
 	serve := func(session, want string) {
 		t.Helper()
 		if _, tr := runLocalSession(t, cs.Get().ForModel("local-model", ""), hl, session); tr.Served != want {
@@ -337,10 +339,10 @@ func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
 
 	// Switched from the UI: new sessions balance, bound ones stay.
 	h := newUIServer(history.New(10, ""), cs, hl).handler()
-	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "type": {PoolBalance}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})
+	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "type": {conf.PoolBalance}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})
 	// A form without the type field keeps the stored one.
 	get(t, h, "POST", "/settings/pool-settings", url.Values{"name": {"gpt"}, "failover": {"1"}, "first_byte": {"5"}, "probe_every": {"0"}, "max_input_chars": {"0"}})
-	if typ := cs.Get().Local.PoolSettings["gpt"].Type; typ != PoolBalance {
+	if typ := cs.Get().Local.PoolSettings["gpt"].Type; typ != conf.PoolBalance {
 		t.Fatalf("pool type after the UI saves: %q", typ)
 	}
 	serve("n1", "work/gpt")
@@ -350,17 +352,17 @@ func TestCodexPoolTypeSwitchAtRuntime(t *testing.T) {
 	serve("s2", "codex/gpt")
 
 	// Switched back by editing the file and reloading it.
-	l, err := ReadProviders(path)
+	l, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ps := l.PoolSettings["gpt"]
-	ps.Type = PoolFailover
+	ps.Type = conf.PoolFailover
 	l.PoolSettings["gpt"] = ps
-	if err := WriteProviders(path, l); err != nil {
+	if err := conf.WriteProviders(path, l); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.Reload(hl); err != nil {
+	if err := cs.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	serve("n4", "codex/gpt")

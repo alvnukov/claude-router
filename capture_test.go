@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 func TestBuildContext(t *testing.T) {
@@ -48,7 +50,7 @@ func TestBuildContext(t *testing.T) {
 func TestWriteEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "# comment\nROUTER_LOCAL_MODEL=old\nOTHER=keep\n")
-	err := WriteEnv(p, map[string]string{"ROUTER_LOCAL_MODEL": "new", "ROUTER_CLOUD_ONLY": "a,b", "ROUTER_LOCAL_API_KEY": "k y"})
+	err := conf.WriteEnv(p, map[string]string{"ROUTER_LOCAL_MODEL": "new", "ROUTER_CLOUD_ONLY": "a,b", "ROUTER_LOCAL_API_KEY": "k y"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func TestUnassignedBackendIsDisabled(t *testing.T) {
 func TestReadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "# c\nexport A=1\nB=\"x y\"\nC='q'\nD=\nbad line\n")
-	m, err := ReadEnv(p)
+	m, err := conf.ReadEnv(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestReloadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n")
 	t.Setenv("ROUTER_ENV_FILE", p)
-	cs := NewStore(config{Failover: true, FirstByte: 45 * time.Second}, "")
+	cs := conf.NewStore(config{Failover: true, FirstByte: 45 * time.Second}, "")
 	changed, err := cs.ReloadEnv()
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
@@ -104,7 +106,7 @@ func TestReloadEnv(t *testing.T) {
 
 func TestProvidersFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "providers.json")
-	cs := NewStore(config{Local: oneProvider("http://h/v1", "zero")}, p)
+	cs := conf.NewStore(config{Local: oneProvider("http://h/v1", "zero")}, p)
 	l := localSetup{
 		Providers:  []provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
 		Models:     []localModel{{Provider: "a", Model: "m1"}, {Provider: "b", Model: "m2"}, {Provider: "a", Model: "m1"}},
@@ -119,7 +121,7 @@ func TestProvidersFile(t *testing.T) {
 	if len(c.Local.Models) != 2 || c.Local.Providers[0].BaseURL != "http://a/v1" || c.RouteFor("zero", "default").Mode != "disabled" || c.RouteFor("m2", "default").Mode != "disabled" {
 		t.Fatalf("%+v", c.Local)
 	}
-	got, err := ReadProviders(p)
+	got, err := conf.ReadProviders(p)
 	if err != nil || got.Preferred != "" || got.RouteFor("claude-opus-5", "high").Pool != "work" || got.ModelPools["work"][0].Effort != "high" || got.Providers[1].APIKey != "k" {
 		t.Fatalf("%+v %v", got, err)
 	}

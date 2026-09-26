@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 func TestDirectRouteUsesOnlySelectedModelAndEffort(t *testing.T) {
@@ -81,7 +83,7 @@ func TestDirectRouteRejectsInvalidTargets(t *testing.T) {
 
 func TestDirectRouteProviderRenameAndModelRemoval(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/m1:high"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"update"}, "orig": {"p"}, "name": {"renamed"}, "base_url": {u.cs.Get().Local.Providers[0].BaseURL}})
 	got := u.cs.Get().RouteFor("claude-opus-5", "high")
@@ -96,7 +98,7 @@ func TestDirectRouteProviderRenameAndModelRemoval(t *testing.T) {
 
 func TestDirectRouteProviderRemovalDisablesAssignment(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/m1:high"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"remove"}, "name": {"p"}})
 	if got := u.cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "disabled" {
@@ -106,7 +108,7 @@ func TestDirectRouteProviderRemovalDisablesAssignment(t *testing.T) {
 
 func TestDirectRouteParsesModelIDWithColon(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.Get().Local.Clone()
 	l.Models = append(l.Models, localModel{Provider: "p", Model: "model:version"})
 	if err := u.cs.ApplyLocal(l, false); err != nil {
@@ -120,7 +122,7 @@ func TestDirectRouteParsesModelIDWithColon(t *testing.T) {
 
 func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 	u, h := testUI(t)
-	u.cs = NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.Get().Local.Clone()
 	if err := u.cs.ApplyLocal(l, false); err != nil {
 		t.Fatal(err)
@@ -135,7 +137,7 @@ func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 func TestSettingsSaveDirectRouteAndReload(t *testing.T) {
 	u, h := testUI(t)
 	path := filepath.Join(t.TempDir(), "providers.json")
-	u.cs = NewStore(u.cs.Get(), path)
+	u.cs = conf.NewStore(u.cs.Get(), path)
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	if !strings.Contains(body, `value="model:p/m1:high"`) ||
 		!strings.Contains(body, `>p/m1/high</option>`) ||
@@ -149,7 +151,7 @@ func TestSettingsSaveDirectRouteAndReload(t *testing.T) {
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `class="note err"`) {
 		t.Fatalf("save direct route: %d %s", w.Code, w.Body.String())
 	}
-	loaded, err := ReadProviders(path)
+	loaded, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}

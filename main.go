@@ -17,32 +17,30 @@ import (
 	"time"
 
 	"localrouter/internal/cli"
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
+)
+
+// Псевдонимы шага 5. Каждый удаляет шаг, названный в его строке: тот,
+// что переносит последнего пользователя (крайний — 8a); новый код пишет
+// conf.X напрямую.
+type (
+	config        = conf.Config        // до 8a
+	configStore   = conf.Store         // до 8a
+	localSetup    = conf.Local         // до 8b-1
+	provider      = conf.Provider      // до 8b-1
+	localModel    = conf.Model         // до 8b-1
+	poolTarget    = conf.PoolTarget    // до 8b-1
+	modelRoute    = conf.Route         // до 8a
+	poolSettings  = conf.PoolSettings  // до 8b-1
+	modelCatalog  = conf.Catalog       // до 8b-1
+	catalogModel  = conf.CatalogModel  // до 8b-1
+	settingsInput = conf.SettingsInput // до 8b-1
+	reloadFailure = conf.ReloadFailure // до 8b-1
 )
 
 // respCaptureLimit bounds how much of a response the UI keeps per request.
 const respCaptureLimit = 8 << 20
-
-type config struct {
-	Listen        string
-	PublicListen  string // where clients reach the router; a slot listens behind Caddy
-	Upstream      *url.URL
-	Local         localSetup
-	MaxInputChars int
-	Failover      bool
-	FirstByte     time.Duration // give up on a model that has not answered by then
-	Balance       int           // spread requests over this many best-rated models; <2 sends everything to the first
-	ProbeEvery    time.Duration // ping idle models this often; 0 disables
-	PoolType      string        // PoolFailover or PoolBalance for a pool route: pool order, no rating; "" keeps the rating order
-	PoolName      string        // the pool a pool route resolved to; "" otherwise
-
-	UIListen  string
-	UIHistory int
-}
-
-// Whole seconds, as pool settings store them.
-func (c config) FirstByteSec() int { return int(c.FirstByte / time.Second) }
-func (c config) ProbeSec() int     { return int(c.ProbeEvery / time.Second) }
 
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -71,7 +69,7 @@ func loadConfigChecked() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("bad ROUTER_UPSTREAM_URL: %w", err)
 	}
-	local, assigned, err := LoadLocal(ProvidersPath())
+	local, assigned, err := conf.LoadLocal(conf.ProvidersPath())
 	if err != nil {
 		return config{}, err
 	}
@@ -79,7 +77,7 @@ func loadConfigChecked() (config, error) {
 		// One-time migration: persist the new auth_id values before the other
 		// startup migrations read or rewrite the file. A standby slot writes
 		// them when it is activated.
-		if err := SaveConfigurationMigration(ProvidersPath(), local, ".before-codex-ids"); err != nil {
+		if err := conf.SaveConfigurationMigration(conf.ProvidersPath(), local, ".before-codex-ids"); err != nil {
 			return config{}, fmt.Errorf("codex id migration: %w", err)
 		}
 	}
@@ -99,77 +97,7 @@ func loadConfigChecked() (config, error) {
 	if routerStartsStandby() {
 		return c, nil // standby migrates when it is activated, as the only writer
 	}
-	return MigrateConfig(c, ProvidersPath())
-}
-
-// MigrateConfig brings providers.json at path to the current schema, keeping
-// a backup of each step.
-func MigrateConfig(c config, path string) (config, error) {
-	if migrated, changed := MigrateLegacyPools(c.Local, SplitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
-		if err := SavePoolMigration(path, migrated); err != nil {
-			return config{}, fmt.Errorf("pool migration: %w", err)
-		}
-		c.Local = migrated
-	}
-	if migrated, changed := MigrateFamilyRoutes(c.Local); changed {
-		if err := SaveConfigurationMigration(path, migrated, ".before-families"); err != nil {
-			return config{}, fmt.Errorf("family migration: %w", err)
-		}
-		c.Local = migrated
-	}
-	if migrated, changed := MigratePoolSettings(c); changed {
-		if err := SaveConfigurationMigration(path, migrated, ".before-pool-settings"); err != nil {
-			return config{}, fmt.Errorf("pool settings migration: %w", err)
-		}
-		c.Local = migrated
-	}
-	return c, nil
-}
-
-// Only explicit routes can serve a model. Unknown and disabled models never
-// fall through to Anthropic or to another model's pool.
-func (c config) RouteFor(model, effort string) modelRoute { return c.Local.RouteFor(model, effort) }
-
-func (c config) ForModel(model, effort string) config {
-	if effort == "" {
-		effort = "default"
-	}
-	route := c.RouteFor(model, effort)
-	next := c
-	next.Local = c.Local.Clone()
-	next.Local.Models = nil
-	next.Local.Preferred = ""
-	var targets []poolTarget
-	switch route.Mode {
-	case "model":
-		targets = []poolTarget{{Model: route.Model, Effort: route.Effort}}
-		next.Failover = false
-	case "pool":
-		targets = c.Local.ModelPools[route.Pool]
-		next.PoolName, next.PoolType = route.Pool, PoolFailover
-		if settings, ok := c.Local.PoolSettings[route.Pool]; ok {
-			next = settings.Apply(next)
-			if settings.Type == PoolBalance {
-				next.PoolType = PoolBalance
-			}
-		}
-	default:
-		return next
-	}
-	if len(targets) == 0 {
-		return next
-	}
-	next.Local.Preferred = targets[0].Model
-	for _, target := range targets {
-		for _, m := range c.Local.Models {
-			if m.Key() == target.Model {
-				m.Efforts = map[string]string{effort: target.Effort}
-				next.Local.Models = append(next.Local.Models, m)
-				break
-			}
-		}
-	}
-	return next
+	return conf.MigrateConfig(c, conf.ProvidersPath())
 }
 
 func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error) {
@@ -318,7 +246,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 
 func main() {
 	serve := cli.Entry{Name: "serve", Run: func(context.Context, []string, io.Writer, io.Writer) error {
-		LoadEnvFile()
+		conf.LoadEnvFile()
 		codexAuth = newCodexAuthStore()
 		cfg := loadConfig()
 		life := newLifecycle(routerStartsStandby())
@@ -335,7 +263,7 @@ func main() {
 		SlotLabels:   runServiceLabels,
 		ClientURL:    routerClientURL,
 		SetClaudeURL: func(url string) error { return newClaudeProxy().set(url, true) },
-		ReadEnv:      ReadEnv,
+		ReadEnv:      conf.ReadEnv,
 	}, cli.SystemHost())
 	table := append(append([]cli.Entry{serve}, service...),
 		cli.Entry{Name: "deploy", Run: func(ctx context.Context, args []string, stdout, _ io.Writer) error {

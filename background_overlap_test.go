@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 func TestCheckerStopsOutgoingProbesAfterQuiesce(t *testing.T) {
@@ -27,7 +29,7 @@ func TestCheckerStopsOutgoingProbesAfterQuiesce(t *testing.T) {
 	h.life = life
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startChecker(ctx, NewStore(c, ""), h, life)
+	startChecker(ctx, conf.NewStore(c, ""), h, life)
 	deadline := time.After(3 * time.Second)
 	for calls.Load() == 0 {
 		select {

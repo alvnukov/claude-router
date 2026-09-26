@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -18,7 +18,7 @@ import (
 // first-run seed. The UI writes the file; a hand edit is picked up within two
 // seconds like env.
 
-type provider struct {
+type Provider struct {
 	Name    string `json:"name"`
 	Type    string `json:"type,omitempty"` // "" (OpenAI chat) or "codex" (ChatGPT subscription)
 	BaseURL string `json:"base_url"`
@@ -26,40 +26,41 @@ type provider struct {
 	AuthID  string `json:"auth_id,omitempty"` // Codex only: names this connection's credential file
 }
 
-type localModel struct {
+type Model struct {
 	Provider string            `json:"provider"`
 	Model    string            `json:"model"`
 	Efforts  map[string]string `json:"efforts,omitempty"` // Claude effort -> provider effort
 }
 
-func (m localModel) Key() string { return m.Provider + "/" + m.Model }
+func (m Model) Key() string { return m.Provider + "/" + m.Model }
 
-type poolTarget struct {
+type PoolTarget struct {
 	Model  string `json:"model"`
 	Effort string `json:"effort,omitempty"`
 }
 
-type modelRoute struct {
+type Route struct {
 	Mode   string `json:"mode"` // disabled, anthropic, pool, model
 	Pool   string `json:"pool,omitempty"`
 	Model  string `json:"model,omitempty"`
 	Effort string `json:"effort,omitempty"`
 }
 
-var anthropicModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"}
+var ClaudeEfforts = []string{"default", "low", "medium", "high", "xhigh", "max"}
+var ProviderEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 
-type localSetup struct {
-	ActiveProfile string                           `json:"active_profile,omitempty"`
-	Profiles      map[string]routingProfile        `json:"profiles,omitempty"`
-	PoolSettings  map[string]poolSettings          `json:"pool_settings,omitempty"`
-	FamilyRoutes  map[string]map[string]modelRoute `json:"family_routes"`
-	Catalog       modelCatalog                     `json:"catalog,omitempty"`
-	Providers     []provider                       `json:"providers"`
-	Models        []localModel                     `json:"models"`
-	Preferred     string                           `json:"preferred,omitempty"` // legacy input / request-scoped first pool member
-	Pools         map[string][]string              `json:"pools,omitempty"`     // legacy, read only
-	Routes        map[string]map[string]modelRoute `json:"routes"`
-	ModelPools    map[string][]poolTarget          `json:"model_pools"`
+type Local struct {
+	ActiveProfile string                      `json:"active_profile,omitempty"`
+	Profiles      map[string]Profile          `json:"profiles,omitempty"`
+	PoolSettings  map[string]PoolSettings     `json:"pool_settings,omitempty"`
+	FamilyRoutes  map[string]map[string]Route `json:"family_routes"`
+	Catalog       Catalog                     `json:"catalog,omitempty"`
+	Providers     []Provider                  `json:"providers"`
+	Models        []Model                     `json:"models"`
+	Preferred     string                      `json:"preferred,omitempty"` // legacy input / request-scoped first pool member
+	Pools         map[string][]string         `json:"pools,omitempty"`     // legacy, read only
+	Routes        map[string]map[string]Route `json:"routes"`
+	ModelPools    map[string][]PoolTarget     `json:"model_pools"`
 }
 
 func ProvidersPath() string {
@@ -72,16 +73,16 @@ func ProvidersPath() string {
 	return "providers.json"
 }
 
-func (l localSetup) Provider(name string) (provider, bool) {
+func (l Local) Provider(name string) (Provider, bool) {
 	for _, p := range l.Providers {
 		if p.Name == name {
 			return p, true
 		}
 	}
-	return provider{}, false
+	return Provider{}, false
 }
 
-func (l localSetup) HasModel(key string) bool {
+func (l Local) HasModel(key string) bool {
 	for _, m := range l.Models {
 		if m.Key() == key {
 			return true
@@ -91,8 +92,8 @@ func (l localSetup) HasModel(key string) bool {
 }
 
 // Ordered is the preferred model first, then the rest as configured.
-func (l localSetup) Ordered() []localModel {
-	out := make([]localModel, 0, len(l.Models))
+func (l Local) Ordered() []Model {
+	out := make([]Model, 0, len(l.Models))
 	for _, m := range l.Models {
 		if m.Key() == l.Preferred {
 			out = append(out, m)
@@ -107,7 +108,7 @@ func (l localSetup) Ordered() []localModel {
 }
 
 // ProvidersOf lists provider names, for templates.
-func (l localSetup) ProviderNames() []string {
+func (l Local) ProviderNames() []string {
 	out := make([]string, 0, len(l.Providers))
 	for _, p := range l.Providers {
 		out = append(out, p.Name)
@@ -120,7 +121,7 @@ func providerNameOK(n string) bool {
 }
 
 // Validate normalises in place and rejects anything the router could not act on.
-func (l *localSetup) Validate() error {
+func (l *Local) Validate() error {
 	seen := map[string]bool{}
 	authIDs := map[string]bool{}
 	for i := range l.Providers {
@@ -165,7 +166,7 @@ func (l *localSetup) Validate() error {
 		}
 	}
 	keys := map[string]bool{}
-	var models []localModel
+	var models []Model
 	for _, m := range l.Models {
 		m.Provider = strings.TrimSpace(m.Provider)
 		m.Model = strings.TrimSpace(m.Model)
@@ -287,7 +288,7 @@ func ValidProviderEffort(value string) bool {
 	return false
 }
 
-func ReadProviders(path string) (localSetup, error) {
+func ReadProviders(path string) (Local, error) {
 	l, _, err := readProvidersWith(path, nil)
 	return l, err
 }
@@ -295,7 +296,7 @@ func ReadProviders(path string) (localSetup, error) {
 // readProvidersWith lets prepare change the setup before it is validated; the
 // bool reports whether it did. Only startup passes a prepare, so a manual
 // reload stays strict and never assigns anything.
-func readProvidersWith(path string, prepare func(*localSetup) bool) (localSetup, bool, error) {
+func readProvidersWith(path string, prepare func(*Local) bool) (Local, bool, error) {
 	l, err := readProvidersRaw(path)
 	if err != nil {
 		return l, false, err
@@ -310,8 +311,8 @@ func readProvidersWith(path string, prepare func(*localSetup) bool) (localSetup,
 	return l, changed, nil
 }
 
-func readProvidersRaw(path string) (localSetup, error) {
-	var l localSetup
+func readProvidersRaw(path string) (Local, error) {
+	var l Local
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return l, err
@@ -331,7 +332,7 @@ func readProvidersRaw(path string) (localSetup, error) {
 		if err != nil {
 			return l, err
 		}
-		l.Profiles = make(map[string]routingProfile, len(entries))
+		l.Profiles = make(map[string]Profile, len(entries))
 		for _, entry := range entries {
 			name := strings.TrimSuffix(entry.Name(), ".json")
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || !profileNameOK(name) {
@@ -341,7 +342,7 @@ func readProvidersRaw(path string) (localSetup, error) {
 			if err != nil {
 				return l, err
 			}
-			var profile routingProfile
+			var profile Profile
 			if err := json.Unmarshal(body, &profile); err != nil {
 				return l, fmt.Errorf("profile %q: %w", name, err)
 			}
@@ -385,7 +386,7 @@ func WriteActiveProfile(path, name string) error {
 	return writeAtomicIfChanged(path+".active-profile", append(data, '\n'))
 }
 
-func WriteProviders(path string, l localSetup) error {
+func WriteProviders(path string, l Local) error {
 	l = l.Clone()
 	active := l.ActiveProfile
 	l.Preferred = "" // priority belongs to each pool, never the model catalog
@@ -419,7 +420,7 @@ func WriteProviders(path string, l localSetup) error {
 	if l.Profiles == nil && l.Routes == nil && l.ActiveProfile == "" {
 		// Legacy configurations still need an explicit routes map for migration.
 		if _, err := os.Stat(path + ".active-profile"); os.IsNotExist(err) {
-			l.Routes = map[string]map[string]modelRoute{}
+			l.Routes = map[string]map[string]Route{}
 		}
 	}
 	data, err := json.MarshalIndent(l, "", "  ")
@@ -435,20 +436,27 @@ func WriteProviders(path string, l localSetup) error {
 	return nil
 }
 
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
 // SeedFromEnv builds the initial setup from ROUTER_LOCAL_* for a router that
 // has no providers.json yet. The provider is named after the host.
-func SeedFromEnv() localSetup {
-	base := strings.TrimSuffix(env("ROUTER_LOCAL_BASE_URL", "http://127.0.0.1:1234/v1"), "/")
+func SeedFromEnv() Local {
+	base := strings.TrimSuffix(envOr("ROUTER_LOCAL_BASE_URL", "http://127.0.0.1:1234/v1"), "/")
 	name := "local"
 	if u, err := url.Parse(base); err == nil && u.Hostname() != "" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
 		name = strings.SplitN(u.Hostname(), ".", 2)[0]
 	}
-	l := localSetup{FamilyRoutes: map[string]map[string]modelRoute{}, Routes: map[string]map[string]modelRoute{}, ModelPools: map[string][]poolTarget{}, Providers: []provider{{Name: name, BaseURL: base, APIKey: os.Getenv("ROUTER_LOCAL_API_KEY")}}}
-	first := strings.TrimSpace(env("ROUTER_LOCAL_MODEL", "local-model"))
-	l.Models = append(l.Models, localModel{Provider: name, Model: first})
+	l := Local{FamilyRoutes: map[string]map[string]Route{}, Routes: map[string]map[string]Route{}, ModelPools: map[string][]PoolTarget{}, Providers: []Provider{{Name: name, BaseURL: base, APIKey: os.Getenv("ROUTER_LOCAL_API_KEY")}}}
+	first := strings.TrimSpace(envOr("ROUTER_LOCAL_MODEL", "local-model"))
+	l.Models = append(l.Models, Model{Provider: name, Model: first})
 	for _, m := range strings.Split(os.Getenv("ROUTER_LOCAL_MODELS"), ",") {
 		if m = strings.TrimSpace(m); m != "" {
-			l.Models = append(l.Models, localModel{Provider: name, Model: m})
+			l.Models = append(l.Models, Model{Provider: name, Model: m})
 		}
 	}
 	l.Preferred = l.Models[0].Key()
@@ -462,43 +470,43 @@ func SeedFromEnv() localSetup {
 // must stop startup before any migration can write to disk. assigned reports
 // that a Codex provider without auth_id got a fresh ID in memory; the caller
 // persists it once (startup only). The seed path returns false.
-func LoadLocal(path string) (localSetup, bool, error) {
+func LoadLocal(path string) (Local, bool, error) {
 	if path != "" {
 		l, assigned, err := readProvidersWith(path, assignCodexAuthIDs)
 		if err == nil {
 			return l, assigned, nil
 		}
 		if !os.IsNotExist(err) {
-			return localSetup{}, false, err
+			return Local{}, false, err
 		}
 		if _, statErr := os.Stat(path); statErr == nil {
-			return localSetup{}, false, err
+			return Local{}, false, err
 		} else if !os.IsNotExist(statErr) {
-			return localSetup{}, false, statErr
+			return Local{}, false, statErr
 		}
 	}
 	return SeedFromEnv(), false, nil
 }
 
 // Clone copies the slices so an edit never touches the snapshot readers hold.
-func (l localSetup) Clone() localSetup {
+func (l Local) Clone() Local {
 	if l.Profiles != nil {
-		profiles := make(map[string]routingProfile, len(l.Profiles))
+		profiles := make(map[string]Profile, len(l.Profiles))
 		for name, p := range l.Profiles {
-			c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.Clone()
-			profiles[name] = routingProfile{c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings}
+			c := Local{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.Clone()
+			profiles[name] = Profile{c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings}
 		}
 		l.Profiles = profiles
 	}
 	if l.PoolSettings != nil {
-		settings := make(map[string]poolSettings, len(l.PoolSettings))
+		settings := make(map[string]PoolSettings, len(l.PoolSettings))
 		for name, value := range l.PoolSettings {
 			settings[name] = value
 		}
 		l.PoolSettings = settings
 	}
-	l.Providers = append([]provider(nil), l.Providers...)
-	l.Models = append([]localModel(nil), l.Models...)
+	l.Providers = append([]Provider(nil), l.Providers...)
+	l.Models = append([]Model(nil), l.Models...)
 	for i := range l.Models {
 		if l.Models[i].Efforts != nil {
 			copyMap := make(map[string]string, len(l.Models[i].Efforts))
@@ -516,16 +524,16 @@ func (l localSetup) Clone() localSetup {
 		l.Pools = pools
 	}
 	if l.ModelPools != nil {
-		pools := make(map[string][]poolTarget, len(l.ModelPools))
+		pools := make(map[string][]PoolTarget, len(l.ModelPools))
 		for name, targets := range l.ModelPools {
-			pools[name] = append([]poolTarget(nil), targets...)
+			pools[name] = append([]PoolTarget(nil), targets...)
 		}
 		l.ModelPools = pools
 	}
 	if l.Routes != nil {
-		routes := make(map[string]map[string]modelRoute, len(l.Routes))
+		routes := make(map[string]map[string]Route, len(l.Routes))
 		for model, efforts := range l.Routes {
-			copyEfforts := make(map[string]modelRoute, len(efforts))
+			copyEfforts := make(map[string]Route, len(efforts))
 			for effort, route := range efforts {
 				copyEfforts[effort] = route
 			}
@@ -534,9 +542,9 @@ func (l localSetup) Clone() localSetup {
 		l.Routes = routes
 	}
 	if l.FamilyRoutes != nil {
-		families := map[string]map[string]modelRoute{}
+		families := map[string]map[string]Route{}
 		for family, rules := range l.FamilyRoutes {
-			copyRules := map[string]modelRoute{}
+			copyRules := map[string]Route{}
 			for effort, route := range rules {
 				copyRules[effort] = route
 			}
@@ -550,7 +558,7 @@ func (l localSetup) Clone() localSetup {
 }
 
 // Exact effort overrides win; otherwise the named model family supplies it.
-func (l localSetup) RouteFor(model, effort string) modelRoute {
+func (l Local) RouteFor(model, effort string) Route {
 	if effort == "" {
 		effort = "default"
 	}
@@ -560,12 +568,12 @@ func (l localSetup) RouteFor(model, effort string) modelRoute {
 	if route, ok := l.FamilyRoutes[ClaudeFamily(model)][effort]; ok {
 		return route
 	}
-	return modelRoute{Mode: "disabled"}
+	return Route{Mode: "disabled"}
 }
 
 // Flatten only for validation/reference checks; preserve independent override maps.
-func (l localSetup) AllRouteRules() map[string]map[string]modelRoute {
-	out := map[string]map[string]modelRoute{}
+func (l Local) AllRouteRules() map[string]map[string]Route {
+	out := map[string]map[string]Route{}
 	for key, rules := range l.Routes {
 		out[key] = rules
 	}

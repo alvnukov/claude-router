@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 func TestConfigWatchPausesInQuiesceAndResumesOnRollback(t *testing.T) {
@@ -14,7 +16,7 @@ func TestConfigWatchPausesInQuiesceAndResumesOnRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("ROUTER_ENV_FILE", path)
-	cs := NewStore(config{Balance: 1}, "")
+	cs := conf.NewStore(config{Balance: 1}, "")
 	life := newLifecycle(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

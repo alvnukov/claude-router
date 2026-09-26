@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -21,11 +22,12 @@ func profileFixture(t *testing.T) (*configStore, *health, string) {
 	up, _ := url.Parse("https://api.anthropic.com")
 	c := config{Upstream: up, Local: oneProvider("http://example.test/v1", "a", "b"), FirstByte: 45 * time.Second}
 	c.Local.FamilyRoutes = map[string]map[string]modelRoute{"opus": {"high": {Mode: "model", Model: "p/a"}}}
-	if err := WriteProviders(path, c.Local); err != nil {
+	if err := conf.WriteProviders(path, c.Local); err != nil {
 		t.Fatal(err)
 	}
-	cs := NewStore(c, path)
+	cs := conf.NewStore(c, path)
 	h := newHealth("")
+	cs.OnProfileChange(h.clearSessions)
 	return cs, h, path
 }
 
@@ -61,7 +63,7 @@ func TestProfilesMigrateOldProvidersWithoutChangingRoute(t *testing.T) {
 	if _, err := os.Stat(path + ".profiles/default.json"); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := ReadProviders(path)
+	reloaded, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
 	l := cs.Get().Local.Clone()
@@ -86,7 +88,7 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("default", h); err != nil {
+	if err := cs.ActivateProfile("default"); err != nil {
 		t.Fatal(err)
 	}
 	cfg := cs.Get()
@@ -96,7 +98,7 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	if len(h.sessions) == 0 {
 		t.Fatal("binding not created")
 	}
-	if err := cs.ActivateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
 	if len(h.sessions) != 0 {
@@ -105,20 +107,20 @@ func TestProfilesActivateChangesNextRouteAndClearsAffinity(t *testing.T) {
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "anthropic" {
 		t.Fatalf("next request uses old route: %+v", got)
 	}
-	if err := cs.ActivateProfile("missing", h); err == nil || cs.Get().Local.ActiveProfile != "cloud" {
+	if err := cs.ActivateProfile("missing"); err == nil || cs.Get().Local.ActiveProfile != "cloud" {
 		t.Fatal("unknown activation changed active profile")
 	}
 }
 
 func TestProfilesGlobalProviderAndIndependentEditsSurviveRestart(t *testing.T) {
-	cs, h, path := profileFixture(t)
+	cs, _, path := profileFixture(t)
 	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.CreateProfile("copy", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("copy", h); err != nil {
+	if err := cs.ActivateProfile("copy"); err != nil {
 		t.Fatal(err)
 	}
 	l := cs.Get().Local.Clone()
@@ -128,7 +130,7 @@ func TestProfilesGlobalProviderAndIndependentEditsSurviveRestart(t *testing.T) {
 	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("default", h); err != nil {
+	if err := cs.ActivateProfile("default"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := cs.Get().Local.Provider("shared"); !ok {
@@ -137,14 +139,14 @@ func TestProfilesGlobalProviderAndIndependentEditsSurviveRestart(t *testing.T) {
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Model != "p/a" {
 		t.Fatal("edit leaked between profiles")
 	}
-	reloaded, err := ReadProviders(path)
+	reloaded, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if reloaded.ActiveProfile != "default" || !reloaded.HasModel("shared/new") {
 		t.Fatal("global catalog not persisted")
 	}
-	if err := cs.ActivateProfile("copy", h); err != nil {
+	if err := cs.ActivateProfile("copy"); err != nil {
 		t.Fatal(err)
 	}
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Model != "shared/new" {
@@ -174,7 +176,7 @@ func TestProfileHTTPActivation(t *testing.T) {
 }
 
 func TestProfilesProviderRemovalRepairsEveryProfile(t *testing.T) {
-	cs, h, path := profileFixture(t)
+	cs, _, path := profileFixture(t)
 	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
@@ -188,13 +190,13 @@ func TestProfilesProviderRemovalRepairsEveryProfile(t *testing.T) {
 	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("copy", h); err != nil {
+	if err := cs.ActivateProfile("copy"); err != nil {
 		t.Fatal(err)
 	}
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "disabled" {
 		t.Fatalf("deleted provider still routed in copy: %+v", got)
 	}
-	if _, err := ReadProviders(path); err != nil {
+	if _, err := conf.ReadProviders(path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -228,7 +230,7 @@ func TestProfilesCatalogRefreshPreservesBothProfilesOnDisk(t *testing.T) {
 	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
 	l := cs.Get().Local.Clone()
@@ -241,14 +243,14 @@ func TestProfilesCatalogRefreshPreservesBothProfilesOnDisk(t *testing.T) {
 	if err := u.refreshModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := ReadProviders(path)
+	loaded, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if loaded.RouteFor("claude-opus-5", "high").Mode != "anthropic" || len(loaded.Catalog.Anthropic) != 1 {
 		t.Fatal("active profile or catalog lost")
 	}
-	if err := cs.ActivateProfile("default", h); err != nil {
+	if err := cs.ActivateProfile("default"); err != nil {
 		t.Fatal(err)
 	}
 	if cs.Get().RouteFor("claude-opus-5", "high").Model != "p/a" {
@@ -268,11 +270,11 @@ func TestProfilesHandEditChangesActiveProfileAndClearsAffinity(t *testing.T) {
 	if err := l.UseProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteProviders(path, l); err != nil {
+	if err := conf.WriteProviders(path, l); err != nil {
 		t.Fatal(err)
 	}
 	h.bindCandidates("session", poolRoute{}, []candidate{{Key: "p/a"}})
-	if err := cs.Reload(h); err != nil {
+	if err := cs.Reload(); err != nil {
 		t.Fatal(err)
 	}
 	if cs.Get().Local.ActiveProfile != "cloud" || len(h.sessions) != 0 {
@@ -293,7 +295,7 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 	up, _ := url.Parse(cloud.URL)
 	c := cs.Get()
 	c.Upstream = up
-	cs = NewStore(c, path)
+	cs = conf.NewStore(c, path)
 	l := cs.Get().Local.Clone()
 	l.Providers[0].BaseURL = local.URL
 	if err := cs.ApplyLocal(l, true); err != nil {
@@ -305,7 +307,7 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 	if err := cs.CreateProfile("cloud", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("cloud", h); err != nil {
+	if err := cs.ActivateProfile("cloud"); err != nil {
 		t.Fatal(err)
 	}
 	l = cs.Get().Local.Clone()
@@ -313,7 +315,7 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 	if err := cs.ApplyLocal(l, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("default", h); err != nil {
+	if err := cs.ActivateProfile("default"); err != nil {
 		t.Fatal(err)
 	}
 	st := history.New(10, "")
@@ -356,13 +358,13 @@ func TestProfilesProviderRenameUpdatesInactiveRoutes(t *testing.T) {
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `class="note err"`) {
 		t.Fatalf("rename: %d %s", w.Code, w.Body.String())
 	}
-	if err := cs.ActivateProfile("copy", h); err != nil {
+	if err := cs.ActivateProfile("copy"); err != nil {
 		t.Fatal(err)
 	}
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Model != "renamed/a" {
 		t.Fatalf("inactive route not renamed: %+v", got)
 	}
-	if _, err := ReadProviders(path); err != nil {
+	if _, err := conf.ReadProviders(path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -390,7 +392,7 @@ func TestProfilesDeleteSafeguards(t *testing.T) {
 }
 
 func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
-	cs, h, path := profileFixture(t)
+	cs, _, path := profileFixture(t)
 	l := cs.Get().Local.Clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/a", Effort: "high"}, {Model: "p/b", Effort: "low"}}}
 	l.PoolSettings = map[string]poolSettings{"work": {Failover: true, FirstByteSec: 7}}
@@ -404,7 +406,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err := cs.CreateProfile("copy", true); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("copy", h); err != nil {
+	if err := cs.ActivateProfile("copy"); err != nil {
 		t.Fatal(err)
 	}
 	l = cs.Get().Local.Clone()
@@ -415,17 +417,17 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err := cs.SavePoolSettings("work", poolSettings{ProbeSec: 4, FirstByteSec: 11}); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("default", h); err != nil {
+	if err := cs.ActivateProfile("default"); err != nil {
 		t.Fatal(err)
 	}
 	original := cs.Get().Local
 	if original.ModelPools["work"][0] != (poolTarget{Model: "p/a", Effort: "high"}) || original.PoolSettings["work"].FirstByteSec != 7 {
 		t.Fatalf("copy changes leaked into default: %+v", original)
 	}
-	if err := cs.ActivateProfile("copy", h); err != nil {
+	if err := cs.ActivateProfile("copy"); err != nil {
 		t.Fatal(err)
 	}
-	reloaded, err := ReadProviders(path)
+	reloaded, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,14 +461,14 @@ func TestProfilesMigrationLeavesOldSettingsBackup(t *testing.T) {
 }
 
 func TestProfilesLoadConfigDoesNotRerunLegacyMigrations(t *testing.T) {
-	cs, h, path := profileFixture(t)
+	cs, _, path := profileFixture(t)
 	if err := cs.EnsureProfiles(); err != nil {
 		t.Fatal(err)
 	}
 	if err := cs.CreateProfile("empty", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := cs.ActivateProfile("empty", h); err != nil {
+	if err := cs.ActivateProfile("empty"); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
@@ -507,13 +509,13 @@ func TestProfileUICloneAndEmpty(t *testing.T) {
 	if html := post(url.Values{"name": {"empty"}, "mode": {"empty"}}); !strings.Contains(html, "Профиль создан: empty") {
 		t.Fatal("empty did not render confirmation")
 	}
-	if err := cs.ActivateProfile("clone", h); err != nil {
+	if err := cs.ActivateProfile("clone"); err != nil {
 		t.Fatal(err)
 	}
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Model != "p/a" {
 		t.Fatalf("clone route: %+v", got)
 	}
-	if err := cs.ActivateProfile("empty", h); err != nil {
+	if err := cs.ActivateProfile("empty"); err != nil {
 		t.Fatal(err)
 	}
 	if got := cs.Get().RouteFor("claude-opus-5", "high"); got.Mode != "disabled" {

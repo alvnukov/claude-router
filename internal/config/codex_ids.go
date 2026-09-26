@@ -1,10 +1,12 @@
-package main
+package config
 
 import (
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
 )
+
+const CodexBaseURL = "https://chatgpt.com/backend-api/codex"
 
 // NewCodexAuthID names one connection's credential slot for its whole life.
 func NewCodexAuthID() string {
@@ -30,7 +32,7 @@ func AuthIDOK(id string) bool {
 // assignCodexAuthIDs is the one-time startup migration: only a pre-existing
 // non-legacy Codex provider without an id gets one. The legacy "codex" keeps
 // the old credential file and needs no id.
-func assignCodexAuthIDs(l *localSetup) bool {
+func assignCodexAuthIDs(l *Local) bool {
 	changed := false
 	for i := range l.Providers {
 		p := &l.Providers[i]

@@ -5,13 +5,15 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	conf "localrouter/internal/config"
 )
 
 func TestLegacyMigrationPreservesExplicitRoutesAndEfforts(t *testing.T) {
 	l := oneProvider("http://h/v1", "b", "a")
 	l.Models[0].Efforts = map[string]string{"high": "xhigh", "max": "xhigh"}
 	l.Pools = map[string][]string{"opus": {"p/a", "p/b"}, "haiku": {}}
-	next, changed := MigrateLegacyPools(l, []string{"claude-sonnet-5"})
+	next, changed := conf.MigrateLegacyPools(l, []string{"claude-sonnet-5"})
 	if !changed {
 		t.Fatal("not migrated")
 	}
@@ -32,7 +34,7 @@ func TestLegacyMigrationPreservesExplicitRoutesAndEfforts(t *testing.T) {
 	if cfg.RouteFor("claude-opus-5-5", "high").Mode != "disabled" {
 		t.Fatal("new catalog model implicitly enabled by migration")
 	}
-	if _, changed = MigrateLegacyPools(next, []string{"unknown"}); changed {
+	if _, changed = conf.MigrateLegacyPools(next, []string{"unknown"}); changed {
 		t.Fatal("migration repeats")
 	}
 	if next.Pools != nil || next.Preferred != "" {
@@ -46,18 +48,18 @@ func TestLegacyMigrationPreservesExplicitRoutesAndEfforts(t *testing.T) {
 	if err := os.WriteFile(path, original, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := SavePoolMigration(path, next); err != nil {
+	if err := conf.SavePoolMigration(path, next); err != nil {
 		t.Fatal(err)
 	}
 	backup, err := os.ReadFile(path + ".before-pools")
 	if err != nil || string(backup) != string(original) {
 		t.Fatal("backup missing")
 	}
-	reloaded, err := ReadProviders(path)
+	reloaded, err := conf.ReadProviders(path)
 	if err != nil || !reflect.DeepEqual(reloaded.Routes, next.Routes) || !reflect.DeepEqual(reloaded.ModelPools, next.ModelPools) {
 		t.Fatalf("roundtrip: %v", err)
 	}
-	if err := SavePoolMigration(path, next); err != nil {
+	if err := conf.SavePoolMigration(path, next); err != nil {
 		t.Fatal(err)
 	}
 	backup, _ = os.ReadFile(path + ".before-pools")
@@ -79,12 +81,12 @@ func TestLegacyMigrationPreservesConfiguredLocalIDs(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			l := oneProvider("http://h/v1", tc.model)
 			l.Pools = tc.pools
-			next, changed := MigrateLegacyPools(l, tc.cloudOnly)
+			next, changed := conf.MigrateLegacyPools(l, tc.cloudOnly)
 			if !changed {
 				t.Fatal("legacy configuration was not migrated")
 			}
 			cfg := config{Local: next}
-			for _, effort := range ClaudeEfforts {
+			for _, effort := range conf.ClaudeEfforts {
 				body := []byte(`{"model":"` + tc.model + `","output_config":{"effort":"` + effort + `"}}`)
 				_, route, err := configuredRequestRoute(cfg, body)
 				if err != nil || route.Mode != "pool" || len(next.ModelPools[route.Pool]) != 1 || next.ModelPools[route.Pool][0].Model != "p/"+tc.model {
@@ -97,7 +99,7 @@ func TestLegacyMigrationPreservesConfiguredLocalIDs(t *testing.T) {
 
 func TestLegacyMigrationKeepsFailoverForConfiguredModelID(t *testing.T) {
 	l := oneProvider("http://h/v1", "qwen3", "fallback")
-	next, changed := MigrateLegacyPools(l, nil)
+	next, changed := conf.MigrateLegacyPools(l, nil)
 	if !changed {
 		t.Fatal("legacy configuration was not migrated")
 	}
@@ -113,8 +115,8 @@ func TestLegacyMigrationKeepsFailoverForConfiguredModelID(t *testing.T) {
 }
 
 func TestFreshSetupHasNoImplicitRoutes(t *testing.T) {
-	l := SeedFromEnv()
-	if _, changed := MigrateLegacyPools(l, nil); changed || len(l.Routes) != 0 {
+	l := conf.SeedFromEnv()
+	if _, changed := conf.MigrateLegacyPools(l, nil); changed || len(l.Routes) != 0 {
 		t.Fatal("fresh setup silently enables Anthropic")
 	}
 }

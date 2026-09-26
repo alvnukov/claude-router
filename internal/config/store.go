@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"context"
@@ -13,37 +13,38 @@ import (
 	"time"
 )
 
-// configStore holds the live config behind a lock so the UI can change it while
+// Store holds the live config behind a lock so the UI can change it while
 // requests are in flight. Every request handler takes a snapshot with get().
 //
 // Two files back it: env for the router settings (budget,
 // failover) and providers.json for local providers and models. Both are
 // rewritten in place by the UI and re-read on a hand edit.
-type configStore struct {
+type Store struct {
 	mu           sync.RWMutex
-	c            config
+	c            Config
 	envPath      string
 	provPath     string
 	envMtime     time.Time
 	provMtime    time.Time
 	profileMtime time.Time
-	health       *health
+
+	onProfileChange func() // runs under mu when the active profile changes
 
 	reloadMu   sync.Mutex
-	reloadErrs map[string]reloadFailure
+	reloadErrs map[string]ReloadFailure
 	appliedAt  time.Time
 }
 
-// reloadFailure is the latest rejected hand edit of one settings file. The
+// ReloadFailure is the latest rejected hand edit of one settings file. The
 // previous snapshot keeps serving until the file is fixed.
-type reloadFailure struct {
+type ReloadFailure struct {
 	File     string
 	Err      string
 	At       time.Time
 	Snapshot time.Time
 }
 
-func (s *configStore) NoteReload(file string, err error) {
+func (s *Store) NoteReload(file string, err error) {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	if err == nil {
@@ -52,19 +53,19 @@ func (s *configStore) NoteReload(file string, err error) {
 		return
 	}
 	if s.reloadErrs == nil {
-		s.reloadErrs = map[string]reloadFailure{}
+		s.reloadErrs = map[string]ReloadFailure{}
 	}
 	if old, ok := s.reloadErrs[file]; ok && old.Err == err.Error() {
 		return
 	}
 	log.Printf("%s reload: %v", filepath.Base(file), err)
-	s.reloadErrs[file] = reloadFailure{File: file, Err: err.Error(), At: time.Now(), Snapshot: s.appliedAt}
+	s.reloadErrs[file] = ReloadFailure{File: file, Err: err.Error(), At: time.Now(), Snapshot: s.appliedAt}
 }
 
-func (s *configStore) ReloadFailures() []reloadFailure {
+func (s *Store) ReloadFailures() []ReloadFailure {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
-	out := make([]reloadFailure, 0, len(s.reloadErrs))
+	out := make([]ReloadFailure, 0, len(s.reloadErrs))
 	for _, f := range s.reloadErrs {
 		out = append(out, f)
 	}
@@ -72,7 +73,7 @@ func (s *configStore) ReloadFailures() []reloadFailure {
 	return out
 }
 
-func (s *configStore) reloadFailing(file string) bool {
+func (s *Store) reloadFailing(file string) bool {
 	s.reloadMu.Lock()
 	defer s.reloadMu.Unlock()
 	_, ok := s.reloadErrs[file]
@@ -83,14 +84,14 @@ func (s *configStore) reloadFailing(file string) bool {
 // profiles, so the watcher skips it. While a hand edit stands rejected the
 // watcher reads them back once instead: the write replaced the rejected file,
 // and the banner goes unless a file the write did not touch is still bad.
-func (s *configStore) wroteProviders() {
+func (s *Store) wroteProviders() {
 	s.provMtime = mtime(s.provPath)
 	s.wroteProfiles()
 }
 
 // wroteProfiles is wroteProviders for a write that leaves the providers file
 // alone, such as a profile switch or delete.
-func (s *configStore) wroteProfiles() {
+func (s *Store) wroteProfiles() {
 	s.profileMtime = profilesMtime(s.provPath)
 	if s.reloadFailing(s.provPath) {
 		s.provMtime = time.Time{}
@@ -98,7 +99,7 @@ func (s *configStore) wroteProfiles() {
 }
 
 // wroteEnv is wroteProviders for the env file.
-func (s *configStore) wroteEnv() {
+func (s *Store) wroteEnv() {
 	s.envMtime = mtime(s.envPath)
 	if s.reloadFailing(s.envPath) {
 		s.envMtime = time.Time{}
@@ -138,14 +139,26 @@ func LoadEnvFile() {
 	log.Printf("env: %d vars from %s", len(vals), p)
 }
 
-func NewStore(c config, provPath string) *configStore {
+// Gate says whether this instance may write shared state; a nil Gate always
+// may. The store asks it before a timed reload and a catalog merge.
+type Gate interface{ WritesSharedState() bool }
+
+func NewStore(c Config, provPath string) *Store {
 	p := EnvFilePath()
-	s := &configStore{c: c, envPath: p, provPath: provPath}
+	s := &Store{c: c, envPath: p, provPath: provPath}
 	s.envMtime = mtime(p)
 	s.provMtime = mtime(provPath)
 	s.profileMtime = profilesMtime(provPath)
 	s.appliedAt = time.Now()
 	return s
+}
+
+// OnProfileChange registers the one function run, under the store lock, when
+// the active profile changes; the router drops its pinned sessions there.
+func (s *Store) OnProfileChange(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onProfileChange = fn
 }
 
 func mtime(p string) time.Time {
@@ -156,7 +169,7 @@ func mtime(p string) time.Time {
 }
 
 // Migrate runs the config migrations a standby slot skipped at start.
-func (s *configStore) Migrate() error {
+func (s *Store) Migrate() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.provPath == "" {
@@ -171,7 +184,20 @@ func (s *configStore) Migrate() error {
 	return nil
 }
 
-func (s *configStore) Get() config {
+// SaveCodexIDs writes the auth_id values the start of an active router would
+// have written; a standby slot assigned them only in memory.
+func (s *Store) SaveCodexIDs() error {
+	if s.provPath == "" {
+		return nil
+	}
+	local, assigned, err := LoadLocal(s.provPath)
+	if err != nil || !assigned {
+		return err
+	}
+	return SaveConfigurationMigration(s.provPath, local, ".before-codex-ids")
+}
+
+func (s *Store) Get() Config {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.c
@@ -181,7 +207,7 @@ func (s *configStore) Get() config {
 // settings the UI can change are reloaded; addresses and the upstream URL are
 // bound at start and still need one. A write from the UI bumps the mtime too;
 // that reload is a no-op because the values already match.
-func (s *configStore) Watch(ctx context.Context, every time.Duration, life *lifecycle) {
+func (s *Store) Watch(ctx context.Context, every time.Duration, gate Gate) {
 	go func() {
 		ticker := time.NewTicker(every)
 		defer ticker.Stop()
@@ -191,7 +217,7 @@ func (s *configStore) Watch(ctx context.Context, every time.Duration, life *life
 				return
 			case <-ticker.C:
 			}
-			if life.mode() != modeActive {
+			if gate != nil && !gate.WritesSharedState() {
 				continue
 			}
 			s.Poll()
@@ -201,7 +227,7 @@ func (s *configStore) Watch(ctx context.Context, every time.Duration, life *life
 
 // Poll applies a hand edit of either file. A rejected edit keeps the
 // previous snapshot and shows on the settings page until a good reload.
-func (s *configStore) Poll() {
+func (s *Store) Poll() {
 	if m := mtime(s.envPath); !m.Equal(s.envMtime) {
 		s.envMtime = m
 		changed, err := s.ReloadEnv()
@@ -216,7 +242,7 @@ func (s *configStore) Poll() {
 		return
 	}
 	if m, p := mtime(s.provPath), profilesMtime(s.provPath); !m.Equal(s.provMtime) || !p.Equal(s.profileMtime) {
-		if err := s.Reload(s.health); err != nil {
+		if err := s.Reload(); err != nil {
 			if !os.IsNotExist(err) {
 				s.NoteReload(s.provPath, err)
 			}
@@ -228,7 +254,7 @@ func (s *configStore) Poll() {
 	}
 }
 
-func (l localSetup) Summary() string {
+func (l Local) Summary() string {
 	var ms []string
 	for _, m := range l.Ordered() {
 		ms = append(ms, m.Key())
@@ -236,7 +262,7 @@ func (l localSetup) Summary() string {
 	return fmt.Sprintf("providers=%d models=%s", len(l.Providers), strings.Join(ms, ","))
 }
 
-func (s *configStore) ReloadEnv() (bool, error) {
+func (s *Store) ReloadEnv() (bool, error) {
 	vals, err := ReadEnv(s.envPath)
 	if err != nil {
 		return false, err
@@ -257,8 +283,8 @@ func (s *configStore) ReloadEnv() (bool, error) {
 		before.Balance != after.Balance || before.ProbeEvery != after.ProbeEvery, nil
 }
 
-// settingsInput is the env-backed part of the settings, as strings from a form.
-type settingsInput struct {
+// SettingsInput is the env-backed part of the settings, as strings from a form.
+type SettingsInput struct {
 	MaxInputChars string
 	Failover      string // "1" / "0"
 	FirstByte     string // seconds
@@ -267,12 +293,12 @@ type settingsInput struct {
 	Type          string // pool type; "" keeps the stored one
 }
 
-func InputFromConfig(c config) settingsInput {
+func InputFromConfig(c Config) SettingsInput {
 	fo := "0"
 	if c.Failover {
 		fo = "1"
 	}
-	return settingsInput{
+	return SettingsInput{
 		MaxInputChars: strconv.Itoa(c.MaxInputChars),
 		Failover:      fo,
 		FirstByte:     strconv.Itoa(int(c.FirstByte / time.Second)),
@@ -283,7 +309,7 @@ func InputFromConfig(c config) settingsInput {
 
 // Apply validates and installs the env-backed settings; with write set it
 // also rewrites the env file so they survive a restart.
-func (s *configStore) Apply(in settingsInput, write bool) error {
+func (s *Store) Apply(in SettingsInput, write bool) error {
 	budget, err := strconv.Atoi(strings.TrimSpace(in.MaxInputChars))
 	if err != nil || budget < 0 {
 		return fmt.Errorf("max input chars: нужно целое число >= 0")
@@ -334,7 +360,7 @@ func (s *configStore) Apply(in settingsInput, write bool) error {
 
 // ApplyLocal validates and installs a providers/models setup; with write set
 // it also rewrites providers.json.
-func (s *configStore) ApplyLocal(l localSetup, write bool, expectedProfile ...string) error {
+func (s *Store) ApplyLocal(l Local, write bool, expectedProfile ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.applyLocalLocked(l, write, expectedProfile...)
@@ -342,7 +368,7 @@ func (s *configStore) ApplyLocal(l localSetup, write bool, expectedProfile ...st
 
 // applyLocalLocked requires s.mu; reload uses it while holding the lock from
 // disk read through installation so activation cannot interleave.
-func (s *configStore) applyLocalLocked(l localSetup, write bool, expectedProfile ...string) error {
+func (s *Store) applyLocalLocked(l Local, write bool, expectedProfile ...string) error {
 	next := s.c
 	if write && l.Profiles != nil && (l.ActiveProfile != next.Local.ActiveProfile || len(expectedProfile) > 0 && expectedProfile[0] != "" && expectedProfile[0] != next.Local.ActiveProfile) {
 		return fmt.Errorf("активный профиль изменился; обновите страницу")

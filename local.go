@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -231,7 +232,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	ctx, cancel := context.WithCancel(r.Context())
 	endpoint := cand.Provider.BaseURL + "/chat/completions"
 	if cand.Provider.Type == "codex" {
-		endpoint = CodexBaseURL + "/responses"
+		endpoint = conf.CodexBaseURL + "/responses"
 	}
 	up, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(payload))
 	if err != nil {

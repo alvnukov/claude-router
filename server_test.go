@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 )
@@ -133,7 +134,7 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "providers.json")
-	if err := WriteProviders(path, oneProvider("http://example.test/v1", "a", "b")); err != nil {
+	if err := conf.WriteProviders(path, oneProvider("http://example.test/v1", "a", "b")); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 	"localrouter/internal/platform"
@@ -32,12 +33,12 @@ type routerServer struct {
 }
 
 func newRouterServer(cfg config, life *lifecycle, state string) *routerServer {
-	cs := NewStore(cfg, ProvidersPath())
+	cs := conf.NewStore(cfg, conf.ProvidersPath())
 	st := history.New(cfg.UIHistory, historyPath())
 	st.SetGate(life)
 	codexAuth.life = life
 	h := newHealth(healthPath())
-	cs.health = h
+	cs.OnProfileChange(h.clearSessions)
 	h.life = life
 	if os.Getenv("ROUTER_SLOT") == "" {
 		life.markAlone() // the legacy router has no second slot
@@ -77,10 +78,10 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	admin.activate = func() error {
 		if r.life.mode() == modeStandby {
 			// The old slot is quiesced, so this one is the only writer now.
-			if err := saveCodexIDs(r.cs.provPath); err != nil {
+			if err := r.cs.SaveCodexIDs(); err != nil {
 				return fmt.Errorf("codex id migration: %w", err)
 			}
-			if err := r.cs.Reload(r.health); err != nil {
+			if err := r.cs.Reload(); err != nil {
 				return err
 			}
 			if err := r.cs.Migrate(); err != nil {
@@ -98,19 +99,6 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	}
 	admin.compact = r.st.CompactAfterDrain
 	return admin
-}
-
-// saveCodexIDs writes the auth_id values the start of an active router would
-// have written; a standby slot assigned them only in memory.
-func saveCodexIDs(path string) error {
-	if path == "" {
-		return nil
-	}
-	local, assigned, err := LoadLocal(path)
-	if err != nil || !assigned {
-		return err
-	}
-	return SaveConfigurationMigration(path, local, ".before-codex-ids")
 }
 
 func (r *routerServer) serve(api, ui net.Listener) error {

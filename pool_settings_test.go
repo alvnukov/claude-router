@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -16,7 +17,7 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 	c.Local.ModelPools = map[string][]poolTarget{"old": {{Model: "p/a"}}, "zero": {{Model: "p/a"}}}
 	c.Local.PoolSettings = map[string]poolSettings{"zero": {}}
 	c.Local.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "old"}, "low": {Mode: "pool", Pool: "zero"}}}
-	migrated, changed := MigratePoolSettings(c)
+	migrated, changed := conf.MigratePoolSettings(c)
 	if !changed || migrated.PoolSettings["old"].FirstByteSec != 45 || migrated.PoolSettings["zero"] != (poolSettings{}) {
 		t.Fatal("migration lost existing settings")
 	}
@@ -24,15 +25,15 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 		t.Fatal("migration mutated previous snapshot")
 	}
 	c.Local = migrated
-	if _, changed := MigratePoolSettings(c); changed {
+	if _, changed := conf.MigratePoolSettings(c); changed {
 		t.Fatal("migration is not idempotent")
 	}
 	path := filepath.Join(t.TempDir(), "providers.json")
-	if err := WriteProviders(path, c.Local); err != nil {
+	if err := conf.WriteProviders(path, c.Local); err != nil {
 		t.Fatal(err)
 	}
 	var err error
-	c.Local, err = ReadProviders(path)
+	c.Local, err = conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	up, _ := url.Parse("https://api.anthropic.com")
 	path := filepath.Join(t.TempDir(), "providers.json")
-	cs := NewStore(config{Upstream: up, FirstByte: 45 * time.Second, Local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, path)
+	cs := conf.NewStore(config{Upstream: up, FirstByte: 45 * time.Second, Local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, path)
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	post := func(values url.Values) string {
 		t.Helper()
@@ -67,7 +68,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	if !strings.Contains(html, "Настройки пула сохранены") || strings.Count(html, `class="behavior-form"`) != 2 || strings.Contains(html, `id="behavior"`) {
 		t.Fatal("pool forms not rendered independently")
 	}
-	saved, err := ReadProviders(path)
+	saved, err := conf.ReadProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestPoolsUseIndependentTimeoutAndFailover(t *testing.T) {
 
 func TestPoolProbesRespectMembershipAndIntervals(t *testing.T) {
 	c := config{Local: oneProvider("http://example.test/v1", "shared", "only-disabled", "unpooled"), ProbeEvery: time.Second}
-	c.Local.Providers = append(c.Local.Providers, provider{Name: "codex", Type: "codex", BaseURL: CodexBaseURL})
+	c.Local.Providers = append(c.Local.Providers, provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL})
 	c.Local.Models = append(c.Local.Models, localModel{Provider: "codex", Model: "gpt-test"})
 	c.Local.ModelPools = map[string][]poolTarget{"a": {{Model: "p/shared"}, {Model: "codex/gpt-test"}}, "b": {{Model: "p/shared"}}, "off": {{Model: "p/only-disabled"}}}
 	c.Local.PoolSettings = map[string]poolSettings{"a": {ProbeSec: 60, FirstByteSec: 40}, "b": {ProbeSec: 10, FirstByteSec: 5}, "off": {}}

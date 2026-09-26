@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -111,7 +112,7 @@ func (h *health) bindCandidates(scope string, pool poolRoute, candidates []candi
 		// old connection.
 		delete(h.sessions, scope)
 	}
-	if pool.Type == PoolBalance {
+	if pool.Type == conf.PoolBalance {
 		candidates = h.balanceFirst(pool.Name, candidates)
 	}
 	if len(h.sessions) >= 4096 {

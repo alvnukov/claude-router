@@ -14,6 +14,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	conf "localrouter/internal/config"
 )
 
 // TestConfigCompatGenerate records how the store rewrites its files, so the
@@ -66,7 +68,7 @@ func TestConfigCompatGenerate(t *testing.T) {
 		path, envPath := filepath.Join(work, dir, "providers.json"), filepath.Join(work, dir, "env")
 		t.Setenv("ROUTER_PROVIDERS_FILE", path)
 		t.Setenv("ROUTER_ENV_FILE", envPath)
-		vals, err := ReadEnv(envPath)
+		vals, err := conf.ReadEnv(envPath)
 		if err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
@@ -77,7 +79,7 @@ func TestConfigCompatGenerate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load %s: %v", dir, err)
 		}
-		return NewStore(c, path)
+		return conf.NewStore(c, path)
 	}
 	step := 0
 	dump := func(op string, roots ...string) {
@@ -112,13 +114,13 @@ func TestConfigCompatGenerate(t *testing.T) {
 	must("update", home.ApplyLocal(l, true))
 	dump("update", "home")
 
-	must("pool settings", home.SavePoolSettings("work", poolSettings{Type: PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15, MaxInputChars: 120000}))
+	must("pool settings", home.SavePoolSettings("work", poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15, MaxInputChars: 120000}))
 	dump("pool-settings", "home")
 
 	must("create profile", home.CreateProfile("night", true))
 	dump("create-profile", "home")
 
-	must("activate profile", home.ActivateProfile("night", nil))
+	must("activate profile", home.ActivateProfile("night"))
 	dump("activate-profile", "home")
 
 	u := &uiServer{cs: home, fetchAnthropic: func(context.Context) ([]string, error) {
@@ -127,10 +129,10 @@ func TestConfigCompatGenerate(t *testing.T) {
 	must("catalog", u.refreshModels(context.Background()))
 	dump("catalog", "home")
 
-	in := InputFromConfig(home.Get())
+	in := conf.InputFromConfig(home.Get())
 	in.MaxInputChars = "150000"
 	must("settings", home.Apply(in, true))
-	in = InputFromConfig(home.Get())
+	in = conf.InputFromConfig(home.Get())
 	in.Failover = "0"
 	must("failover", home.Apply(in, true))
 	dump("settings", "home")
@@ -138,7 +140,7 @@ func TestConfigCompatGenerate(t *testing.T) {
 	must("delete profile", home.DeleteProfile("cloud"))
 	dump("delete-profile", "home")
 
-	must("reload", home.Reload(nil))
+	must("reload", home.Reload())
 	dump("reload", "home")
 }
 

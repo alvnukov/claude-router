@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	conf "localrouter/internal/config"
 )
 
 // A write that fails returns the writer's error and changes neither memory
@@ -43,15 +45,15 @@ func TestConfigPinFailedWritesChangeNothing(t *testing.T) {
 			return p.cs.ApplyLocal(l, true)
 		}, "запись " + p.path + ": open " + p.path + ".tmp: permission denied"},
 		{"settings", func() error {
-			in := InputFromConfig(p.cs.Get())
+			in := conf.InputFromConfig(p.cs.Get())
 			in.MaxInputChars = "150000"
 			return p.cs.Apply(in, true)
 		}, "запись " + p.dir + "/env: open " + p.dir + "/.env.*: permission denied"},
 		{"pool settings", func() error {
-			return p.cs.SavePoolSettings("work", poolSettings{Type: PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15})
+			return p.cs.SavePoolSettings("work", poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15})
 		}, "open " + profiles + "/default.json.tmp: permission denied"},
 		{"create profile", func() error { return p.cs.CreateProfile("night", true) }, "open " + profiles + "/night.json.tmp: permission denied"},
-		{"activate profile", func() error { return p.cs.ActivateProfile("cloud", p.srv.health) }, "open " + p.path + ".active-profile.tmp: permission denied"},
+		{"activate profile", func() error { return p.cs.ActivateProfile("cloud") }, "open " + p.path + ".active-profile.tmp: permission denied"},
 		{"delete profile", func() error { return p.cs.DeleteProfile("cloud") }, "remove " + profiles + "/cloud.json: permission denied"},
 	}
 	p.seat()

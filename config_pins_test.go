@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 // These tests pin how the config store and its watcher behave before the store
@@ -61,7 +63,7 @@ func configPinStart(t *testing.T, fixture string, standby bool, prepare func(dir
 	if standby {
 		t.Setenv("ROUTER_STANDBY", "1")
 	}
-	vals, err := ReadEnv(envPath)
+	vals, err := conf.ReadEnv(envPath)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
@@ -319,7 +321,7 @@ func TestConfigPinStoreWritesDoNotReload(t *testing.T) {
 		{name: "ensure profiles, present", fixture: "home", op: func(p *configPin) error { return p.cs.EnsureProfiles() }},
 		{name: "ensure profiles, first time", fixture: "legacy", writes: true, op: func(p *configPin) error { return p.cs.EnsureProfiles() }},
 		{name: "create profile", fixture: "home", writes: true, op: func(p *configPin) error { return p.cs.CreateProfile("night", true) }},
-		{name: "activate profile", fixture: "home", writes: true, hook: true, op: func(p *configPin) error { return p.cs.ActivateProfile("cloud", p.srv.health) }},
+		{name: "activate profile", fixture: "home", writes: true, hook: true, op: func(p *configPin) error { return p.cs.ActivateProfile("cloud") }},
 		{name: "delete profile", fixture: "home", writes: true, op: func(p *configPin) error { return p.cs.DeleteProfile("cloud") }},
 		{name: "add model", fixture: "home", writes: true, op: func(p *configPin) error {
 			l := p.cs.Get().Local.Clone()
@@ -330,17 +332,17 @@ func TestConfigPinStoreWritesDoNotReload(t *testing.T) {
 			return p.cs.ApplyLocal(configPinModels(p), true)
 		}},
 		{name: "settings, budget", fixture: "home", writes: true, op: func(p *configPin) error {
-			in := InputFromConfig(p.cs.Get())
+			in := conf.InputFromConfig(p.cs.Get())
 			in.MaxInputChars = "150000"
 			return p.cs.Apply(in, true)
 		}},
 		{name: "settings, failover", fixture: "home", writes: true, op: func(p *configPin) error {
-			in := InputFromConfig(p.cs.Get())
+			in := conf.InputFromConfig(p.cs.Get())
 			in.Failover = "0"
 			return p.cs.Apply(in, true)
 		}},
 		{name: "pool settings", fixture: "home", writes: true, op: func(p *configPin) error {
-			return p.cs.SavePoolSettings("work", poolSettings{Type: PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15, MaxInputChars: 120000})
+			return p.cs.SavePoolSettings("work", poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15, MaxInputChars: 120000})
 		}},
 		{name: "pool settings merge", fixture: "home", writes: true, op: func(p *configPin) error {
 			return p.cs.UpdatePoolSettings("work", func(old poolSettings) poolSettings {
@@ -349,14 +351,14 @@ func TestConfigPinStoreWritesDoNotReload(t *testing.T) {
 			})
 		}},
 		{name: "catalog refresh", fixture: "home", writes: true, op: func(p *configPin) error { return p.srv.ui.refreshModels(context.Background()) }},
-		{name: "reload", fixture: "home", op: func(p *configPin) error { return p.cs.Reload(p.srv.health) }},
+		{name: "reload", fixture: "home", op: func(p *configPin) error { return p.cs.Reload() }},
 		{name: "migrate", fixture: "legacy", standby: true, writes: true, op: func(p *configPin) error { return p.cs.Migrate() }},
 		{name: "activate standby", fixture: "legacy", standby: true, prepare: codexWork, writes: true, op: func(p *configPin) error {
 			if err := p.srv.runtimeAdmin(filepath.Join(p.dir, "state.json")).activate(); err != nil {
 				return err
 			}
 			// The ids the free function saved are the ones the store serves.
-			disk, err := ReadProviders(p.path)
+			disk, err := conf.ReadProviders(p.path)
 			if err != nil {
 				return err
 			}
@@ -463,7 +465,7 @@ func TestConfigPinHandEditsReload(t *testing.T) {
 // A refused operation says why and changes neither memory nor any file.
 func TestConfigPinRefusalsWriteNothing(t *testing.T) {
 	p := configPinStart(t, "home", false, nil)
-	settings := poolSettings{Type: PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15}
+	settings := poolSettings{Type: conf.PoolBalance, Failover: true, FirstByteSec: 30, ProbeSec: 15}
 	rows := []struct {
 		name string
 		op   func() error
@@ -491,7 +493,7 @@ func TestConfigPinRefusalsWriteNothing(t *testing.T) {
 			return p.cs.ApplyLocal(l, true)
 		}, `профиль "default": пул "ghost" не существует`},
 		{"settings, bad budget", func() error {
-			in := InputFromConfig(p.cs.Get())
+			in := conf.InputFromConfig(p.cs.Get())
 			in.MaxInputChars = "-1"
 			return p.cs.Apply(in, true)
 		}, "max input chars: нужно целое число >= 0"},
