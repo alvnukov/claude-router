@@ -255,10 +255,11 @@ func (s *Store) tick(gate Gate) {
 }
 
 // Poll applies a hand edit of either file. A rejected edit keeps the
-// previous snapshot and shows on the settings page until a good reload.
+// previous snapshot and shows on the settings page until a good reload. The
+// stamps are read and set under s.mu, as the store's own writes set them; the
+// reloads take the lock themselves.
 func (s *Store) Poll() {
-	if m := mtime(s.envPath); !m.Equal(s.envMtime) {
-		s.envMtime = m
+	if s.envEdited() {
 		changed, err := s.reloadEnv()
 		s.NoteReload(s.envPath, err)
 		if err == nil && changed {
@@ -270,17 +271,42 @@ func (s *Store) Poll() {
 	if s.provPath == "" {
 		return
 	}
-	if m, p := mtime(s.provPath), profilesMtime(s.provPath); !m.Equal(s.provMtime) || !p.Equal(s.profileMtime) {
-		if err := s.Reload(); err != nil {
-			if !os.IsNotExist(err) {
-				s.NoteReload(s.provPath, err)
-			}
-		} else {
-			s.provMtime, s.profileMtime = mtime(s.provPath), profilesMtime(s.provPath)
-			s.NoteReload(s.provPath, nil)
-			log.Printf("providers reloaded: %s", s.Get().Local.Summary())
-		}
+	s.mu.RLock()
+	was, wasProfiles := s.provMtime, s.profileMtime
+	m, p := mtime(s.provPath), profilesMtime(s.provPath)
+	s.mu.RUnlock()
+	if m.Equal(was) && p.Equal(wasProfiles) {
+		return
 	}
+	if err := s.Reload(); err != nil {
+		if !os.IsNotExist(err) {
+			s.NoteReload(s.provPath, err)
+		}
+		return
+	}
+	// The stamps are the files as found before the read, so an edit made
+	// since is read on the next tick; a write the store made meanwhile has
+	// set its own.
+	s.mu.Lock()
+	if s.provMtime.Equal(was) && s.profileMtime.Equal(wasProfiles) {
+		s.provMtime, s.profileMtime = m, p
+	}
+	s.mu.Unlock()
+	s.NoteReload(s.provPath, nil)
+	log.Printf("providers reloaded: %s", s.Get().Local.Summary())
+}
+
+// envEdited tells whether the env file changed since its stamp and takes the
+// new stamp, so a rejected edit is not read again.
+func (s *Store) envEdited() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := mtime(s.envPath)
+	if m.Equal(s.envMtime) {
+		return false
+	}
+	s.envMtime = m
+	return true
 }
 
 func (l Local) Summary() string {

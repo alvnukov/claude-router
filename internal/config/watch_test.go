@@ -453,6 +453,50 @@ func TestHandEditsReload(t *testing.T) {
 	}
 }
 
+// The watcher and the store's own writes share the file stamps, so a tick
+// beside a settings change goes through the store lock; run with -race.
+func TestPollBesideStoreWrites(t *testing.T) {
+	h := startHome(t, "home", false, nil)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 50 {
+			h.s.Poll()
+		}
+	}()
+	for i := range 50 {
+		if err := h.s.SetFailover(i%2 == 0); err != nil {
+			t.Error(err)
+		}
+	}
+	<-done
+	h.pollQuiet(t)
+}
+
+// A hand edit that lands while the watcher reloads is picked up on the next
+// tick: the watcher stamps the files as it found them before the read. The
+// profile hook runs after the read, so an edit made there is such an edit.
+func TestEditDuringReloadNotLost(t *testing.T) {
+	h := startHome(t, "home", false, nil)
+	edited := false
+	h.s.OnProfileChange(func() {
+		if !edited {
+			edited = true
+			h.edit(t, "providers.json", "sk-test-lab-0001", "sk-test-lab-0002")
+		}
+	})
+	h.edit(t, "providers.json.active-profile", `"default"`, `"cloud"`)
+	h.s.Poll()
+	if !edited {
+		t.Fatal("the reload did not switch the profile")
+	}
+	h.s.Poll()
+	if lab, _ := h.s.Get().Local.Provider("lab"); lab.APIKey != "sk-test-lab-0002" {
+		t.Errorf("the edit made during the reload was lost: lab key %q", lab.APIKey)
+	}
+	h.pollQuiet(t)
+}
+
 // A refused operation says why and changes neither memory nor any file.
 func TestRefusalsWriteNothing(t *testing.T) {
 	h := startHome(t, "home", false, nil)
