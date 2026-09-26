@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"localrouter/internal/cli"
 	"localrouter/internal/platform"
 )
 
@@ -270,7 +271,11 @@ func (o *systemDeployOps) start(ctx context.Context, slot, digest string) error 
 }
 
 // stop unloads a slot label. Callers drain the slot first, so launchd's
-// SIGTERM finds no request in flight; ExitTimeOut covers the rest.
+// SIGTERM finds no request in flight; ExitTimeOut covers the rest. launchd
+// kills a slot after 60 s at most, whatever its plist asks, so a stop that
+// still waits past cli.StopTimeout fails.
 func (o *systemDeployOps) stop(ctx context.Context, slot string) error {
+	ctx, cancel := context.WithTimeout(ctx, cli.StopTimeout)
+	defer cancel()
 	return o.service.Stop(ctx, o.label(slot))
 }

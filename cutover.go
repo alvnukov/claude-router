@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"localrouter/internal/cli"
 	"localrouter/internal/platform"
 )
 
@@ -127,8 +128,9 @@ func cutover(ctx context.Context, file deployFile, ops cutoverOps, digest string
 			return
 		}
 		// The caller's context may be what failed; getting the legacy router
-		// back must not depend on it.
-		rollback, cancel := context.WithTimeout(context.WithoutCancel(ctx), readyTimeout+time.Minute)
+		// back must not depend on it. Caddy and blue may each take a whole
+		// stop before the legacy router starts.
+		rollback, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*cli.StopTimeout+readyTimeout)
 		defer cancel()
 		if legacyStopped {
 			err = errors.Join(err, returnToLegacy(rollback, ops, caddyStarted, readyTimeout))
@@ -376,8 +378,10 @@ func (o *systemCutoverOps) legacyPending(ctx context.Context) (int, error) {
 	return strconv.Atoi(string(match[1]))
 }
 
+// stopLegacy unloads the legacy agent the way a slot is unloaded: the cutover
+// has waited for it to go idle, as a deploy drains a slot.
 func (o *systemCutoverOps) stopLegacy(ctx context.Context) error {
-	return o.service.Stop(ctx, o.label(""))
+	return o.stop(ctx, "")
 }
 
 func (o *systemCutoverOps) startLegacy(ctx context.Context) error {
@@ -394,6 +398,8 @@ func (o *systemCutoverOps) startCaddy(ctx context.Context) error {
 // stopCaddy unloads Caddy and takes its plist out of LaunchAgents, so the
 // legacy router keeps the ports after the next login too.
 func (o *systemCutoverOps) stopCaddy(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, cli.StopTimeout)
+	defer cancel()
 	return o.service.Uninstall(ctx, o.label("caddy"))
 }
 

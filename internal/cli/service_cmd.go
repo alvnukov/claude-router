@@ -144,27 +144,30 @@ func (c *commands) open(home string) (site, error) {
 	return site{home: home, addr: addr, url: url, slot: err == nil}, nil
 }
 
-// exitTimeout is how long launchd lets a router agent drain its requests
-// after SIGTERM before it kills it: the drain, 900 s unless
-// ROUTER_DRAIN_TIMEOUT says otherwise, and a minute to exit. The slots have
-// the same.
-const exitTimeout = 960 * time.Second
+// exitTimeout is how long launchd lets a router agent finish its requests
+// after SIGTERM before it kills it. 60 s is the most launchd grants an agent
+// of the gui domain; for more it logs "ExitTimeOut is larger than the
+// maximum allowed. Changing it to 60." A longer drain happens before the
+// stop: a deploy drains the old slot, a cutover waits for the legacy router
+// to go idle.
+const exitTimeout = 60 * time.Second
 
-// stopTimeout bounds the wait for an agent to unload: its exitTimeout and a
-// minute for launchd.
-const stopTimeout = exitTimeout + time.Minute
+// StopTimeout bounds the wait for an agent to unload: the longest
+// exitTimeout launchd grants and a minute for launchd.
+const StopTimeout = exitTimeout + time.Minute
 
 // stopAgent unloads the agent and waits for its program to exit, at most
-// stopTimeout.
+// StopTimeout.
 func (c *commands) stopAgent(ctx context.Context, label string) error {
-	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
+	ctx, cancel := context.WithTimeout(ctx, StopTimeout)
 	defer cancel()
 	return c.h.Service.Stop(ctx, label)
 }
 
 // legacySpec is the agent the shell script used to write: the binary in the
 // home, restarted whenever it exits, at most every ten seconds. Unlike the
-// script's, it lets the router drain for exitTimeout when stopped.
+// script's, it lets the router finish its requests for exitTimeout when
+// stopped.
 func legacySpec(label, home string) platform.ServiceSpec {
 	return platform.ServiceSpec{
 		Label:            label,
@@ -214,7 +217,7 @@ func (c *commands) uninstall(ctx context.Context, s site, stdout io.Writer) erro
 		return errors.New("slot-based uninstall requires a maintenance window")
 	}
 	// Uninstall stops the agent first.
-	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
+	ctx, cancel := context.WithTimeout(ctx, StopTimeout)
 	defer cancel()
 	if err := c.h.Service.Uninstall(ctx, c.r.Label); err != nil {
 		return err

@@ -9,7 +9,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"localrouter/internal/cli"
 	"localrouter/internal/platform"
 )
 
@@ -167,6 +169,29 @@ func TestDeployCommandWaitsForASlowSlot(t *testing.T) {
 	}
 	if err := runDeploy(t.Context(), []string{"-home", home, "-binary", deployBinary(t, home)}, &bytes.Buffer{}, func(deployFile, string, string, string) deployOps { return f }); err != nil || f.active != "green" {
 		t.Fatalf("deploy gave up on a starting slot: %v, active %s", err, f.active)
+	}
+}
+
+// Before the old slot stops, a deploy may have drained a leftover slot and
+// the old one to the drain timeout, stopped the leftover and waited for the
+// new slot to answer. The old slot's stop still gets its whole wait.
+func TestDeployCommandLeavesTheLastStopItsWait(t *testing.T) {
+	f := newDeployFixture(t)
+	home := t.TempDir()
+	writeDeployFile(t, home, f.controller.config)
+	const drain, ready = time.Minute, 30 * time.Second
+	var left time.Duration
+	f.onStop = func(ctx context.Context, slot string) {
+		if deadline, ok := ctx.Deadline(); ok && slot == "blue" {
+			left = time.Until(deadline)
+		}
+	}
+	if err := runDeploy(t.Context(), []string{"-home", home, "-binary", deployBinary(t, home), "-drain-timeout", drain.String(), "-ready-timeout", ready.String()}, &bytes.Buffer{}, func(deployFile, string, string, string) deployOps { return f }); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing took time here, so all a real deploy may spend is still left.
+	if want := 2*(drain+cli.StopTimeout) + ready - time.Second; left < want {
+		t.Fatalf("the old slot's stop had %s left; want %s", left, want)
 	}
 }
 

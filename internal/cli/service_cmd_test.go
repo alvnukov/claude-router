@@ -225,7 +225,8 @@ func TestCommandsRequireHome(t *testing.T) {
 }
 
 // The legacy agent keeps the plist the shell script wrote, byte for byte,
-// but for ExitTimeOut, which lets it drain its requests when stopped.
+// but for ExitTimeOut, which gives it launchd's longest time to finish its
+// requests when stopped.
 func TestLegacySpecMatchesInstalledAgent(t *testing.T) {
 	want, err := os.ReadFile(filepath.Join("..", "platform", "testdata", "launchd-com.claude-local-router.plist"))
 	if err != nil {
@@ -364,15 +365,14 @@ func TestRestartWhileTheRouterDrains(t *testing.T) {
 	}
 }
 
-// A router may drain for up to its agent's ExitTimeOut, 960 s, before launchd
-// kills it, and Stop waits for that. Every wait the commands start is
-// bounded, and leaves launchd time past the ExitTimeOut to kill the router
-// and unload its agent.
+// A router may drain for up to its agent's ExitTimeOut before launchd kills
+// it, and Stop waits for that; launchd grants an agent 60 s at most. Every
+// wait the commands start is bounded, and leaves launchd time past the
+// ExitTimeOut to kill the router and unload its agent.
 func TestStopWaitsAsLongAsTheRouterMayDrain(t *testing.T) {
-	// The slots' agents have the legacy agent's ExitTimeOut.
 	exitTimeOut := legacySpec(legacyLabel, t.TempDir()).ExitTimeout
-	if exitTimeOut != 960*time.Second {
-		t.Fatalf("legacy ExitTimeOut = %s; want the slots' 960s", exitTimeOut)
+	if exitTimeOut != 60*time.Second {
+		t.Fatalf("legacy ExitTimeOut = %s; want launchd's maximum 60s", exitTimeOut)
 	}
 	const unload = 30 * time.Second
 	for _, tc := range []struct {

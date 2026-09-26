@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"localrouter/internal/cli"
 	"localrouter/internal/platform"
 )
 
@@ -275,10 +276,21 @@ func TestCutoverRefusesBusyCaddyAdmin(t *testing.T) {
 func TestCutoverReturnsToLegacyWhenCaddyDoesNotAnswer(t *testing.T) {
 	f := newCutoverFixture(t, 0)
 	f.fail = "caddy"
+	var left time.Duration
+	f.onStop = func(ctx context.Context, slot string) {
+		if deadline, ok := ctx.Deadline(); ok && slot == "blue" {
+			left = time.Until(deadline)
+		}
+	}
 	if _, err := f.run("yes\n", "-ready-timeout", "300ms"); err == nil {
 		t.Fatal("cutover succeeded without Caddy")
 	}
 	f.order(t, "stop-legacy", "start-caddy", "stop-caddy", "mark:legacy", "stop:blue", "start-legacy")
+	// Caddy stopped at once here; launchd may take its time with Caddy and
+	// blue alike, and the legacy router must still come back.
+	if want := 2*cli.StopTimeout + 300*time.Millisecond - time.Second; left < want {
+		t.Fatalf("the rollback had %s left when it stopped blue; want %s", left, want)
+	}
 	if f.committed || f.marker != "legacy" {
 		t.Fatalf("rollback left slot mode behind: marker=%s committed=%v", f.marker, f.committed)
 	}
@@ -341,6 +353,37 @@ func TestSystemCutoverUsesConfiguredScratchLabels(t *testing.T) {
 	calls := recordLaunchctl(ops.systemDeployOps)
 	if err := ops.stopLegacy(t.Context()); err != nil || len(*calls) != 2 || strings.Count(strings.Join(*calls, "\n"), prefix) != 2 {
 		t.Fatalf("stopLegacy touched another label: %v %v", err, *calls)
+	}
+}
+
+// Stop waits for launchd to unload the agent, and nothing else ends a stop
+// launchd never finishes: each one gives up once launchd has had the longest
+// ExitTimeOut it grants, 60 s, and time to kill and unload.
+func TestSystemStopsGiveUpAfterLaunchdHadItsTime(t *testing.T) {
+	home := t.TempDir()
+	ops := newSystemCutoverOps(deployFile{CaddyAdmin: "127.0.0.1:1", deployConfig: testDeployConfig(t)}, home, filepath.Join(home, "agents"), filepath.Join(home, "binary"), "/opt/caddy")
+	var left []time.Duration
+	ops.service = platform.Launchd{Dir: ops.agents, Domain: platform.LaunchdDomain(), Run: func(ctx context.Context, args ...string) error {
+		if deadline, ok := ctx.Deadline(); ok && args[0] == "bootout" {
+			left = append(left, time.Until(deadline))
+		}
+		if args[0] == "print" {
+			return platform.ErrNotLoaded
+		}
+		return nil
+	}}
+	for _, stop := range []func(context.Context) error{func(ctx context.Context) error { return ops.stop(ctx, "blue") }, ops.stopLegacy, ops.stopCaddy} {
+		if err := stop(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(left) != 3 {
+		t.Fatalf("stops without a deadline: %d of 3 bounded", len(left))
+	}
+	for _, wait := range left {
+		if wait <= time.Minute || wait > cli.StopTimeout {
+			t.Fatalf("stops wait %v; want past launchd's 60 s and at most %s", left, cli.StopTimeout)
+		}
 	}
 }
 

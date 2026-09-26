@@ -18,14 +18,15 @@ import (
 // The installed agents were written before this renderer: the legacy one by
 // the shell script, the slot and Caddy ones by the deploy command. An update
 // that renders them from Go must leave them unchanged, except that the legacy
-// agent now gets the slots' ExitTimeOut, so a stop lets it drain.
+// agent now gets an ExitTimeOut of 60 s, the most launchd grants, so a stop
+// lets it finish its requests for that long.
 func TestLaunchdPlistMatchesInstalledAgents(t *testing.T) {
 	home := "/home/router/.claude/local-router"
 	for _, tc := range []struct {
 		golden string
 		spec   ServiceSpec
 	}{
-		{"launchd-com.claude-local-router.plist", ServiceSpec{Label: "com.claude-local-router", Exe: home + "/localrouter", Dir: home, LogPath: home + "/router.log", KeepAlive: true, ThrottleInterval: 10 * time.Second, ExitTimeout: 960 * time.Second}},
+		{"launchd-com.claude-local-router.plist", ServiceSpec{Label: "com.claude-local-router", Exe: home + "/localrouter", Dir: home, LogPath: home + "/router.log", KeepAlive: true, ThrottleInterval: 10 * time.Second, ExitTimeout: 60 * time.Second}},
 		{"launchd-com.claude-local-router.green.plist", ServiceSpec{Label: "com.claude-local-router.green", Exe: home + "/localrouter.green", Dir: home, LogPath: home + "/router.green.log", KeepAlive: true, ExitTimeout: 960 * time.Second,
 			Env: map[string]string{"ROUTER_SLOT": "green", "ROUTER_ACTIVE_SLOT_FILE": home + "/active-slot", "ROUTER_LISTEN": "127.0.0.1:18792", "ROUTER_PUBLIC_LISTEN": "127.0.0.1:18787", "ROUTER_UI_LISTEN": "127.0.0.1:18794", "ROUTER_PROVIDERS_FILE": home + "/providers.json", "ROUTER_ANTHROPIC_LIMITS_FILE": home + "/limits.json", "ROUTER_ENV_FILE": home + "/env", "ROUTER_STATE_FILE": home + "/state.json", "ROUTER_UI_HISTORY_FILE": home + "/history.jsonl"}}},
 		{"launchd-com.claude-local-router.caddy.plist", ServiceSpec{Label: "com.claude-local-router.caddy", Exe: "/opt/homebrew/bin/caddy", Args: []string{"run", "--config", home + "/Caddyfile", "--adapter", "caddyfile"}, Dir: home, LogPath: home + "/caddy.log", KeepAlive: true, ExitTimeout: 30 * time.Second,
@@ -42,12 +43,12 @@ func TestLaunchdPlistMatchesInstalledAgents(t *testing.T) {
 }
 
 func TestLaunchdPlistWritesOptionalKeysOnlyWhenSet(t *testing.T) {
-	spec := ServiceSpec{Label: "l", Exe: "/bin/x", Args: []string{"a&b"}, Dir: "/d", LogPath: "/d/log", Env: map[string]string{"B": "2", "A": "<1>"}, ExitTimeout: 960 * time.Second}
+	spec := ServiceSpec{Label: "l", Exe: "/bin/x", Args: []string{"a&b"}, Dir: "/d", LogPath: "/d/log", Env: map[string]string{"B": "2", "A": "<1>"}, ExitTimeout: 60 * time.Second}
 	got := string(LaunchdPlist(spec))
 	for _, want := range []string{
 		"<array><string>/bin/x</string><string>a&amp;b</string></array>",
 		"<key>KeepAlive</key><false/>",
-		"<key>ExitTimeOut</key><integer>960</integer>",
+		"<key>ExitTimeOut</key><integer>60</integer>",
 		"<key>A</key><string>&lt;1&gt;</string>",
 	} {
 		if !strings.Contains(got, want) {

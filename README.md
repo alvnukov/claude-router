@@ -311,11 +311,13 @@ itself; the plist is world-readable and never sees it.
 Once the agent is installed, `start`, `stop` and `restart` go through launchd
 -- a plain kill would only be undone by `KeepAlive`. `stop` unloads the agent,
 so it stays down until the next login or an explicit `start`. It returns once
-the router has exited: the router finishes the requests in flight, up to
-`ROUTER_DRAIN_TIMEOUT` (900 s by default), and launchd kills it after the
-agent's `ExitTimeOut` of 960 s. `restart`, and `install` over a loaded agent,
-unload it the same way and load it again. An agent installed before
-`ExitTimeOut` was added gets it at the next `./router install`.
+the router has exited: under launchd a stopped router gets 60 s for the
+requests in flight -- the agent's `ExitTimeOut`, the most launchd grants -- and
+is killed then. The long drain belongs to the slot deploy, which drains the old
+slot before unloading it, and to cutover, which waits for the legacy router to
+go idle. `restart`, and `install` over a loaded agent, unload it the same way
+and load it again. An agent installed before `ExitTimeOut` was added gets it at
+the next `./router install`.
 
 ### One-time move to Caddy and blue/green deploys
 
@@ -342,8 +344,8 @@ not run cutover on the public ports.
 Caddy. Identical binaries are a no-op; `./router deploy -force` switches even
 when the digest is unchanged, as does `./router restart` after cutover. A
 serving request stays on its original slot until it ends, or until
-`-drain-timeout` (15 minutes) passes; then the old slot is stopped and its own
-`ROUTER_DRAIN_TIMEOUT` shutdown ends what is left. A deploy interrupted before
+`-drain-timeout` (15 minutes) passes; then the old slot is stopped, and launchd
+ends what is left within 60 s. A deploy interrupted before
 the switch is resumed by the next one. The new slot runs the config migrations
 when it becomes active, once the old slot has stopped writing. `./router status`
 reports the active slot and launchd labels; `./router start` reloads its slot

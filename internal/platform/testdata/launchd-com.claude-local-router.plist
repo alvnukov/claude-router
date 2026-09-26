@@ -9,7 +9,7 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>ExitTimeOut</key><integer>960</integer>
+  <key>ExitTimeOut</key><integer>60</integer>
   <key>ProcessType</key><string>Background</string>
   <key>StandardOutPath</key><string>/home/router/.claude/local-router/router.log</string>
   <key>StandardErrorPath</key><string>/home/router/.claude/local-router/router.log</string>

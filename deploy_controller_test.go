@@ -22,6 +22,7 @@ type deployFixture struct {
 	calls      []string
 	fail       string
 	onState    func(slot string, s *deploySlotState) error // simulates launchd restarts
+	onStop     func(ctx context.Context, slot string)
 	controller *deployController
 	api        *httptest.Server
 }
@@ -124,7 +125,10 @@ func (f *deployFixture) flip(_ context.Context, slot string) error {
 	f.active = slot
 	return nil
 }
-func (f *deployFixture) stop(_ context.Context, slot string) error {
+func (f *deployFixture) stop(ctx context.Context, slot string) error {
+	if f.onStop != nil {
+		f.onStop(ctx, slot)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "stop:"+slot)

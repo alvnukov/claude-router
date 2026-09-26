@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"localrouter/internal/cli"
 	"localrouter/internal/platform"
 )
 
@@ -125,8 +126,9 @@ func runDeploy(ctx context.Context, args []string, out io.Writer, newOps deployO
 
 	ops := newOps(file, *dir, *agents, *binary)
 	controller := &deployController{config: file.deployConfig, ops: ops, readyTimeout: *readyTimeout, drainTimeout: *drain}
-	// A leftover slot from an interrupted deploy drains too, before the old one.
-	ctx, cancel := context.WithTimeout(ctx, 2**drain+*readyTimeout+2*time.Minute)
+	// A leftover slot from an interrupted deploy drains and stops too, before
+	// the old one.
+	ctx, cancel := context.WithTimeout(ctx, 2*(*drain+cli.StopTimeout)+*readyTimeout)
 	defer cancel()
 	return withDeployLock(ctx, *dir, func() error {
 		before, err := ops.current(ctx)
