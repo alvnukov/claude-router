@@ -163,7 +163,8 @@ func (c *commands) stopAgent(ctx context.Context, label string) error {
 }
 
 // legacySpec is the agent the shell script used to write: the binary in the
-// home, restarted whenever it exits, at most every ten seconds.
+// home, restarted whenever it exits, at most every ten seconds. Unlike the
+// script's, it lets the router drain for exitTimeout when stopped.
 func legacySpec(label, home string) platform.ServiceSpec {
 	return platform.ServiceSpec{
 		Label:            label,
@@ -172,6 +173,7 @@ func legacySpec(label, home string) platform.ServiceSpec {
 		LogPath:          filepath.Join(home, "router.log"),
 		KeepAlive:        true,
 		ThrottleInterval: 10 * time.Second,
+		ExitTimeout:      exitTimeout,
 	}
 }
 

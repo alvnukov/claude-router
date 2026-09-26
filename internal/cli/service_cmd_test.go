@@ -224,7 +224,8 @@ func TestCommandsRequireHome(t *testing.T) {
 	expectCalls(t, f)
 }
 
-// The legacy agent keeps the plist the shell script wrote, byte for byte.
+// The legacy agent keeps the plist the shell script wrote, byte for byte,
+// but for ExitTimeOut, which lets it drain its requests when stopped.
 func TestLegacySpecMatchesInstalledAgent(t *testing.T) {
 	want, err := os.ReadFile(filepath.Join("..", "platform", "testdata", "launchd-com.claude-local-router.plist"))
 	if err != nil {

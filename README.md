@@ -310,8 +310,12 @@ itself; the plist is world-readable and never sees it.
 
 Once the agent is installed, `start`, `stop` and `restart` go through launchd
 -- a plain kill would only be undone by `KeepAlive`. `stop` unloads the agent,
-so it stays down until the next login or an explicit `start`. `restart`, and
-`install` over a loaded agent, unload it and load it again.
+so it stays down until the next login or an explicit `start`. It returns once
+the router has exited: the router finishes the requests in flight, up to
+`ROUTER_DRAIN_TIMEOUT` (900 s by default), and launchd kills it after the
+agent's `ExitTimeOut` of 960 s. `restart`, and `install` over a loaded agent,
+unload it the same way and load it again. An agent installed before
+`ExitTimeOut` was added gets it at the next `./router install`.
 
 ### One-time move to Caddy and blue/green deploys
 
