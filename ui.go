@@ -750,8 +750,24 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	model := strings.TrimSpace(r.FormValue("model"))
 	familyScope := r.FormValue("scope") == "family"
 	choices := map[string]modelRoute{}
+	// «На все effort» sends one destination for every level. A model target
+	// without a level takes the same-named one; a level the target lacks keeps
+	// the row's own choice and is named in the reply.
+	all := r.FormValue("all")
+	allKey, _ := strings.CutPrefix(all, "model:")
+	allKey, perLevel := strings.CutSuffix(allKey, ":")
+	perLevel = perLevel && strings.HasPrefix(all, "model:")
+	var lacking []string
 	for _, effort := range claudeEfforts {
 		dest := r.FormValue(effort)
+		switch {
+		case perLevel && effort != "default" && u.validateTargetEffort(l, allKey, effort) != nil:
+			lacking = append(lacking, effort)
+		case perLevel && effort != "default":
+			dest = all + effort
+		case all != "":
+			dest = all
+		}
 		if !familyScope && (dest == "inherit" || dest == "" && claudeFamily(model) != "") {
 			continue
 		}
@@ -786,7 +802,11 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	} else {
 		l.Routes[model] = choices
 	}
-	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), "Маршруты сохранены: "+model)
+	message := "Маршруты сохранены: " + model
+	if len(lacking) > 0 {
+		message += fmt.Sprintf(". У %s нет effort %s — эти строки не изменены", allKey, strings.Join(lacking, ", "))
+	}
+	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), message)
 }
 
 func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {

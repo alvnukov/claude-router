@@ -163,6 +163,11 @@
 <details class="route-card" data-model="{{.Model}}" {{if .IsFamily}}open{{end}}><summary><b>{{.Label}}</b>{{if .IsFamily}} <span class="muted">· все версии</span>{{else if .Family}} <span class="muted">· семейство {{.Family}}</span>{{end}}</summary>
 <form hx-post="/settings/route" hx-target="#detail" hx-swap="innerHTML">
 <input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="model" value="{{.Model}}">{{if .IsFamily}}<input type="hidden" name="scope" value="family">{{end}}
+<label class="route-line"><span>На все effort</span><select name="all" aria-label="{{.Model}} / все effort"><option value="">— каждый effort отдельно</option>
+{{if and (not .IsFamily) .Family}}<option value="inherit">Наследовать семейство</option>{{end}}<option value="disabled">Не настроено</option><option value="anthropic">Anthropic</option>
+{{range .Pools}}<option value="pool:{{.Name}}">Пул: {{.Name}}</option>{{end}}
+{{range .Targets}}{{$target:=.}}<option value="model:{{.Key}}:">{{.Key}} — тот же effort</option>{{range .Efforts}}<option value="model:{{$target.Key}}:{{.}}">{{$target.Key}}/{{.}}</option>{{end}}{{end}}
+</select></label>
 {{range .Choices}}{{$choice:=.}}<label class="route-line"><span>{{if eq .Effort "default"}}Не указан{{else}}{{.Effort}}{{end}}</span><select name="{{.Effort}}" aria-label="{{$route.Model}} / {{.Effort}}">
 {{if and (not $route.IsFamily) $route.Family}}<option value="inherit" {{if eq .Destination "inherit"}}selected{{end}}>Наследовать: {{.Inherited}}</option>{{end}}
 <option value="disabled" {{if eq .Destination "disabled"}}selected{{end}}>Не настроено</option><option value="anthropic" {{if eq .Destination "anthropic"}}selected{{end}}>Anthropic</option>
