@@ -378,7 +378,7 @@ func writeAtomicIfChanged(path string, data []byte) error {
 	return platform.ReplaceFile(tmp, path)
 }
 
-func WriteActiveProfile(path, name string) error {
+func writeActiveProfile(path, name string) error {
 	data, err := json.Marshal(name)
 	if err != nil {
 		return err
@@ -431,7 +431,7 @@ func WriteProviders(path string, l Local) error {
 		return err
 	}
 	if active != "" {
-		return WriteActiveProfile(path, active)
+		return writeActiveProfile(path, active)
 	}
 	return nil
 }
@@ -443,9 +443,9 @@ func envOr(key, def string) string {
 	return def
 }
 
-// SeedFromEnv builds the initial setup from ROUTER_LOCAL_* for a router that
+// seedFromEnv builds the initial setup from ROUTER_LOCAL_* for a router that
 // has no providers.json yet. The provider is named after the host.
-func SeedFromEnv() Local {
+func seedFromEnv() Local {
 	base := strings.TrimSuffix(envOr("ROUTER_LOCAL_BASE_URL", "http://127.0.0.1:1234/v1"), "/")
 	name := "local"
 	if u, err := url.Parse(base); err == nil && u.Hostname() != "" && u.Hostname() != "127.0.0.1" && u.Hostname() != "localhost" {
@@ -485,7 +485,7 @@ func LoadLocal(path string) (Local, bool, error) {
 			return Local{}, false, statErr
 		}
 	}
-	return SeedFromEnv(), false, nil
+	return seedFromEnv(), false, nil
 }
 
 // Clone copies the slices so an edit never touches the snapshot readers hold.

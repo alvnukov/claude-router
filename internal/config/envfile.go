@@ -49,11 +49,11 @@ func ReadEnv(path string) (map[string]string, error) {
 	return out, nil
 }
 
-// WriteEnv rewrites KEY=VALUE lines in place, keeping comments and every other
+// writeEnv rewrites KEY=VALUE lines in place, keeping comments and every other
 // line as they are, and appends keys the file did not have. The file holds the
 // local endpoint's API key, so it is written 0600 through a temp file and a
 // rename rather than truncated in place.
-func WriteEnv(path string, updates map[string]string) error {
+func writeEnv(path string, updates map[string]string) error {
 	mode := os.FileMode(0o600)
 	var lines []string
 	if data, err := os.ReadFile(path); err == nil {

@@ -1,9 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
-	"log"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -67,14 +64,6 @@ func TestFailoverPoolCoolingLast(t *testing.T) {
 	}
 }
 
-func TestPoolTypeUnknownRejected(t *testing.T) {
-	l := twoMemberPool(map[string]poolSettings{"pair": {Type: "roundrobin"}}).Local
-	err := l.Validate()
-	if err == nil || !strings.Contains(err.Error(), "roundrobin") || !strings.Contains(err.Error(), "pair") {
-		t.Fatalf("unknown pool type: %v", err)
-	}
-}
-
 func TestPoolSaveKeepsType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
 	cfg := twoMemberPool(map[string]poolSettings{"pair": {Type: conf.PoolFailover, FirstByteSec: 5}})
@@ -110,30 +99,5 @@ func TestPoolSaveKeepsType(t *testing.T) {
 	}
 	if got := l.PoolSettings["pair"]; got.Type != conf.PoolFailover || got.FirstByteSec != 7 {
 		t.Fatalf("saved %+v", got)
-	}
-}
-
-// An old file with the pool's numeric balance still loads; the value is
-// ignored, logged once per read, and gone after the next write.
-func TestPoolSettingsLegacyBalanceIgnored(t *testing.T) {
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
-	var s poolSettings
-	if err := json.Unmarshal([]byte(`{"failover":true,"first_byte_seconds":5,"balance":3}`), &s); err != nil {
-		t.Fatal(err)
-	}
-	if s != (poolSettings{Failover: true, FirstByteSec: 5}) {
-		t.Fatalf("read %+v", s)
-	}
-	if !strings.Contains(logs.String(), "balance") {
-		t.Fatalf("no log line: %q", logs.String())
-	}
-	out, err := json.Marshal(s)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(out), "balance") {
-		t.Fatalf("written back: %s", out)
 	}
 }

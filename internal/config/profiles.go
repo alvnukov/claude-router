@@ -17,7 +17,7 @@ type Profile struct {
 	PoolSettings map[string]PoolSettings     `json:"pool_settings,omitempty"`
 }
 
-func (l Local) Routing() Profile {
+func (l Local) routing() Profile {
 	c := l.cloneRouting()
 	return Profile{FamilyRoutes: c.FamilyRoutes, Routes: c.Routes, ModelPools: c.ModelPools, PoolSettings: c.PoolSettings}
 }
@@ -45,7 +45,7 @@ func (l *Local) syncActiveProfile() error {
 	if _, ok := l.Profiles[l.ActiveProfile]; !ok {
 		return fmt.Errorf("активный профиль %q не найден", l.ActiveProfile)
 	}
-	l.Profiles[l.ActiveProfile] = l.Routing()
+	l.Profiles[l.ActiveProfile] = l.routing()
 	return nil
 }
 
@@ -115,7 +115,7 @@ func (l *Local) repairInactiveProfiles() {
 				}
 			}
 		}
-		l.Profiles[name] = c.Routing()
+		l.Profiles[name] = c.routing()
 	}
 }
 
@@ -141,7 +141,7 @@ func (l *Local) RenameInactiveProvider(oldName, newName string) {
 				}
 			}
 		}
-		l.Profiles[name] = c.Routing()
+		l.Profiles[name] = c.routing()
 	}
 }
 
@@ -177,7 +177,7 @@ func (s *Store) EnsureProfiles() error {
 		return s.update(".before-profiles", func(*Local) error { return nil })
 	}
 	add := func(l *Local) error {
-		l.Profiles = map[string]Profile{"default": l.Routing()}
+		l.Profiles = map[string]Profile{"default": l.routing()}
 		l.ActiveProfile = "default"
 		return nil
 	}
@@ -208,7 +208,7 @@ func (s *Store) CreateProfile(name string, clone bool) error {
 		}
 		p := Profile{FamilyRoutes: map[string]map[string]Route{}, Routes: map[string]map[string]Route{}, ModelPools: map[string][]PoolTarget{}}
 		if clone {
-			p = l.Routing()
+			p = l.routing()
 		}
 		l.Profiles[name] = p
 		if s.provPath == "" {
@@ -237,7 +237,7 @@ func (s *Store) ActivateProfile(name string) error {
 	if s.provPath == "" {
 		return fmt.Errorf("файл провайдеров отключён")
 	}
-	if err := WriteActiveProfile(s.provPath, name); err != nil {
+	if err := writeActiveProfile(s.provPath, name); err != nil {
 		return err
 	}
 	s.commit(kindProfiles)
@@ -272,10 +272,10 @@ func (s *Store) DeleteProfile(name string) error {
 
 // A hand edit can still be loaded through the existing mtime watcher.
 func (s *Store) Reload() error {
-	return s.ReloadProfilesFrom(ReadProviders)
+	return s.reloadProfilesFrom(ReadProviders)
 }
 
-func (s *Store) ReloadProfilesFrom(read func(string) (Local, error)) error {
+func (s *Store) reloadProfilesFrom(read func(string) (Local, error)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, err := read(s.provPath)

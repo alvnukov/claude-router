@@ -102,7 +102,7 @@ func mergeCatalog(next *Local, snapshot Local, anthropic []string, anthropicErr 
 		} else {
 			cached = ProviderCatalog{UpdatedAt: res.At, Models: res.Models}
 			if p.Type == "codex" {
-				next.Catalog.Notes = append(next.Catalog.Notes, InheritCodexModels(next, p.Name, cached.Models)...)
+				next.Catalog.Notes = append(next.Catalog.Notes, inheritCodexModels(next, p.Name, cached.Models)...)
 			}
 		}
 		next.Catalog.Providers[p.Name] = cached
@@ -112,7 +112,7 @@ func mergeCatalog(next *Local, snapshot Local, anthropic []string, anthropicErr 
 // New Codex versions append to each matching pool using that pool's newest
 // earlier member as the effort template. A removed model is not re-added on
 // the next refresh, and distinct named variants never inherit from each other.
-func InheritCodexModels(l *Local, providerName string, models []CatalogModel) []string {
+func inheritCodexModels(l *Local, providerName string, models []CatalogModel) []string {
 	if l.Catalog.CodexSeen == nil {
 		l.Catalog.CodexSeen = map[string][]string{}
 	}
@@ -131,7 +131,7 @@ func InheritCodexModels(l *Local, providerName string, models []CatalogModel) []
 		if !l.HasModel(key) {
 			l.Models = append(l.Models, Model{Provider: providerName, Model: m.ID})
 		}
-		family := CodexFamily(m.ID)
+		family := codexFamily(m.ID)
 		if family == "" {
 			continue
 		}
@@ -160,7 +160,7 @@ func InheritCodexModels(l *Local, providerName string, models []CatalogModel) []
 					continue
 				}
 				id := strings.TrimPrefix(member.Model, prefix)
-				if CodexFamily(id) == family && NewerModel(m.ID, id) && (templateID == "" || NewerModel(id, templateID)) {
+				if codexFamily(id) == family && newerModel(m.ID, id) && (templateID == "" || newerModel(id, templateID)) {
 					template, templateID = member, id
 				}
 			}
@@ -197,7 +197,7 @@ func InheritCodexModels(l *Local, providerName string, models []CatalogModel) []
 						continue
 					}
 					id := strings.TrimPrefix(member.Model, prefix)
-					if CodexFamily(id) == family && NewerModel(m.ID, id) && (templateID == "" || NewerModel(id, templateID)) {
+					if codexFamily(id) == family && newerModel(m.ID, id) && (templateID == "" || newerModel(id, templateID)) {
 						template, templateID = member, id
 					}
 				}

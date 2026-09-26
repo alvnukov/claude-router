@@ -16,51 +16,6 @@ import (
 	conf "localrouter/internal/config"
 )
 
-func TestFamiliesInheritPerEffortWithVersionOverrides(t *testing.T) {
-	l := oneProvider("http://h/v1", "a", "b")
-	l.ModelPools = map[string][]poolTarget{"deep": {{Model: "p/a", Effort: "high"}}, "fast": {{Model: "p/b", Effort: "low"}}}
-	l.Routes = map[string]map[string]modelRoute{
-		"claude-opus-5":   {"high": {Mode: "pool", Pool: "deep"}, "low": {Mode: "anthropic"}},
-		"claude-opus-4":   {"high": {Mode: "pool", Pool: "fast"}},
-		"claude-sonnet-5": {"high": {Mode: "pool", Pool: "fast"}},
-	}
-	migrated, changed := conf.MigrateFamilyRoutes(l)
-	if !changed {
-		t.Fatal("not migrated")
-	}
-	if err := migrated.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"claude-opus-5-5", "claude-opus-6", "opus"} {
-		if migrated.RouteFor(id, "high").Pool != "deep" || migrated.RouteFor(id, "low").Mode != "anthropic" || migrated.RouteFor(id, "").Mode != "disabled" {
-			t.Fatalf("incorrect inherited routes for %s", id)
-		}
-	}
-	if migrated.RouteFor("claude-sonnet-6", "high").Pool != "fast" {
-		t.Fatal("Sonnet inherited Opus")
-	}
-	if migrated.RouteFor("claude-opus-5-other", "high").Mode != "disabled" || migrated.RouteFor("claude-newfamily-1", "high").Mode != "disabled" {
-		t.Fatal("unconfigured family enabled")
-	}
-	migrated.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "anthropic"}
-	if migrated.RouteFor("claude-opus-5", "high").Mode != "anthropic" || migrated.RouteFor("claude-opus-5-5", "high").Mode != "anthropic" {
-		t.Fatal("inherited route did not follow family edit")
-	}
-	if migrated.RouteFor("claude-opus-4", "high").Pool != "fast" {
-		t.Fatal("version override lost")
-	}
-	migrated.Routes["claude-opus-5-5"] = map[string]modelRoute{"high": {Mode: "disabled"}}
-	if migrated.RouteFor("claude-opus-5-5", "high").Mode != "disabled" || migrated.RouteFor("claude-opus-5-5", "low").Mode != "anthropic" {
-		t.Fatal("per-effort overrides not respected")
-	}
-	if _, changed := conf.MigrateFamilyRoutes(migrated); changed {
-		t.Fatal("family migration repeats")
-	}
-	if l.FamilyRoutes != nil || len(l.Routes) != 3 {
-		t.Fatal("original mutated")
-	}
-}
-
 func TestParseOfficialAnthropicCatalog(t *testing.T) {
 	body := []byte(`<a href="/models/claude-opus-99">old documentation slug</a><button><span>claude-opus-5-5</span><svg></svg></button><button>claude-fable-5-1</button><button>claude-opus-5-5</button><button>anthropic.claude-opus-5-5</button><button>claude-haiku-4-5@20251001</button><script>claude-sonnet-99</script>`)
 	got, err := parseAnthropicCatalog(body)
@@ -69,36 +24,6 @@ func TestParseOfficialAnthropicCatalog(t *testing.T) {
 	}
 	if _, err := parseAnthropicCatalog([]byte(`<html>upstream unavailable</html>`)); err == nil {
 		t.Fatal("empty/error page accepted")
-	}
-}
-
-func TestCodexNewVersionsInheritPoolAndSupportedEfforts(t *testing.T) {
-	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{
-		"high": {{Model: "codex/gpt-6-sol", Effort: "high"}}, "max": {{Model: "codex/gpt-6-sol", Effort: "max"}},
-	}}
-	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high", "max"}}, {ID: "gpt-6.1-sol", Efforts: []string{"low", "high"}}, {ID: "gpt-6.1-luna", Efforts: []string{"high"}}, {ID: "gpt-5.6-sol", Efforts: []string{"high"}}}
-	notes := conf.InheritCodexModels(&l, "codex", models)
-	if len(l.Models) != 4 {
-		t.Fatalf("catalog not imported: %v", l.Models)
-	}
-	want := []poolTarget{{Model: "codex/gpt-6-sol", Effort: "high"}, {Model: "codex/gpt-6.1-sol", Effort: "high"}}
-	if !reflect.DeepEqual(l.ModelPools["high"], want) {
-		t.Fatalf("wrong pool inheritance: %+v", l.ModelPools["high"])
-	}
-	if len(l.ModelPools["max"]) != 1 || len(notes) != 1 || !strings.Contains(notes[0], "max") {
-		t.Fatalf("unsupported effort inherited: %v %v", l.ModelPools, notes)
-	}
-	conf.InheritCodexModels(&l, "codex", models)
-	if len(l.ModelPools["high"]) != 2 || len(l.Models) != 4 {
-		t.Fatal("duplicate import")
-	}
-	l.ModelPools["high"] = l.ModelPools["high"][:1]
-	conf.InheritCodexModels(&l, "codex", models)
-	if len(l.ModelPools["high"]) != 1 {
-		t.Fatal("manually removed member re-added")
-	}
-	if !conf.NewerModel("gpt-5.10-sol", "gpt-5.9-sol") || conf.CodexFamily("gpt-6-sol") == conf.CodexFamily("gpt-6-luna") {
-		t.Fatal("version/family matching")
 	}
 }
 
@@ -184,23 +109,5 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/settings/refresh-models", nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Проверка моделей завершена") || len(u.cs.Get().Local.Catalog.Anthropic) != 1 {
 		t.Fatalf("refresh: %d", w.Code)
-	}
-}
-
-func TestCodexInheritanceIncludesInactiveProfilesOnce(t *testing.T) {
-	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{"work": {{Model: "codex/gpt-6-sol", Effort: "high"}}}}
-	l.Profiles = map[string]conf.Profile{"default": l.Routing(), "cloud": l.Routing()}
-	l.ActiveProfile = "default"
-	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high"}}, {ID: "gpt-6.1-sol", Efforts: []string{"high"}}}
-	conf.InheritCodexModels(&l, "codex", models)
-	if len(l.ModelPools["work"]) != 2 || len(l.Profiles["cloud"].ModelPools["work"]) != 2 {
-		t.Fatalf("new version missed profile: %+v", l.Profiles)
-	}
-	cloud := l.Profiles["cloud"]
-	cloud.ModelPools["work"] = cloud.ModelPools["work"][:1]
-	l.Profiles["cloud"] = cloud
-	conf.InheritCodexModels(&l, "codex", models)
-	if len(l.Profiles["cloud"].ModelPools["work"]) != 1 {
-		t.Fatal("manually removed version re-added")
 	}
 }

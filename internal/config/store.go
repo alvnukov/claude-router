@@ -252,7 +252,7 @@ func (s *Store) tick(gate Gate) {
 func (s *Store) Poll() {
 	if m := mtime(s.envPath); !m.Equal(s.envMtime) {
 		s.envMtime = m
-		changed, err := s.ReloadEnv()
+		changed, err := s.reloadEnv()
 		s.NoteReload(s.envPath, err)
 		if err == nil && changed {
 			c := s.Get()
@@ -284,7 +284,7 @@ func (l Local) Summary() string {
 	return fmt.Sprintf("providers=%d models=%s", len(l.Providers), strings.Join(ms, ","))
 }
 
-func (s *Store) ReloadEnv() (bool, error) {
+func (s *Store) reloadEnv() (bool, error) {
 	vals, err := ReadEnv(s.envPath)
 	if err != nil {
 		return false, err
@@ -396,7 +396,7 @@ func (s *Store) updateSettings(write bool, fn func(*SettingsInput) error) error 
 			"ROUTER_LOCAL_BALANCE":            strconv.Itoa(balance),
 			"ROUTER_LOCAL_PROBE_INTERVAL":     strconv.Itoa(probeEvery),
 		}
-		if err := WriteEnv(s.envPath, updates); err != nil {
+		if err := writeEnv(s.envPath, updates); err != nil {
 			return fmt.Errorf("запись %s: %w", s.envPath, err)
 		}
 		s.commit(kindEnv)
@@ -464,7 +464,7 @@ func (s *Store) prepare(fn func(*Local) error) (Config, error) {
 	}
 	next := s.c
 	next.Local = l
-	if migrated, changed := MigratePoolSettings(next); changed {
+	if migrated, changed := migratePoolSettings(next); changed {
 		l = migrated
 	}
 	if err := l.syncActiveProfile(); err != nil {

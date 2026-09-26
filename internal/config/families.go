@@ -35,7 +35,7 @@ func modelVersion(model string) []int {
 	return version
 }
 
-func NewerModel(a, b string) bool {
+func newerModel(a, b string) bool {
 	av, bv := modelVersion(a), modelVersion(b)
 	for i := 0; i < max(len(av), len(bv)); i++ {
 		x, y := 0, 0
@@ -53,7 +53,7 @@ func NewerModel(a, b string) bool {
 }
 
 // Keep named variants separate: GPT Sol never inherits from Astra or Luna.
-func CodexFamily(model string) string {
+func codexFamily(model string) string {
 	match := codexFamilyPattern.FindStringSubmatch(model)
 	if match == nil {
 		return ""
@@ -63,7 +63,7 @@ func CodexFamily(model string) string {
 
 // The latest explicitly configured version supplies the initial family rules.
 // Existing version overrides are preserved; subsequent family edits are live.
-func MigrateFamilyRoutes(l Local) (Local, bool) {
+func migrateFamilyRoutes(l Local) (Local, bool) {
 	if l.FamilyRoutes != nil {
 		return l, false
 	}
@@ -76,7 +76,7 @@ func MigrateFamilyRoutes(l Local) (Local, bool) {
 			continue
 		}
 		old, exists := latest[family]
-		if !exists || NewerModel(model, old) || !NewerModel(old, model) && model < old {
+		if !exists || newerModel(model, old) || !newerModel(old, model) && model < old {
 			latest[family] = model
 		}
 	}

@@ -94,7 +94,7 @@ func ParsePoolSettings(in SettingsInput) (PoolSettings, error) {
 }
 
 // Copy old global values once, preserving explicitly configured zero/false.
-func MigratePoolSettings(c Config) (Local, bool) {
+func migratePoolSettings(c Config) (Local, bool) {
 	l := c.Local.Clone()
 	changed := false
 	if l.PoolSettings == nil {
@@ -135,7 +135,7 @@ func (s *Store) UpdatePoolSettings(name string, merge func(old PoolSettings) Poo
 		}
 		c := s.c
 		c.Local = *l
-		*l, _ = MigratePoolSettings(c)
+		*l, _ = migratePoolSettings(c)
 		settings := merge(l.PoolSettings[name])
 		if err := settings.validate(); err != nil {
 			return err

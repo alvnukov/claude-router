@@ -26,7 +26,7 @@ func newTestStore(t *testing.T) (*Store, string) {
 		Routes:       map[string]map[string]Route{"claude-sonnet-5": {"default": {Mode: "pool", Pool: "work"}}},
 		FamilyRoutes: map[string]map[string]Route{},
 	}
-	l.Profiles = map[string]Profile{"default": l.Routing()}
+	l.Profiles = map[string]Profile{"default": l.routing()}
 	l.ActiveProfile = "default"
 	if err := WriteProviders(path, l); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestUpdateRefusalLeavesStoreAndFiles(t *testing.T) {
 		}, stop, ""},
 		{"replace, other active profile", func(l *Local) error {
 			next := l.Clone()
-			next.Profiles["night"] = next.Routing()
+			next.Profiles["night"] = next.routing()
 			next.ActiveProfile = "night"
 			return Replace(next, "")(l)
 		}, ErrProfileChanged, ""},
@@ -254,5 +254,54 @@ func TestTickAsksGate(t *testing.T) {
 				t.Errorf("hand edit loaded = %v, want %v", got, tc.reload)
 			}
 		})
+	}
+}
+
+func TestReloadEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "env")
+	writeRaw(t, p, "ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n")
+	t.Setenv("ROUTER_ENV_FILE", p)
+	s := NewStore(Config{Failover: true, FirstByte: 45 * time.Second}, "")
+	changed, err := s.reloadEnv()
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	c := s.Get()
+	if c.Failover || c.RouteFor("claude-opus-5", "default").Mode != "disabled" || c.FirstByte != 45*time.Second {
+		t.Fatalf("%+v", c)
+	}
+	if changed, _ = s.reloadEnv(); changed {
+		t.Fatal("second reload should be a no-op")
+	}
+}
+
+func TestProvidersFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "providers.json")
+	s := NewStore(Config{Local: oneProvider("http://h/v1", "zero")}, p)
+	l := Local{
+		Providers:  []Provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
+		Models:     []Model{{Provider: "a", Model: "m1"}, {Provider: "b", Model: "m2"}, {Provider: "a", Model: "m1"}},
+		ModelPools: map[string][]PoolTarget{"work": {{Model: "b/m2", Effort: "high"}}},
+		Routes:     map[string]map[string]Route{"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}}},
+	}
+	if err := s.Update(Replace(l, "")); err != nil {
+		t.Fatal(err)
+	}
+	requirePrivateFile(t, p)
+	c := s.Get()
+	if len(c.Local.Models) != 2 || c.Local.Providers[0].BaseURL != "http://a/v1" || c.RouteFor("zero", "default").Mode != "disabled" || c.RouteFor("m2", "default").Mode != "disabled" {
+		t.Fatalf("%+v", c.Local)
+	}
+	got, err := ReadProviders(p)
+	if err != nil || got.Preferred != "" || got.RouteFor("claude-opus-5", "high").Pool != "work" || got.ModelPools["work"][0].Effort != "high" || got.Providers[1].APIKey != "k" {
+		t.Fatalf("%+v %v", got, err)
+	}
+	bad := Local{Providers: []Provider{{Name: "x", BaseURL: "http://x/v1"}}, Models: []Model{{Provider: "nope", Model: "m"}}}
+	if err := s.Update(Replace(bad, "")); err == nil {
+		t.Fatal("model on unknown provider accepted")
+	}
+	bad = Local{Providers: []Provider{{Name: "a/b", BaseURL: "http://x/v1"}}}
+	if err := s.Update(Replace(bad, "")); err == nil {
+		t.Fatal("slash in provider name accepted")
 	}
 }

@@ -50,19 +50,19 @@ func (c Config) ClientListen() string {
 // MigrateConfig brings providers.json at path to the current schema, keeping
 // a backup of each step.
 func MigrateConfig(c Config, path string) (Config, error) {
-	if migrated, changed := MigrateLegacyPools(c.Local, SplitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
-		if err := SavePoolMigration(path, migrated); err != nil {
+	if migrated, changed := migrateLegacyPools(c.Local, SplitList(os.Getenv("ROUTER_CLOUD_ONLY"))); changed {
+		if err := savePoolMigration(path, migrated); err != nil {
 			return Config{}, fmt.Errorf("pool migration: %w", err)
 		}
 		c.Local = migrated
 	}
-	if migrated, changed := MigrateFamilyRoutes(c.Local); changed {
+	if migrated, changed := migrateFamilyRoutes(c.Local); changed {
 		if err := SaveConfigurationMigration(path, migrated, ".before-families"); err != nil {
 			return Config{}, fmt.Errorf("family migration: %w", err)
 		}
 		c.Local = migrated
 	}
-	if migrated, changed := MigratePoolSettings(c); changed {
+	if migrated, changed := migratePoolSettings(c); changed {
 		if err := SaveConfigurationMigration(path, migrated, ".before-pool-settings"); err != nil {
 			return Config{}, fmt.Errorf("pool settings migration: %w", err)
 		}

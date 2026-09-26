@@ -12,41 +12,6 @@ import (
 	"localrouter/internal/history"
 )
 
-func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
-	c := config{Local: oneProvider("http://example.test/v1", "a"), Failover: true, FirstByte: 45 * time.Second, Balance: 3, ProbeEvery: 30 * time.Second, MaxInputChars: 9000}
-	c.Local.ModelPools = map[string][]poolTarget{"old": {{Model: "p/a"}}, "zero": {{Model: "p/a"}}}
-	c.Local.PoolSettings = map[string]poolSettings{"zero": {}}
-	c.Local.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "old"}, "low": {Mode: "pool", Pool: "zero"}}}
-	migrated, changed := conf.MigratePoolSettings(c)
-	if !changed || migrated.PoolSettings["old"].FirstByteSec != 45 || migrated.PoolSettings["zero"] != (poolSettings{}) {
-		t.Fatal("migration lost existing settings")
-	}
-	if len(c.Local.PoolSettings) != 1 {
-		t.Fatal("migration mutated previous snapshot")
-	}
-	c.Local = migrated
-	if _, changed := conf.MigratePoolSettings(c); changed {
-		t.Fatal("migration is not idempotent")
-	}
-	path := filepath.Join(t.TempDir(), "providers.json")
-	if err := conf.WriteProviders(path, c.Local); err != nil {
-		t.Fatal(err)
-	}
-	var err error
-	c.Local, err = conf.ReadProviders(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.FirstByte, c.ProbeEvery, c.MaxInputChars = time.Second, time.Hour, 1
-	old, zero := c.ForModel("claude-opus-5", "high"), c.ForModel("claude-opus-5", "low")
-	if old.FirstByte != 45*time.Second || !old.Failover || old.ProbeEvery != 30*time.Second || old.MaxInputChars != 9000 {
-		t.Fatal("saved pool settings overridden by globals")
-	}
-	if zero.FirstByte != 0 || zero.Failover || zero.ProbeEvery != 0 || zero.MaxInputChars != 0 {
-		t.Fatal("explicit zeros did not disable settings")
-	}
-}
-
 func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	up, _ := url.Parse("https://api.anthropic.com")
 	path := filepath.Join(t.TempDir(), "providers.json")

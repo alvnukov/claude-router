@@ -9,7 +9,7 @@ import (
 )
 
 // Legacy fields are consumed once; their known routes become explicit entries.
-func MigrateLegacyPools(l Local, cloudOnly []string) (Local, bool) {
+func migrateLegacyPools(l Local, cloudOnly []string) (Local, bool) {
 	if l.Routes != nil {
 		return l, false
 	}
@@ -98,7 +98,7 @@ func MigrateLegacyPools(l Local, cloudOnly []string) (Local, bool) {
 	return l, true
 }
 
-func SavePoolMigration(path string, l Local) error {
+func savePoolMigration(path string, l Local) error {
 	return SaveConfigurationMigration(path, l, ".before-pools")
 }
 
