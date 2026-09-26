@@ -48,7 +48,8 @@ func TestPoolSettingsMigrationAndIsolation(t *testing.T) {
 
 func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	up, _ := url.Parse("https://api.anthropic.com")
-	cs := newConfigStore(config{upstream: up, firstByte: 45 * time.Second, local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, filepath.Join(t.TempDir(), "providers.json"))
+	path := filepath.Join(t.TempDir(), "providers.json")
+	cs := newConfigStore(config{upstream: up, firstByte: 45 * time.Second, local: localSetup{ModelPools: map[string][]poolTarget{"a": {}, "b": {}}}}, path)
 	u := newUIServer(history.New(10, ""), cs, newHealth(""))
 	post := func(values url.Values) string {
 		t.Helper()
@@ -66,7 +67,7 @@ func TestPoolSettingsDashboardPersistsOnlySelectedPool(t *testing.T) {
 	if !strings.Contains(html, "Настройки пула сохранены") || strings.Count(html, `class="behavior-form"`) != 2 || strings.Contains(html, `id="behavior"`) {
 		t.Fatal("pool forms not rendered independently")
 	}
-	saved, err := readProviders(cs.provPath)
+	saved, err := readProviders(path)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -65,9 +65,11 @@ func limitsRouter(t *testing.T, upstream, local string) (*uiServer, http.Handler
 
 func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store) (*uiServer, http.Handler) {
 	t.Helper()
-	cs, h, _ := profileFixture(t)
+	cs, h, path := profileFixture(t)
 	up, _ := url.Parse(upstream)
-	cs.c.upstream = up
+	c := cs.get()
+	c.upstream = up
+	cs = newConfigStore(c, path)
 	l := cs.get().local.clone()
 	l.FamilyRoutes["sonnet"] = map[string]modelRoute{"default": {Mode: "anthropic"}}
 	if local != "" {
@@ -473,7 +475,9 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 	// Codex is connected and its last refresh failed: its source says so and
 	// the Anthropic part is unaffected.
 	codex := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
-	u.cs.c.local.Providers = append(u.cs.c.local.Providers, codex)
+	c := u.cs.get()
+	c.local.Providers = append(c.local.Providers, codex)
+	u.cs = newConfigStore(c, "")
 	oldAuth := codexAuth
 	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("acct")}
 	t.Cleanup(func() { codexAuth = oldAuth })
@@ -525,7 +529,9 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 		t.Fatalf("signed out: %s", body)
 	}
 	// With no Codex connection at all the report still has one codex source.
-	u.cs.c.local.Providers = u.cs.c.local.Providers[:len(u.cs.c.local.Providers)-1]
+	c = u.cs.get()
+	c.local.Providers = c.local.Providers[:len(c.local.Providers)-1]
+	u.cs = newConfigStore(c, "")
 	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body,
 		`{"sources":[{"source":"anthropic","state":"unavailable","max_age_seconds":1800},{"source":"codex","state":"not_connected","max_age_seconds":1800}],"windows":[]}`) {
 		t.Fatalf("nothing observed: %s", body)

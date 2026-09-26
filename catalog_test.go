@@ -102,7 +102,8 @@ func TestCodexNewVersionsInheritPoolAndSupportedEfforts(t *testing.T) {
 
 func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	u, _ := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	path := filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), path)
 	entered, release := make(chan struct{}), make(chan struct{})
 	u.fetchAnthropic = func(context.Context) ([]string, error) {
 		close(entered)
@@ -134,7 +135,7 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	if !reflect.DeepEqual(after.Catalog.Anthropic, current.Catalog.Anthropic) || !after.Catalog.AnthropicUpdated.Equal(updated) || len(after.Catalog.Notes) != 1 {
 		t.Fatal("failed refresh destroyed cache or hid failure")
 	}
-	reloaded, err := readProviders(u.cs.provPath)
+	reloaded, err := readProviders(path)
 	if err != nil || !reflect.DeepEqual(reloaded.Catalog.Anthropic, after.Catalog.Anthropic) || reloaded.routeFor("claude-opus-6", "high").Mode != "anthropic" {
 		t.Fatalf("catalog persistence: %v", err)
 	}
@@ -144,8 +145,9 @@ func TestCodexEffortControlsUseSelectedModelCatalog(t *testing.T) {
 	u, h := testUI(t)
 	p := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
 	l := localSetup{Providers: []provider{p}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}, {Provider: "codex", Model: "gpt-6-luna"}}, ModelPools: map[string][]poolTarget{"work": {}}}
-	u.cs.c.local = l
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	c := u.cs.get()
+	c.local = l
+	u.cs = newConfigStore(c, filepath.Join(t.TempDir(), "providers.json"))
 	u.probe = map[string]probeResult{"codex": {At: time.Now(), OK: true, Base: codexBaseURL, Models: []string{"gpt-6-sol", "gpt-6-luna"}, Info: []probeModel{{ID: "gpt-6-sol", Efforts: []string{"low", "high", "ultra"}}, {ID: "gpt-6-luna", Efforts: []string{"low", "high"}}}}}
 	for _, tc := range []struct {
 		key   string

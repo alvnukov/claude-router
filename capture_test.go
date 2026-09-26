@@ -87,7 +87,8 @@ func TestReadEnv(t *testing.T) {
 func TestReloadEnv(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "env")
 	writeRaw(t, p, "ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n")
-	cs := &configStore{c: config{failover: true, firstByte: 45 * time.Second}, envPath: p}
+	t.Setenv("ROUTER_ENV_FILE", p)
+	cs := newConfigStore(config{failover: true, firstByte: 45 * time.Second}, "")
 	changed, err := cs.reloadEnv()
 	if err != nil || !changed {
 		t.Fatalf("changed=%v err=%v", changed, err)
@@ -103,7 +104,7 @@ func TestReloadEnv(t *testing.T) {
 
 func TestProvidersFile(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "providers.json")
-	cs := &configStore{c: config{local: oneProvider("http://h/v1", "zero")}, provPath: p}
+	cs := newConfigStore(config{local: oneProvider("http://h/v1", "zero")}, p)
 	l := localSetup{
 		Providers:  []provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
 		Models:     []localModel{{Provider: "a", Model: "m1"}, {Provider: "b", Model: "m2"}, {Provider: "a", Model: "m1"}},

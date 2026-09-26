@@ -289,9 +289,11 @@ func TestProfileActivationRoutesNextMessagesRequest(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer local.Close()
-	cs, h, _ := profileFixture(t)
+	cs, h, path := profileFixture(t)
 	up, _ := url.Parse(cloud.URL)
-	cs.c.upstream = up
+	c := cs.get()
+	c.upstream = up
+	cs = newConfigStore(c, path)
 	l := cs.get().local.clone()
 	l.Providers[0].BaseURL = local.URL
 	if err := cs.applyLocal(l, true); err != nil {

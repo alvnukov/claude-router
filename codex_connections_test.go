@@ -116,7 +116,7 @@ func TestCodexManualReloadNeverAssignsID(t *testing.T) {
 
 func TestCodexProviderAddAssignsFreshIDAndRejectsRename(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"add"}, "name": {"work"}, "type": {"codex"}})
 	p, ok := u.cs.get().local.provider("work")
 	if !ok || !authIDOK(p.AuthID) {
@@ -185,7 +185,7 @@ func codexUI(t *testing.T) (*uiServer, http.Handler) {
 		provider{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB})
 	c := u.cs.get()
 	c.local = l
-	u.cs.c = c
+	u.cs = newConfigStore(c, "")
 	return u, h
 }
 

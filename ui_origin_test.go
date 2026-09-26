@@ -11,7 +11,7 @@ import (
 
 func TestSettingsRejectCrossOriginMutations(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.get().local.clone()
 	l.ModelPools = map[string][]poolTarget{"work": {{Model: "p/m1"}}}
 	l.Routes = map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "anthropic"}}}

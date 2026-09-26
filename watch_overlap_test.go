@@ -13,9 +13,8 @@ func TestConfigWatchPausesInQuiesceAndResumesOnRollback(t *testing.T) {
 	if err := os.WriteFile(path, []byte("ROUTER_LOCAL_BALANCE=1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("ROUTER_ENV_FILE", path)
 	cs := newConfigStore(config{balance: 1}, "")
-	cs.envPath = path
-	cs.envMtime = mtime(path)
 	life := newLifecycle(false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

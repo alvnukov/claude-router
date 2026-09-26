@@ -336,7 +336,7 @@ func codexLoginUI(t *testing.T) (*uiServer, http.Handler) {
 	codexLoginAddr = "127.0.0.1:0"
 	t.Cleanup(func() { codexLoginAddr = old })
 	u, h := codexUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	return u, h
 }
 

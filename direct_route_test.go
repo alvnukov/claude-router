@@ -81,7 +81,7 @@ func TestDirectRouteRejectsInvalidTargets(t *testing.T) {
 
 func TestDirectRouteProviderRenameAndModelRemoval(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/m1:high"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"update"}, "orig": {"p"}, "name": {"renamed"}, "base_url": {u.cs.get().local.Providers[0].BaseURL}})
 	got := u.cs.get().routeFor("claude-opus-5", "high")
@@ -96,7 +96,7 @@ func TestDirectRouteProviderRenameAndModelRemoval(t *testing.T) {
 
 func TestDirectRouteProviderRemovalDisablesAssignment(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/route", url.Values{"model": {"opus"}, "scope": {"family"}, "high": {"model:p/m1:high"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"remove"}, "name": {"p"}})
 	if got := u.cs.get().routeFor("claude-opus-5", "high"); got.Mode != "disabled" {
@@ -106,7 +106,7 @@ func TestDirectRouteProviderRemovalDisablesAssignment(t *testing.T) {
 
 func TestDirectRouteParsesModelIDWithColon(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.get().local.clone()
 	l.Models = append(l.Models, localModel{Provider: "p", Model: "model:version"})
 	if err := u.cs.applyLocal(l, false); err != nil {
@@ -120,7 +120,7 @@ func TestDirectRouteParsesModelIDWithColon(t *testing.T) {
 
 func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = newConfigStore(u.cs.get(), filepath.Join(t.TempDir(), "providers.json"))
 	l := u.cs.get().local.clone()
 	if err := u.cs.applyLocal(l, false); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestDirectRouteRejectsUnlistedTargetEffort(t *testing.T) {
 func TestSettingsSaveDirectRouteAndReload(t *testing.T) {
 	u, h := testUI(t)
 	path := filepath.Join(t.TempDir(), "providers.json")
-	u.cs.provPath = path
+	u.cs = newConfigStore(u.cs.get(), path)
 	body := get(t, h, "GET", "/settings", nil).Body.String()
 	if !strings.Contains(body, `value="model:p/m1:high"`) ||
 		!strings.Contains(body, `>p/m1/high</option>`) ||
