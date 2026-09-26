@@ -175,7 +175,7 @@ func (c *commands) install(ctx context.Context, s site, stdout io.Writer) error 
 	}
 	// Unloading and loading again restarts the router on the new definition.
 	if st.Loaded {
-		if err := c.unload(ctx, label); err != nil {
+		if err := svc.Stop(ctx, label); err != nil {
 			return err
 		}
 	}
@@ -247,7 +247,7 @@ func (c *commands) stop(ctx context.Context, s site, stdout io.Writer) error {
 		return err
 	}
 	if st.Installed && st.Loaded {
-		if err := c.unload(ctx, c.r.Label); err != nil {
+		if err := c.h.Service.Stop(ctx, c.r.Label); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, "stopped; launchd will start it again at next login or on 'router start'")
@@ -295,19 +295,6 @@ func (c *commands) printRunning(ctx context.Context, s site, stdout io.Writer) {
 	} else {
 		fmt.Fprintln(stdout, "not running")
 	}
-}
-
-// unload stops a loaded agent. launchctl bootout can report failure while
-// launchd still unloads the agent, so only an agent left loaded is an error.
-func (c *commands) unload(ctx context.Context, label string) error {
-	err := c.h.Service.Stop(ctx, label)
-	if err == nil {
-		return nil
-	}
-	if st, serr := c.h.Service.Status(ctx, label); serr == nil && !st.Loaded {
-		return nil
-	}
-	return err
 }
 
 // stopByHand stops a router started without the service manager.
@@ -430,7 +417,7 @@ func (c *commands) stopSlots(ctx context.Context, s site, stdout io.Writer) erro
 			return err
 		}
 		if st.Loaded {
-			if err := c.unload(ctx, label); err != nil {
+			if err := c.h.Service.Stop(ctx, label); err != nil {
 				return err
 			}
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -65,25 +66,35 @@ func TestLaunchdPlistWritesOptionalKeysOnlyWhenSet(t *testing.T) {
 	}
 }
 
-// fakeLaunchctl records launchctl calls; fail names the verbs that exit
-// non-zero.
+// exitCode is the error of a program that exited with a status, as
+// *exec.ExitError is.
+type exitCode int
+
+func (e exitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitCode) ExitCode() int { return int(e) }
+
+// fakeLaunchctl records launchctl calls; fail holds the error each failing
+// verb returns.
 type fakeLaunchctl struct {
 	calls [][]string
-	fail  map[string]bool
+	fail  map[string]error
 }
 
 func (f *fakeLaunchctl) run(_ context.Context, args ...string) error {
 	f.calls = append(f.calls, args)
-	if f.fail[args[0]] {
-		return errors.New("launchctl " + args[0] + " failed")
-	}
-	return nil
+	return f.fail[args[0]]
 }
 
+// newFakeLaunchd fails the named verbs as launchctl does: print with its
+// "not found", anything else with a plain failure.
 func newFakeLaunchd(t *testing.T, fail ...string) (Launchd, *fakeLaunchctl) {
-	fake := &fakeLaunchctl{fail: map[string]bool{}}
+	fake := &fakeLaunchctl{fail: map[string]error{}}
 	for _, verb := range fail {
-		fake.fail[verb] = true
+		code := exitCode(5)
+		if verb == "print" {
+			code = launchctlNotFound
+		}
+		fake.fail[verb] = launchctlError([]string{verb}, code, nil)
 	}
 	return Launchd{Dir: filepath.Join(t.TempDir(), "LaunchAgents"), Domain: "gui/501", Run: fake.run}, fake
 }
@@ -182,10 +193,66 @@ func TestLaunchdUninstall(t *testing.T) {
 	}
 }
 
+// launchctl bootout can report failure while launchd still unloads the
+// agent. Only an agent left loaded is a failure; otherwise install goes on to
+// load it again, and restart, which is stop then start, is not left with the
+// router down.
+func TestLaunchdFailedBootoutCountsOnlyIfTheAgentStaysLoaded(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		fail    []string
+		wantErr bool
+	}{
+		{"unloaded anyway", []string{"bootout", "print"}, false},
+		{"still loaded", []string{"bootout"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, fake := newFakeLaunchd(t, tc.fail...)
+			err := l.Stop(t.Context(), "svc")
+			if (err != nil) != tc.wantErr || tc.wantErr && !errors.Is(err, fake.fail["bootout"]) {
+				t.Fatalf("Stop = %v; want error %t, carrying bootout's", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestLaunchdUninstallWithoutPlist(t *testing.T) {
 	l, _ := newFakeLaunchd(t, "bootout", "print")
 	if err := l.Uninstall(t.Context(), "svc"); err != nil {
 		t.Fatalf("Uninstall of an absent agent = %v", err)
+	}
+}
+
+// Only launchctl's "not found" says an agent is not loaded.
+func TestLaunchctlNotFoundMeansNotLoaded(t *testing.T) {
+	args := []string{"print", "gui/501/svc"}
+	if err := launchctlError(args, exitCode(113), []byte("Could not find service")); !errors.Is(err, ErrNotLoaded) {
+		t.Fatalf("exit 113 = %v; want ErrNotLoaded", err)
+	}
+	for _, cause := range []error{exitCode(5), context.DeadlineExceeded} {
+		if err := launchctlError(args, cause, nil); errors.Is(err, ErrNotLoaded) || !errors.Is(err, cause) {
+			t.Fatalf("%v became %v", cause, err)
+		}
+	}
+}
+
+// Any other failure of print, a timeout say, leaves the agent's state
+// unknown: Status fails, and Uninstall keeps the plist of an agent that may
+// still run.
+func TestLaunchdFailureOtherThanNotFoundIsAnError(t *testing.T) {
+	l, fake := newFakeLaunchd(t)
+	fake.fail = map[string]error{"bootout": context.DeadlineExceeded, "print": context.DeadlineExceeded}
+	if err := l.Install(t.Context(), ServiceSpec{Label: "svc", Exe: "/bin/svc"}); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := l.Status(t.Context(), "svc"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Status = %+v, %v; want the timeout", st, err)
+	}
+	if err := l.Uninstall(t.Context(), "svc"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Uninstall = %v; want the timeout", err)
+	}
+	if _, err := os.Stat(filepath.Join(l.Dir, "svc.plist")); err != nil {
+		t.Fatalf("plist of an agent that may still run was removed: %v", err)
 	}
 }
 

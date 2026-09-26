@@ -26,8 +26,7 @@ type fakeService struct {
 	specs   map[string]platform.ServiceSpec
 	calls   []string
 	started func()
-	stopErr error // Stop of a loaded agent reports it
-	stuck   bool  // Stop leaves the agent loaded
+	stopErr error // Stop fails with it and leaves the agent loaded
 }
 
 func (f *fakeService) record(verb, label string) { f.calls = append(f.calls, verb+" "+label) }
@@ -58,15 +57,13 @@ func (f *fakeService) Start(_ context.Context, label string) error {
 
 func (f *fakeService) Stop(_ context.Context, label string) error {
 	f.record("Stop", label)
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	st := f.state[label]
-	if !st.Loaded {
-		return errors.New("launchctl bootout failed")
-	}
-	if !f.stuck {
-		st.Loaded = false
-		f.state[label] = st
-	}
-	return f.stopErr
+	st.Loaded = false
+	f.state[label] = st
+	return nil
 }
 
 func (f *fakeService) Status(_ context.Context, label string) (platform.Status, error) {
@@ -78,7 +75,8 @@ func (f *fakeService) Status(_ context.Context, label string) (platform.Status, 
 type fixture struct {
 	home     string
 	svc      *fakeService
-	alive    bool // /healthz answers
+	launchd  *platform.Launchd // the service instead of svc, when set
+	alive    bool              // /healthz answers
 	upOnLoad bool // /healthz answers once something starts the router
 	probes   int
 	health   []string
@@ -111,8 +109,12 @@ func (f *fixture) slotMode(t *testing.T, active string) {
 }
 
 func (f *fixture) commands() []Entry {
+	var svc platform.Service = f.svc
+	if f.launchd != nil {
+		svc = f.launchd
+	}
 	host := Host{
-		Service: f.svc,
+		Service: svc,
 		Healthy: func(_ context.Context, url string) bool {
 			f.probes++
 			f.health = append(f.health, url)
@@ -249,32 +251,20 @@ func TestInstallOverLoadedAgentIsStopThenStart(t *testing.T) {
 	expectCalls(t, f, "Install "+legacyLabel, "Status "+legacyLabel, "Stop "+legacyLabel, "Start "+legacyLabel)
 }
 
-// launchctl bootout can report failure while launchd still unloads the
-// agent, and the script ignored its status. Only an agent left loaded is a
-// failure; otherwise install goes on to load it again, and restart, which
-// is stop then start, is not left with the router down.
-func TestFailedStopCountsOnlyIfTheAgentStaysLoaded(t *testing.T) {
-	bootout := errors.New("Boot-out failed: 5: Input/output error")
+// Whether a failed bootout still unloaded the agent is the Service's to
+// decide. A Stop that fails means the router may still run, so the command
+// fails there: install does not load the agent again, and stop does not
+// report the router stopped.
+func TestFailedStopFailsTheCommand(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		slot       bool
-		command    string
-		stuck      bool
-		wantCode   int
-		wantStdout string
-		wantStderr string
-		wantCalls  []string
+		name      string
+		slot      bool
+		command   string
+		wantCalls []string
 	}{
-		{"install, unloaded anyway", false, "install", false, 0, "installed as com.claude-local-router, listening on 127.0.0.1:8787\n", "",
-			[]string{"Install " + legacyLabel, "Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel, "Start " + legacyLabel}},
-		{"install, still loaded", false, "install", true, 1, "", "Boot-out failed: 5: Input/output error\n",
-			[]string{"Install " + legacyLabel, "Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel}},
-		{"stop, unloaded anyway", false, "stop", false, 0, "stopped; launchd will start it again at next login or on 'router start'\n", "",
-			[]string{"Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel}},
-		{"stop, still loaded", false, "stop", true, 1, "", "Boot-out failed: 5: Input/output error\n",
-			[]string{"Status " + legacyLabel, "Stop " + legacyLabel, "Status " + legacyLabel}},
-		{"slot stop, unloaded anyway", true, "stop", false, 0, "Caddy and both router slots stopped\n", "",
-			[]string{"Status p.caddy", "Stop p.caddy", "Status p.caddy", "Status p.blue", "Status p.green"}},
+		{"install", false, "install", []string{"Install " + legacyLabel, "Status " + legacyLabel, "Stop " + legacyLabel}},
+		{"stop", false, "stop", []string{"Status " + legacyLabel, "Stop " + legacyLabel}},
+		{"slot stop", true, "stop", []string{"Status p.caddy", "Stop p.caddy"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture(t)
@@ -284,11 +274,31 @@ func TestFailedStopCountsOnlyIfTheAgentStaysLoaded(t *testing.T) {
 			} else {
 				f.svc.state[legacyLabel] = platform.Status{Installed: true, Loaded: true}
 			}
-			f.svc.stopErr, f.svc.stuck = bootout, tc.stuck
+			f.svc.stopErr = errors.New("Boot-out failed: 5: Input/output error")
 			code, stdout, stderr := f.run(t, tc.command)
-			expect(t, code, stdout, stderr, tc.wantCode, tc.wantStdout, tc.wantStderr)
+			expect(t, code, stdout, stderr, 1, "", "Boot-out failed: 5: Input/output error\n")
 			expectCalls(t, f, tc.wantCalls...)
 		})
+	}
+}
+
+// When launchctl cannot tell whether bootout unloaded the agent, a timeout
+// say, stop fails: the router may still run.
+func TestStopFailsWhenLaunchdCannotTellTheAgentUnloaded(t *testing.T) {
+	f, prints := newFixture(t), 0
+	f.launchd = &platform.Launchd{Dir: t.TempDir(), Domain: "gui/501", Run: func(_ context.Context, args ...string) error {
+		if args[0] == "print" && prints == 0 {
+			prints++ // the first print, before bootout, finds the agent
+			return nil
+		}
+		return context.DeadlineExceeded
+	}}
+	if err := os.WriteFile(filepath.Join(f.launchd.Dir, legacyLabel+".plist"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := f.run(t, "stop")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, context.DeadlineExceeded.Error()) {
+		t.Fatalf("stop = exit %d, stdout %q, stderr %q; want exit 1 with the timeout", code, stdout, stderr)
 	}
 }
 

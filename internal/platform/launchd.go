@@ -37,9 +37,24 @@ func RunLaunchctl(ctx context.Context, args ...string) error {
 	}
 	output, err := exec.CommandContext(ctx, "launchctl", args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("launchctl %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(output))
+		return launchctlError(args, err, output)
 	}
 	return nil
+}
+
+// ErrNotLoaded is in the error of a launchctl call on an agent launchd does
+// not have loaded.
+var ErrNotLoaded = errors.New("not loaded")
+
+// launchctlNotFound is launchctl's exit status for "Could not find service".
+const launchctlNotFound = 113
+
+func launchctlError(args []string, err error, output []byte) error {
+	var exit interface{ ExitCode() int }
+	if errors.As(err, &exit) && exit.ExitCode() == launchctlNotFound {
+		err = fmt.Errorf("%w: %w", ErrNotLoaded, err)
+	}
+	return fmt.Errorf("launchctl %s: %w: %s", strings.Join(args, " "), err, bytes.TrimSpace(output))
 }
 
 var _ Service = Launchd{}
@@ -58,7 +73,7 @@ func (l Launchd) Install(_ context.Context, spec ServiceSpec) error {
 // Uninstall keeps the plist of an agent it could not unload, so the agent
 // stays described and a retry finds it.
 func (l Launchd) Uninstall(ctx context.Context, label string) error {
-	if err := l.Stop(ctx, label); err != nil && l.loaded(ctx, label) {
+	if err := l.Stop(ctx, label); err != nil {
 		return err
 	}
 	if err := os.Remove(l.plist(label)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -71,8 +86,19 @@ func (l Launchd) Start(ctx context.Context, label string) error {
 	return l.Run(ctx, "bootstrap", l.Domain, l.plist(label))
 }
 
+// Stop unloads the agent. launchctl bootout can report failure while launchd
+// still unloads the agent, so its failure counts only if the agent stays
+// loaded or launchctl cannot tell.
 func (l Launchd) Stop(ctx context.Context, label string) error {
-	return l.Run(ctx, "bootout", l.target(label))
+	stopErr := l.Run(ctx, "bootout", l.target(label))
+	if stopErr == nil {
+		return nil
+	}
+	loaded, err := l.loaded(ctx, label)
+	if err != nil || loaded {
+		return errors.Join(stopErr, err)
+	}
+	return nil
 }
 
 func (l Launchd) Status(ctx context.Context, label string) (Status, error) {
@@ -80,11 +106,21 @@ func (l Launchd) Status(ctx context.Context, label string) (Status, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return Status{}, err
 	}
-	return Status{Installed: err == nil, Loaded: l.loaded(ctx, label)}, nil
+	loaded, lerr := l.loaded(ctx, label)
+	if lerr != nil {
+		return Status{}, lerr
+	}
+	return Status{Installed: err == nil, Loaded: loaded}, nil
 }
 
-func (l Launchd) loaded(ctx context.Context, label string) bool {
-	return l.Run(ctx, "print", l.target(label)) == nil
+// loaded asks launchd for the agent. Only launchctl's "not found" means it
+// is not loaded; any other failure is returned.
+func (l Launchd) loaded(ctx context.Context, label string) (bool, error) {
+	err := l.Run(ctx, "print", l.target(label))
+	if errors.Is(err, ErrNotLoaded) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // LaunchdPlist renders spec as a launchd agent definition. The agent starts
