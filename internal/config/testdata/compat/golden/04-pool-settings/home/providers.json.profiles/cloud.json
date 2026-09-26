@@ -1,0 +1,36 @@
+{
+  "family_routes": {
+    "opus": {
+      "default": {
+        "mode": "anthropic"
+      }
+    },
+    "sonnet": {
+      "default": {
+        "mode": "disabled"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "cloud-work"
+      }
+    }
+  },
+  "routes": {},
+  "model_pools": {
+    "cloud-work": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "high"
+      }
+    ]
+  },
+  "pool_settings": {
+    "cloud-work": {
+      "type": "balance",
+      "failover": false,
+      "first_byte_seconds": 20,
+      "probe_seconds": 0,
+      "max_input_chars": 200000
+    }
+  }
+}

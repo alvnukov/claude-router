@@ -16,3 +16,4 @@ providers.json.tmp
 !/.claude/settings.json
 !/.claude/skill-map.md
 _parked/
+!internal/config/testdata/compat/**
