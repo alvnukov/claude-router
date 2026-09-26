@@ -30,6 +30,7 @@ type Store struct {
 	profileMtime time.Time
 
 	onProfileChange func() // runs under mu when the active profile changes
+	beforeEnvLock   func() // set by tests: runs in reloadEnv just before it takes mu
 
 	reloadMu   sync.Mutex
 	reloadErrs map[string]ReloadFailure
@@ -256,8 +257,8 @@ func (s *Store) tick(gate Gate) {
 
 // Poll applies a hand edit of either file. A rejected edit keeps the
 // previous snapshot and shows on the settings page until a good reload. The
-// stamps are read and set under s.mu, as the store's own writes set them; the
-// reloads take the lock themselves.
+// stamps are read and set under s.mu, as the store's own writes set them; each
+// reload reads its file under the lock it applies it with.
 func (s *Store) Poll() {
 	if s.envEdited() {
 		changed, err := s.reloadEnv()
@@ -317,13 +318,19 @@ func (l Local) Summary() string {
 	return fmt.Sprintf("providers=%d models=%s", len(l.Providers), strings.Join(ms, ","))
 }
 
+// reloadEnv reads the env file under the store lock, as Reload reads
+// providers.json, so a settings write from the UI comes before the read or
+// after the apply and is never undone by an older read.
 func (s *Store) reloadEnv() (bool, error) {
-	vals, err := ReadEnv(s.envPath)
-	if err != nil {
-		return false, err
+	if s.beforeEnvLock != nil {
+		s.beforeEnvLock()
 	}
 	before := s.Get()
-	err = s.updateSettings(false, func(in *SettingsInput) error {
+	err := s.updateSettings(false, func(in *SettingsInput) error {
+		vals, err := ReadEnv(s.envPath)
+		if err != nil {
+			return err
+		}
 		in.MaxInputChars = pick(vals, "ROUTER_LOCAL_MAX_INPUT_CHARS", in.MaxInputChars)
 		in.Failover = pick(vals, "ROUTER_LOCAL_FAILOVER", in.Failover)
 		in.FirstByte = pick(vals, "ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", in.FirstByte)

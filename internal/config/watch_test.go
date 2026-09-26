@@ -456,21 +456,34 @@ func TestHandEditsReload(t *testing.T) {
 // The watcher and the store's own writes share the file stamps, so a tick
 // beside a settings change goes through the store lock; run with -race.
 func TestPollBesideStoreWrites(t *testing.T) {
-	h := startHome(t, "home", false, nil)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for range 50 {
-			h.s.Poll()
-		}
-	}()
-	for i := range 50 {
-		if err := h.s.SetFailover(i%2 == 0); err != nil {
-			t.Error(err)
-		}
+	writes := []struct {
+		name string
+		op   func(h *home, on bool) error
+	}{
+		{"settings, failover", func(h *home, on bool) error { return h.s.SetFailover(on) }},
+		{"pool settings", func(h *home, on bool) error {
+			return h.s.SavePoolSettings("work", PoolSettings{Type: PoolBalance, Failover: on, FirstByteSec: 30, ProbeSec: 15})
+		}},
 	}
-	<-done
-	h.pollQuiet(t)
+	for _, w := range writes {
+		t.Run(w.name, func(t *testing.T) {
+			h := startHome(t, "home", false, nil)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for range 50 {
+					h.s.Poll()
+				}
+			}()
+			for i := range 50 {
+				if err := w.op(h, i%2 == 0); err != nil {
+					t.Error(err)
+				}
+			}
+			<-done
+			h.pollQuiet(t)
+		})
+	}
 }
 
 // A hand edit that lands while the watcher reloads is picked up on the next
@@ -493,6 +506,36 @@ func TestEditDuringReloadNotLost(t *testing.T) {
 	h.s.Poll()
 	if lab, _ := h.s.Get().Local.Provider("lab"); lab.APIKey != "sk-test-lab-0002" {
 		t.Errorf("the edit made during the reload was lost: lab key %q", lab.APIKey)
+	}
+	h.pollQuiet(t)
+}
+
+// A settings change from the UI that lands while the watcher reloads the env
+// file is kept, in memory as in the file. The hook runs where such a change
+// lands, just before the reload takes the store lock.
+func TestSettingsChangeDuringEnvReloadNotLost(t *testing.T) {
+	h := startHome(t, "home", false, nil)
+	h.edit(t, "env", "ROUTER_LOCAL_FAILOVER=1", "ROUTER_LOCAL_FAILOVER=0")
+	changed := false
+	h.s.beforeEnvLock = func() {
+		if !changed {
+			changed = true
+			if err := h.s.SetFailover(true); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	h.s.Poll()
+	if !changed {
+		t.Fatal("the tick did not reload the env file")
+	}
+	env, err := ReadEnv(filepath.Join(h.dir, "env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !h.s.Get().Failover || env["ROUTER_LOCAL_FAILOVER"] != "1" {
+		t.Errorf("the change made during the reload was lost: memory failover=%v, file %q",
+			h.s.Get().Failover, env["ROUTER_LOCAL_FAILOVER"])
 	}
 	h.pollQuiet(t)
 }
