@@ -1,2 +1,3 @@
 # Goldens compare byte for byte; autocrlf on Windows must not rewrite them.
+testdata/** -text
 internal/*/testdata/** -text
