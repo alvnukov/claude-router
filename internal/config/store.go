@@ -196,6 +196,10 @@ func (s *Store) Migrate() error {
 // SaveCodexIDs writes the auth_id values the start of an active router would
 // have written; a standby slot assigned them only in memory. It reads the
 // file, not the snapshot: the old slot may have changed it since.
+//
+// The id write drops the legacy fields, so, as at start, the migrations run
+// right after it on what was read; otherwise the reload that follows would
+// find the legacy pools gone and Migrate would have nothing to move.
 func (s *Store) SaveCodexIDs() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,8 +213,11 @@ func (s *Store) SaveCodexIDs() error {
 	if err := persist(s.provPath, local, ".before-codex-ids"); err != nil {
 		return err
 	}
+	c := s.c
+	c.Local = local
+	_, err = MigrateConfig(c, s.provPath)
 	s.commit(kindProviders)
-	return nil
+	return err
 }
 
 func (s *Store) Get() Config {

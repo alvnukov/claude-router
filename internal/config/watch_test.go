@@ -1,9 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"log"
@@ -369,6 +371,19 @@ func TestStandbyActivationChain(t *testing.T) {
 	}
 	if h.hooks != 0 {
 		t.Errorf("activation ran the profile hook %d times", h.hooks)
+	}
+	// The legacy pools survive the id write: the routing is the one an active
+	// start migrates the same file to.
+	want, err := os.ReadFile(filepath.Join("testdata", "compat", "golden", "02-ensure-profiles", "legacy", "providers.json.profiles", "default.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(h.path + ".profiles/default.json"); err != nil || !bytes.Equal(got, want) {
+		t.Errorf("default profile file after activation (%v):\n%s\nwant\n%s", err, got, want)
+	}
+	profile, err := json.MarshalIndent(h.s.Get().Local.Profiles["default"], "", "  ")
+	if err != nil || !bytes.Equal(append(profile, '\n'), want) {
+		t.Errorf("served default profile after activation (%v):\n%s", err, profile)
 	}
 	h.pollQuiet(t)
 }
