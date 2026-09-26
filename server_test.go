@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 )
@@ -25,7 +26,7 @@ func TestRouterServerKeepsAnthropicLimitsInMemoryUntilActive(t *testing.T) {
 	t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", path)
 	t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
 	life := newLifecycle(true)
-	server := newRouterServer(config{uiHistory: 10}, life, filepath.Join(dir, "state.json"))
+	server := newRouterServer(config{UIHistory: 10}, life, filepath.Join(dir, "state.json"))
 	l := server.ui.limits
 	l.Observe(http.Header{"Anthropic-Ratelimit-Requests-Remaining": {"41"}}, time.Now())
 	if err := l.Save(); err != nil {
@@ -61,7 +62,7 @@ func TestRouterServerCompactsHistoryOnlyWhenNoOtherSlotAppends(t *testing.T) {
 			t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", filepath.Join(dir, "limits.json"))
 			t.Setenv("ROUTER_SLOT", slot)
 			state := filepath.Join(dir, "state.json")
-			server := newRouterServer(config{uiHistory: 2}, newLifecycle(false), state)
+			server := newRouterServer(config{UIHistory: 2}, newLifecycle(false), state)
 			lines := func() int {
 				data, _ := os.ReadFile(path)
 				return strings.Count(string(data), "\n")
@@ -133,11 +134,11 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "providers.json")
-	if err := writeProviders(path, oneProvider("http://example.test/v1", "a", "b")); err != nil {
+	if err := conf.WriteProviders(path, oneProvider("http://example.test/v1", "a", "b")); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)
-	cfg := config{listen: api.Addr().String(), uiListen: ui.Addr().String(), uiHistory: 10}
+	cfg := config{Listen: api.Addr().String(), UIListen: ui.Addr().String(), UIHistory: 10}
 	life := newLifecycle(true)
 	server := newRouterServer(cfg, life, filepath.Join(dir, "state.json"))
 	done := make(chan error, 1)
@@ -155,11 +156,11 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 		defer resp.Body.Close()
 		return resp.StatusCode, nil
 	}
-	status, _ := get(cfg.listen, "/v1/messages")
+	status, _ := get(cfg.Listen, "/v1/messages")
 	if status != http.StatusServiceUnavailable {
 		t.Fatalf("standby API status: %d", status)
 	}
-	resp, err := client.Get("http://" + cfg.listen + "/healthz")
+	resp, err := client.Get("http://" + cfg.Listen + "/healthz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || health.PID != os.Getpid() || health.Mode != "standby" {
 		t.Fatalf("standby health: %d %+v", resp.StatusCode, health)
 	}
-	request, _ := http.NewRequest(http.MethodPost, "http://"+cfg.listen+"/admin/activate", nil)
+	request, _ := http.NewRequest(http.MethodPost, "http://"+cfg.Listen+"/admin/activate", nil)
 	resp, err = client.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +184,7 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("activate: %d", resp.StatusCode)
 	}
-	status, _ = get(cfg.uiListen, "/status")
+	status, _ = get(cfg.UIListen, "/status")
 	if status != http.StatusOK {
 		t.Fatalf("active UI status: %d", status)
 	}

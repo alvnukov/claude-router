@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 func TestCheckerStopsOutgoingProbesAfterQuiesce(t *testing.T) {
@@ -16,7 +18,7 @@ func TestCheckerStopsOutgoingProbesAfterQuiesce(t *testing.T) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer endpoint.Close()
-	c := config{local: localSetup{
+	c := config{Local: localSetup{
 		Providers:    []provider{{Name: "test", Type: "openai", BaseURL: endpoint.URL}},
 		Models:       []localModel{{Provider: "test", Model: "m"}},
 		ModelPools:   map[string][]poolTarget{"pool": {{Model: "test/m"}}},
@@ -27,7 +29,7 @@ func TestCheckerStopsOutgoingProbesAfterQuiesce(t *testing.T) {
 	h.life = life
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startChecker(ctx, newConfigStore(c, ""), h, life)
+	startChecker(ctx, conf.NewStore(c, ""), h, life)
 	deadline := time.After(3 * time.Second)
 	for calls.Load() == 0 {
 		select {

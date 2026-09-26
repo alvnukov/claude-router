@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	conf "localrouter/internal/config"
 )
 
 const testAuthA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -25,15 +27,15 @@ func writeRaw(t *testing.T, path, raw string) {
 
 func TestCodexValidateRequiresAuthID(t *testing.T) {
 	missing := localSetup{Providers: []provider{{Name: "work", Type: "codex"}}}
-	if err := missing.validate(); err == nil || !strings.Contains(err.Error(), "auth_id") {
+	if err := missing.Validate(); err == nil || !strings.Contains(err.Error(), "auth_id") {
 		t.Fatalf("non-codex name without auth_id: %v", err)
 	}
 	legacy := localSetup{Providers: []provider{{Name: "codex", Type: "codex"}}}
-	if err := legacy.validate(); err != nil {
+	if err := legacy.Validate(); err != nil {
 		t.Fatalf("legacy codex rejected: %v", err)
 	}
 	named := localSetup{Providers: []provider{{Name: "codex", Type: "codex", AuthID: testAuthA}, {Name: "work", Type: "codex", AuthID: testAuthB}}}
-	if err := named.validate(); err != nil {
+	if err := named.Validate(); err != nil {
 		t.Fatalf("valid connections rejected: %v", err)
 	}
 	for name, bad := range map[string]localSetup{
@@ -42,7 +44,7 @@ func TestCodexValidateRequiresAuthID(t *testing.T) {
 		"duplicate": {Providers: []provider{{Name: "a", Type: "codex", AuthID: testAuthA}, {Name: "b", Type: "codex", AuthID: testAuthA}}},
 		"long name": {Providers: []provider{{Name: strings.Repeat("n", 65), Type: "codex", AuthID: testAuthA}}},
 	} {
-		if bad.validate() == nil {
+		if bad.Validate() == nil {
 			t.Errorf("%s accepted", name)
 		}
 	}
@@ -50,16 +52,16 @@ func TestCodexValidateRequiresAuthID(t *testing.T) {
 
 func TestCodexStartupAssignsIDsOnceWithBackup(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	raw := `{"providers":[{"name":"codex","type":"codex","base_url":"` + codexBaseURL + `"},{"name":"work","type":"codex","base_url":"` + codexBaseURL + `"}]}`
+	raw := `{"providers":[{"name":"codex","type":"codex","base_url":"` + conf.CodexBaseURL + `"},{"name":"work","type":"codex","base_url":"` + conf.CodexBaseURL + `"}]}`
 	writeRaw(t, path, raw)
 	t.Setenv("ROUTER_PROVIDERS_FILE", path)
 	c, err := loadConfigChecked()
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy, _ := c.local.provider("codex")
-	work, _ := c.local.provider("work")
-	if legacy.AuthID != "" || !authIDOK(work.AuthID) {
+	legacy, _ := c.Local.Provider("codex")
+	work, _ := c.Local.Provider("work")
+	if legacy.AuthID != "" || !conf.AuthIDOK(work.AuthID) {
 		t.Fatalf("ids: %q %q", legacy.AuthID, work.AuthID)
 	}
 	if backup, _ := os.ReadFile(path + ".before-codex-ids"); string(backup) != raw {
@@ -73,24 +75,24 @@ func TestCodexStartupAssignsIDsOnceWithBackup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w, _ := again.local.provider("work"); w.AuthID != work.AuthID {
+	if w, _ := again.Local.Provider("work"); w.AuthID != work.AuthID {
 		t.Fatalf("second start changed id: %q", w.AuthID)
 	}
 	if second, _ := os.ReadFile(path); string(second) != string(first) {
 		t.Fatal("second start rewrote the file")
 	}
-	if _, err := readProviders(path); err != nil {
+	if _, err := conf.ReadProviders(path); err != nil {
 		t.Fatalf("migrated file is not strictly valid: %v", err)
 	}
 }
 
 func TestCodexLegacyFileUntouched(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	if err := writeProviders(path, localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}}); err != nil {
+	if err := conf.WriteProviders(path, localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}}); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.ReadFile(path)
-	if _, assigned, err := loadLocalSetupChecked(path); err != nil || assigned {
+	if _, assigned, err := conf.LoadLocal(path); err != nil || assigned {
 		t.Fatalf("legacy load: assigned=%v err=%v", assigned, err)
 	}
 	after, _ := os.ReadFile(path)
@@ -104,9 +106,9 @@ func TestCodexLegacyFileUntouched(t *testing.T) {
 
 func TestCodexManualReloadNeverAssignsID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.json")
-	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + codexBaseURL + `"}]}`
+	raw := `{"providers":[{"name":"work","type":"codex","base_url":"` + conf.CodexBaseURL + `"}]}`
 	writeRaw(t, path, raw)
-	if _, err := readProviders(path); err == nil || !strings.Contains(err.Error(), "auth_id") {
+	if _, err := conf.ReadProviders(path); err == nil || !strings.Contains(err.Error(), "auth_id") {
 		t.Fatalf("strict read accepted: %v", err)
 	}
 	if data, _ := os.ReadFile(path); string(data) != raw {
@@ -116,23 +118,23 @@ func TestCodexManualReloadNeverAssignsID(t *testing.T) {
 
 func TestCodexProviderAddAssignsFreshIDAndRejectsRename(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"add"}, "name": {"work"}, "type": {"codex"}})
-	p, ok := u.cs.get().local.provider("work")
-	if !ok || !authIDOK(p.AuthID) {
+	p, ok := u.cs.Get().Local.Provider("work")
+	if !ok || !conf.AuthIDOK(p.AuthID) {
 		t.Fatalf("add gave id %q", p.AuthID)
 	}
 	w := get(t, h, "POST", "/settings/providers", url.Values{"op": {"update"}, "orig": {"work"}, "name": {"work2"}})
 	if !strings.Contains(w.Body.String(), "переименовать") {
 		t.Fatal("codex rename not rejected")
 	}
-	if _, ok := u.cs.get().local.provider("work"); !ok {
+	if _, ok := u.cs.Get().Local.Provider("work"); !ok {
 		t.Fatal("rejected rename changed the config")
 	}
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"remove"}, "name": {"work"}})
 	get(t, h, "POST", "/settings/providers", url.Values{"op": {"add"}, "name": {"work"}, "type": {"codex"}})
-	again, _ := u.cs.get().local.provider("work")
-	if !authIDOK(again.AuthID) || again.AuthID == p.AuthID {
+	again, _ := u.cs.Get().Local.Provider("work")
+	if !conf.AuthIDOK(again.AuthID) || again.AuthID == p.AuthID {
 		t.Fatal("recreated provider reused the old id")
 	}
 }
@@ -179,13 +181,13 @@ func TestCodexStoreForSeparatesConnections(t *testing.T) {
 func codexUI(t *testing.T) (*uiServer, http.Handler) {
 	t.Helper()
 	u, h := testUI(t)
-	l := u.cs.get().local.clone()
+	l := u.cs.Get().Local.Clone()
 	l.Providers = append(l.Providers,
-		provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL},
-		provider{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB})
-	c := u.cs.get()
-	c.local = l
-	u.cs.c = c
+		provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL},
+		provider{Name: "work", Type: "codex", BaseURL: conf.CodexBaseURL, AuthID: testAuthB})
+	c := u.cs.Get()
+	c.Local = l
+	u.cs = conf.NewStore(c, "")
 	return u, h
 }
 
@@ -242,8 +244,8 @@ func TestCodexRequestsUseTheirOwnAccount(t *testing.T) {
 	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
 	old := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = old })
-	a := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
-	b := provider{Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}
+	a := provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}
+	b := provider{Name: "work", Type: "codex", BaseURL: conf.CodexBaseURL, AuthID: testAuthB}
 	ca, cb := seedConnection(t, a, "acct-a"), seedConnection(t, b, "acct-b")
 	seen := map[string]string{}
 	var mu sync.Mutex
@@ -254,7 +256,7 @@ func TestCodexRequestsUseTheirOwnAccount(t *testing.T) {
 		return usageResponse(200, `{"ok":true}`), nil
 	})
 	for _, p := range []provider{a, b} {
-		res := tryModel(httptest.NewRequest("POST", "/", nil), config{firstByte: time.Second}, candidate{Key: p.Name + "/m", Provider: p}, []byte(`{}`), false)
+		res := tryModel(httptest.NewRequest("POST", "/", nil), config{FirstByte: time.Second}, candidate{Key: p.Name + "/m", Provider: p}, []byte(`{}`), false)
 		if res.err != nil {
 			t.Fatal(res.err)
 		}
@@ -271,8 +273,8 @@ func TestCodexProbeUsesOwnAccount(t *testing.T) {
 	old := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = old })
 	u, _ := codexUI(t)
-	a, _ := u.cs.get().local.provider("codex")
-	b, _ := u.cs.get().local.provider("work")
+	a, _ := u.cs.Get().Local.Provider("codex")
+	b, _ := u.cs.Get().Local.Provider("work")
 	seedConnection(t, a, "acct-a")
 	seedConnection(t, b, "acct-b")
 	var seen []string

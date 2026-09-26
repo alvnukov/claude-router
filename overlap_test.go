@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -36,7 +37,7 @@ func TestQuiescedHealthKeepsMemoryWithoutWritingFile(t *testing.T) {
 
 func TestQuiescedUIRejectsChangesButServesReads(t *testing.T) {
 	life := newLifecycle(false)
-	u := newUIServer(history.New(5, ""), newConfigStore(config{}, ""), newHealth(""))
+	u := newUIServer(history.New(5, ""), conf.NewStore(config{}, ""), newHealth(""))
 	u.life = life
 	if err := life.quiesce(); err != nil {
 		t.Fatal(err)
@@ -60,7 +61,7 @@ func TestStandbyCatalogDoesNotTouchProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	life := newLifecycle(true)
-	cs := newConfigStore(config{}, path)
+	cs := conf.NewStore(config{}, path)
 	u := newUIServer(history.New(5, ""), cs, newHealth(""))
 	u.life = life
 	if err := u.refreshModels(t.Context()); err == nil {

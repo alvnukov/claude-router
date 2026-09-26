@@ -1,11 +1,8 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestBuildContext(t *testing.T) {
@@ -45,89 +42,11 @@ func TestBuildContext(t *testing.T) {
 	}
 }
 
-func TestWriteEnv(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "env")
-	writeRaw(t, p, "# comment\nROUTER_LOCAL_MODEL=old\nOTHER=keep\n")
-	err := writeEnv(p, map[string]string{"ROUTER_LOCAL_MODEL": "new", "ROUTER_CLOUD_ONLY": "a,b", "ROUTER_LOCAL_API_KEY": "k y"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, _ := os.ReadFile(p)
-	want := "# comment\nROUTER_LOCAL_MODEL=new\nOTHER=keep\nROUTER_CLOUD_ONLY=a,b\nROUTER_LOCAL_API_KEY=\"k y\"\n"
-	if string(got) != want {
-		t.Fatalf("got:\n%s", got)
-	}
-	requirePrivateFile(t, p)
-}
-
 func TestUnassignedBackendIsDisabled(t *testing.T) {
-	c := config{local: oneProvider("http://h/v1", "new")}
+	c := config{Local: oneProvider("http://h/v1", "new")}
 	for _, model := range []string{"old", "new", "p/new", "local-model"} {
-		if c.routeFor(model, "default").Mode != "disabled" {
+		if c.RouteFor(model, "default").Mode != "disabled" {
 			t.Fatalf("unassigned %s is enabled", model)
 		}
-	}
-}
-
-func TestReadEnv(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "env")
-	writeRaw(t, p, "# c\nexport A=1\nB=\"x y\"\nC='q'\nD=\nbad line\n")
-	m, err := readEnv(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m["A"] != "1" || m["B"] != "x y" || m["C"] != "q" || m["D"] != "" {
-		t.Fatalf("%+v", m)
-	}
-	if _, ok := m["bad line"]; ok {
-		t.Fatal("bad line parsed")
-	}
-}
-
-func TestReloadEnv(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "env")
-	writeRaw(t, p, "ROUTER_CLOUD_ONLY=claude-opus-5\nROUTER_LOCAL_FAILOVER=0\n")
-	cs := &configStore{c: config{failover: true, firstByte: 45 * time.Second}, envPath: p}
-	changed, err := cs.reloadEnv()
-	if err != nil || !changed {
-		t.Fatalf("changed=%v err=%v", changed, err)
-	}
-	c := cs.get()
-	if c.failover || c.routeFor("claude-opus-5", "default").Mode != "disabled" || c.firstByte != 45*time.Second {
-		t.Fatalf("%+v", c)
-	}
-	if changed, _ = cs.reloadEnv(); changed {
-		t.Fatal("second reload should be a no-op")
-	}
-}
-
-func TestProvidersFile(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "providers.json")
-	cs := &configStore{c: config{local: oneProvider("http://h/v1", "zero")}, provPath: p}
-	l := localSetup{
-		Providers:  []provider{{Name: "a", BaseURL: "http://a/v1/"}, {Name: "b", BaseURL: "http://b/v1", APIKey: "k"}},
-		Models:     []localModel{{Provider: "a", Model: "m1"}, {Provider: "b", Model: "m2"}, {Provider: "a", Model: "m1"}},
-		ModelPools: map[string][]poolTarget{"work": {{Model: "b/m2", Effort: "high"}}},
-		Routes:     map[string]map[string]modelRoute{"claude-opus-5": {"high": {Mode: "pool", Pool: "work"}}},
-	}
-	if err := cs.applyLocal(l, true); err != nil {
-		t.Fatal(err)
-	}
-	requirePrivateFile(t, p)
-	c := cs.get()
-	if len(c.local.Models) != 2 || c.local.Providers[0].BaseURL != "http://a/v1" || c.routeFor("zero", "default").Mode != "disabled" || c.routeFor("m2", "default").Mode != "disabled" {
-		t.Fatalf("%+v", c.local)
-	}
-	got, err := readProviders(p)
-	if err != nil || got.Preferred != "" || got.routeFor("claude-opus-5", "high").Pool != "work" || got.ModelPools["work"][0].Effort != "high" || got.Providers[1].APIKey != "k" {
-		t.Fatalf("%+v %v", got, err)
-	}
-	bad := localSetup{Providers: []provider{{Name: "x", BaseURL: "http://x/v1"}}, Models: []localModel{{Provider: "nope", Model: "m"}}}
-	if err := cs.applyLocal(bad, false); err == nil {
-		t.Fatal("model on unknown provider accepted")
-	}
-	bad = localSetup{Providers: []provider{{Name: "a/b", BaseURL: "http://x/v1"}}}
-	if err := cs.applyLocal(bad, false); err == nil {
-		t.Fatal("slash in provider name accepted")
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -45,7 +46,7 @@ func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
 		"opus":   {"high": {Mode: "pool", Pool: "deep"}, "low": {Mode: "pool", Pool: "fast"}},
 		"sonnet": {"high": {Mode: "pool", Pool: "deep"}},
 	}
-	cfg := config{local: l, failover: true, balance: 2, firstByte: 80 * time.Millisecond}
+	cfg := config{Local: l, Failover: true, Balance: 2, FirstByte: 80 * time.Millisecond}
 	hl := newHealth("")
 	run := func(session, model, effort, want string, attempts int) {
 		t.Helper()
@@ -53,7 +54,7 @@ func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
 		body := []byte(fmt.Sprintf(`{"model":%q,"output_config":{"effort":%q},"stream":true,"metadata":{"user_id":%q},"messages":[{"role":"user","content":"hello"}]}`, model, effort, string(uid)))
 		w := httptest.NewRecorder()
 		tr := &history.Trace{}
-		handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.forModel(model, effort), body, tr, hl)
+		handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.ForModel(model, effort), body, tr, hl)
 		if w.Code != 200 || !strings.Contains(w.Body.String(), `"text":"`+want+`"`) || len(tr.Attempts) != attempts {
 			t.Fatalf("%s/%s/%s: %d attempts=%+v body=%s", session, model, effort, w.Code, tr.Attempts, w.Body.String())
 		}
@@ -72,14 +73,14 @@ func TestSessionAffinityTimeoutAndEffortPools(t *testing.T) {
 	}
 	run("one", "opus", "high", "b:medium", 1)  // recovery must not steal the session back
 	run("one", "sonnet", "high", "a:xhigh", 1) // independent incoming model binds on its own
-	cfg.local.ModelPools["deep"] = append(cfg.local.ModelPools["deep"], poolTarget{Model: "p/outside", Effort: "low"})
+	cfg.Local.ModelPools["deep"] = append(cfg.Local.ModelPools["deep"], poolTarget{Model: "p/outside", Effort: "low"})
 	run("one", "opus", "high", "b:medium", 1) // catalog growth must not reset affinity
 
 	if outside.Load() != 0 {
 		t.Fatal("request escaped selected pool")
 	}
 	// Changing the pool invalidates the binding; removed models cannot be used.
-	cfg.local.ModelPools["deep"] = []poolTarget{{Model: "p/a", Effort: "high"}}
+	cfg.Local.ModelPools["deep"] = []poolTarget{{Model: "p/a", Effort: "high"}}
 	run("one", "opus", "high", "a:high", 1)
 }
 
@@ -129,7 +130,7 @@ func TestRouterStreamsBeforeUpstreamCompletes(t *testing.T) {
 				fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"last\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			}))
 			defer upstream.Close()
-			cfg := config{local: oneProvider(upstream.URL, "a"), failover: true, firstByte: time.Second}
+			cfg := config{Local: oneProvider(upstream.URL, "a"), Failover: true, FirstByte: time.Second}
 			router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				b, _ := io.ReadAll(r.Body)
 				handleLocal(w, r, cfg, b, nil, newHealth(""))
@@ -163,7 +164,7 @@ func TestRouterStreamsBeforeUpstreamCompletes(t *testing.T) {
 }
 
 func TestCandidateSelectionStableForLegacy(t *testing.T) {
-	data, _ := json.Marshal(provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL})
+	data, _ := json.Marshal(provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL})
 	if strings.Contains(string(data), "auth_id") {
 		t.Fatal("empty auth_id serialized; legacy bindings would change")
 	}

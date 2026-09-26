@@ -1,0 +1,15 @@
+{
+  "providers": [
+    {"name": "lab", "base_url": "http://lab.test/v1/", "api_key": "sk-test-legacy-0001"},
+    {"name": "codex", "type": "codex", "base_url": "https://chatgpt.com/backend-api/codex"}
+  ],
+  "models": [
+    {"provider": "lab", "model": "qwen-coder", "efforts": {"high": "high", "low": "low"}},
+    {"provider": "codex", "model": "gpt-6-sol", "efforts": {"high": "xhigh", "max": "max"}}
+  ],
+  "preferred": "codex/gpt-6-sol",
+  "pools": {
+    "opus": ["codex/gpt-6-sol", "lab/qwen-coder"],
+    "haiku": []
+  }
+}

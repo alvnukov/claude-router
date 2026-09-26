@@ -8,7 +8,7 @@ import (
 
 func (u *uiServer) profileActivateAPI(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	if err := u.cs.activateProfile(name, u.hl); err != nil {
+	if err := u.cs.ActivateProfile(name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -22,7 +22,7 @@ func (u *uiServer) profileActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	u.renderSettingsResult(w, u.cs.activateProfile(name, u.hl), "Профиль активирован: "+name)
+	u.renderSettingsResult(w, u.cs.ActivateProfile(name), "Профиль активирован: "+name)
 }
 
 func (u *uiServer) profileCreate(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +36,7 @@ func (u *uiServer) profileCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown mode", http.StatusBadRequest)
 		return
 	}
-	u.renderSettingsResult(w, u.cs.createProfile(name, clone), "Профиль создан: "+name)
+	u.renderSettingsResult(w, u.cs.CreateProfile(name, clone), "Профиль создан: "+name)
 }
 
 func (u *uiServer) profileDelete(w http.ResponseWriter, r *http.Request) {
@@ -45,5 +45,5 @@ func (u *uiServer) profileDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	u.renderSettingsResult(w, u.cs.deleteProfile(name), "Профиль удалён: "+name)
+	u.renderSettingsResult(w, u.cs.DeleteProfile(name), "Профиль удалён: "+name)
 }

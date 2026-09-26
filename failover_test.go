@@ -70,7 +70,7 @@ func TestFailoverToNextModel(t *testing.T) {
 	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
-	cfg := config{local: oneProvider(srv.URL, "bad", "gone", "good"), failover: true, firstByte: 5 * time.Second}
+	cfg := config{Local: oneProvider(srv.URL, "bad", "gone", "good"), Failover: true, FirstByte: 5 * time.Second}
 	hl := newHealth("")
 	w, tr := runLocal(t, cfg, hl)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "ok from good") {
@@ -97,7 +97,7 @@ func TestFirstByteTimeoutFailsOver(t *testing.T) {
 	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
-	cfg := config{local: oneProvider(srv.URL, "slow", "good"), failover: true, firstByte: 200 * time.Millisecond}
+	cfg := config{Local: oneProvider(srv.URL, "slow", "good"), Failover: true, FirstByte: 200 * time.Millisecond}
 	hl := newHealth("")
 	w, tr := runLocal(t, cfg, hl)
 	if w.Code != 200 || tr.Served != "p/good" {
@@ -112,7 +112,7 @@ func TestFailoverOffReportsError(t *testing.T) {
 	var calls testCalls
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
-	cfg := config{local: oneProvider(srv.URL, "bad", "good"), failover: false, firstByte: time.Second}
+	cfg := config{Local: oneProvider(srv.URL, "bad", "good"), Failover: false, FirstByte: time.Second}
 	w, tr := runLocal(t, cfg, newHealth(""))
 	if w.Code != 500 || len(tr.Attempts) != 1 || len(calls.snapshot()) != 1 {
 		t.Fatalf("code=%d attempts=%+v calls=%v", w.Code, tr.Attempts, calls.snapshot())
@@ -121,7 +121,7 @@ func TestFailoverOffReportsError(t *testing.T) {
 
 func TestPickOrder(t *testing.T) {
 	hl := newHealth("")
-	cfg := config{local: oneProvider("http://h/v1", "a", "b", "c"), failover: true}
+	cfg := config{Local: oneProvider("http://h/v1", "a", "b", "c"), Failover: true}
 	names := func(cs []candidate) string {
 		var s []string
 		for _, c := range cs {
@@ -144,7 +144,7 @@ func TestPickOrder(t *testing.T) {
 	if got := names(hl.pick(cfg)); got != "p/a,p/c,p/b" { // healthy again: preferred leads
 		t.Fatalf("recovered: %s", got)
 	}
-	cfg.failover = false
+	cfg.Failover = false
 	if got := names(hl.pick(cfg)); got != "p/a" {
 		t.Fatalf("failover off: %s", got)
 	}

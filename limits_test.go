@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 )
@@ -65,19 +66,21 @@ func limitsRouter(t *testing.T, upstream, local string) (*uiServer, http.Handler
 
 func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store) (*uiServer, http.Handler) {
 	t.Helper()
-	cs, h, _ := profileFixture(t)
+	cs, h, path := profileFixture(t)
 	up, _ := url.Parse(upstream)
-	cs.c.upstream = up
-	l := cs.get().local.clone()
+	c := cs.Get()
+	c.Upstream = up
+	cs = conf.NewStore(c, path)
+	l := cs.Get().Local.Clone()
 	l.FamilyRoutes["sonnet"] = map[string]modelRoute{"default": {Mode: "anthropic"}}
 	if local != "" {
 		l.Providers[0].BaseURL = local
 	}
-	if err := cs.applyLocal(l, true); err != nil {
+	if err := cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	u := newUIServer(st, cs, h)
-	return u, newMainHandler(cs.get(), cs, st, h, u)
+	return u, newMainHandler(cs.Get(), cs, st, h, u)
 }
 
 // A streamed Anthropic response reaches the client unchanged and unbuffered,
@@ -472,8 +475,10 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 
 	// Codex is connected and its last refresh failed: its source says so and
 	// the Anthropic part is unaffected.
-	codex := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
-	u.cs.c.local.Providers = append(u.cs.c.local.Providers, codex)
+	codex := provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}
+	c := u.cs.Get()
+	c.Local.Providers = append(c.Local.Providers, codex)
+	u.cs = conf.NewStore(c, "")
 	oldAuth := codexAuth
 	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("acct")}
 	t.Cleanup(func() { codexAuth = oldAuth })
@@ -525,7 +530,9 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 		t.Fatalf("signed out: %s", body)
 	}
 	// With no Codex connection at all the report still has one codex source.
-	u.cs.c.local.Providers = u.cs.c.local.Providers[:len(u.cs.c.local.Providers)-1]
+	c = u.cs.Get()
+	c.Local.Providers = c.Local.Providers[:len(c.Local.Providers)-1]
+	u.cs = conf.NewStore(c, "")
 	if body := get(t, h, "GET", "/api/limits", nil).Body.String(); !strings.HasPrefix(body,
 		`{"sources":[{"source":"anthropic","state":"unavailable","max_age_seconds":1800},{"source":"codex","state":"not_connected","max_age_seconds":1800}],"windows":[]}`) {
 		t.Fatalf("nothing observed: %s", body)
@@ -538,8 +545,8 @@ func TestCodexLimitsPerConnection(t *testing.T) {
 	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
 	seedConnection(t, provider{Name: "codex", Type: "codex"}, "acct-a")
 	seedConnection(t, provider{Name: "work", Type: "codex", AuthID: testAuthB}, "acct-b")
-	providers := []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}, {Name: "work", Type: "codex", BaseURL: codexBaseURL, AuthID: testAuthB}}
-	u := newUIServer(history.New(10, ""), newConfigStore(config{local: localSetup{Providers: providers}}, ""), newHealth(""))
+	providers := []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}, {Name: "work", Type: "codex", BaseURL: conf.CodexBaseURL, AuthID: testAuthB}}
+	u := newUIServer(history.New(10, ""), conf.NewStore(config{Local: localSetup{Providers: providers}}, ""), newHealth(""))
 	u.limits = limits.New("", limits.MaxAge)
 	used := map[string]string{"acct-a": "20", "acct-b": "70"}
 	u.codexUsage.client = &http.Client{Transport: usageTransport(func(r *http.Request) (*http.Response, error) {

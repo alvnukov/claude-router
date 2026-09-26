@@ -1,0 +1,279 @@
+{
+  "family_routes": null,
+  "catalog": {
+    "anthropic_updated": "0001-01-01T00:00:00Z",
+    "checked_at": "0001-01-01T00:00:00Z"
+  },
+  "providers": [
+    {
+      "name": "lab",
+      "base_url": "http://lab.test/v1",
+      "api_key": "sk-test-legacy-0001"
+    },
+    {
+      "name": "codex",
+      "type": "codex",
+      "base_url": "https://chatgpt.com/backend-api/codex"
+    }
+  ],
+  "models": [
+    {
+      "provider": "lab",
+      "model": "qwen-coder"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-sol"
+    }
+  ],
+  "routes": {
+    "claude-fable-5": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    },
+    "claude-haiku-4-5": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    },
+    "claude-opus-5": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "claude-sonnet-5": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    },
+    "gpt-6-sol": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "haiku": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    },
+    "local-model": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "opus": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "qwen-coder": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    }
+  },
+  "model_pools": {
+    "Перенесённый claude-opus-5 / default": [
+      {
+        "model": "codex/gpt-6-sol"
+      },
+      {
+        "model": "lab/qwen-coder"
+      }
+    ],
+    "Перенесённый claude-opus-5 / high": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "xhigh"
+      },
+      {
+        "model": "lab/qwen-coder",
+        "effort": "high"
+      }
+    ],
+    "Перенесённый claude-opus-5 / low": [
+      {
+        "model": "codex/gpt-6-sol"
+      },
+      {
+        "model": "lab/qwen-coder",
+        "effort": "low"
+      }
+    ],
+    "Перенесённый claude-opus-5 / max": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "max"
+      },
+      {
+        "model": "lab/qwen-coder"
+      }
+    ]
+  }
+}
