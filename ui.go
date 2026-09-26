@@ -751,17 +751,17 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	familyScope := r.FormValue("scope") == "family"
 	choices := map[string]modelRoute{}
 	// «На все effort» sends one destination for every level. A model target
-	// without a level takes the same-named one; a level the target lacks keeps
-	// the row's own choice and is named in the reply.
+	// without a level takes the same-named one. A level missing from its catalog
+	// keeps the row's choice and is named; other errors reject the save below.
 	all := r.FormValue("all")
-	allKey, _ := strings.CutPrefix(all, "model:")
-	allKey, perLevel := strings.CutSuffix(allKey, ":")
-	perLevel = perLevel && strings.HasPrefix(all, "model:")
+	rest, isModel := strings.CutPrefix(all, "model:")
+	allKey, perLevel := strings.CutSuffix(rest, ":")
+	perLevel = perLevel && isModel
 	var lacking []string
 	for _, effort := range claudeEfforts {
 		dest := r.FormValue(effort)
 		switch {
-		case perLevel && effort != "default" && u.validateTargetEffort(l, allKey, effort) != nil:
+		case perLevel && effort != "default" && strings.Contains(fmt.Sprint(u.validateTargetEffort(l, allKey, effort)), "не подтверждён каталогом"):
 			lacking = append(lacking, effort)
 		case perLevel && effort != "default":
 			dest = all + effort
