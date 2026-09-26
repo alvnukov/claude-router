@@ -464,18 +464,16 @@ func TestAnthropicLimitsBackgroundSave(t *testing.T) {
 	captureLog(t)
 	path := filepath.Join(t.TempDir(), "limits.json")
 	l := New(path, MaxAge)
-	l.Observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("observation never saved")
-		}
-		time.Sleep(5 * time.Millisecond)
+	disk := &busyDisk{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	l.SetGate(disk)
+	observeReturns(t, l, limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
+	select {
+	case <-disk.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("observation never saved in the background")
 	}
-	l.Observe(limitsHeader("Anthropic-Ratelimit-B", "1"), time.Now().Add(time.Second))
+	observeReturns(t, l, limitsHeader("Anthropic-Ratelimit-B", "1"), time.Now().Add(time.Second))
+	close(disk.release)
 	l.Close()
 	l.Close()
 	if v := New(path, MaxAge).View(time.Now().Add(time.Second)); limitKeys(v) != "anthropic-ratelimit-b" {
@@ -486,6 +484,37 @@ func TestAnthropicLimitsBackgroundSave(t *testing.T) {
 	nilStore.Close()
 	if err := nilStore.Save(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// busyDisk holds every save at the gate until release is closed, and reports
+// the first one on entered.
+type busyDisk struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (d *busyDisk) WritesSharedState() bool {
+	select {
+	case d.entered <- struct{}{}:
+	default:
+	}
+	<-d.release
+	return true
+}
+
+// observeReturns fails the test if Observe waits for a save.
+func observeReturns(t *testing.T, l *Store, h http.Header, at time.Time) {
+	t.Helper()
+	returned := make(chan struct{})
+	go func() {
+		l.Observe(h, at)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Observe waited for the disk")
 	}
 }
 
