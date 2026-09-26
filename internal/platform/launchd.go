@@ -24,6 +24,9 @@ type Launchd struct {
 	// Run runs launchctl; tests replace it so they never touch the user's
 	// launchd.
 	Run func(ctx context.Context, args ...string) error
+	// Poll is the time between launchctl prints while Stop waits for an
+	// agent to unload; zero means 100 ms.
+	Poll time.Duration
 }
 
 // LaunchdDomain is the GUI domain of the current user, gui/<uid>.
@@ -86,19 +89,33 @@ func (l Launchd) Start(ctx context.Context, label string) error {
 	return l.Run(ctx, "bootstrap", l.Domain, l.plist(label))
 }
 
-// Stop unloads the agent. launchctl bootout can report failure while launchd
-// still unloads the agent, so its failure counts only if the agent stays
-// loaded or launchctl cannot tell.
+// Stop unloads the agent and returns once launchd no longer has it, which is
+// when the program has exited: bootout only sends SIGTERM, and launchd keeps
+// the agent until the program exits or its ExitTimeOut runs out. ctx bounds
+// the wait. launchctl bootout can report failure while launchd still unloads
+// the agent, so its failure counts only if the agent is still loaded when
+// ctx ends or launchctl cannot tell.
 func (l Launchd) Stop(ctx context.Context, label string) error {
 	stopErr := l.Run(ctx, "bootout", l.target(label))
-	if stopErr == nil {
-		return nil
+	poll := l.Poll
+	if poll <= 0 {
+		poll = 100 * time.Millisecond
 	}
-	loaded, err := l.loaded(ctx, label)
-	if err != nil || loaded {
-		return errors.Join(stopErr, err)
+	for {
+		loaded, err := l.loaded(ctx, label)
+		switch {
+		case err != nil:
+			return errors.Join(stopErr, err)
+		case !loaded:
+			return nil
+		case ctx.Err() != nil:
+			return errors.Join(stopErr, fmt.Errorf("launchd still has %s loaded: %w", label, context.Cause(ctx)))
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(poll):
+		}
 	}
-	return nil
 }
 
 func (l Launchd) Status(ctx context.Context, label string) (Status, error) {

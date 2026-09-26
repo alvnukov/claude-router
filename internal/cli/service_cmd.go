@@ -144,6 +144,24 @@ func (c *commands) open(home string) (site, error) {
 	return site{home: home, addr: addr, url: url, slot: err == nil}, nil
 }
 
+// exitTimeout is how long launchd lets a router agent drain its requests
+// after SIGTERM before it kills it: the drain, 900 s unless
+// ROUTER_DRAIN_TIMEOUT says otherwise, and a minute to exit. The slots have
+// the same.
+const exitTimeout = 960 * time.Second
+
+// stopTimeout bounds the wait for an agent to unload: its exitTimeout and a
+// minute for launchd.
+const stopTimeout = exitTimeout + time.Minute
+
+// stopAgent unloads the agent and waits for its program to exit, at most
+// stopTimeout.
+func (c *commands) stopAgent(ctx context.Context, label string) error {
+	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
+	defer cancel()
+	return c.h.Service.Stop(ctx, label)
+}
+
 // legacySpec is the agent the shell script used to write: the binary in the
 // home, restarted whenever it exits, at most every ten seconds.
 func legacySpec(label, home string) platform.ServiceSpec {
@@ -175,7 +193,7 @@ func (c *commands) install(ctx context.Context, s site, stdout io.Writer) error 
 	}
 	// Unloading and loading again restarts the router on the new definition.
 	if st.Loaded {
-		if err := svc.Stop(ctx, label); err != nil {
+		if err := c.stopAgent(ctx, label); err != nil {
 			return err
 		}
 	}
@@ -193,6 +211,9 @@ func (c *commands) uninstall(ctx context.Context, s site, stdout io.Writer) erro
 	if s.slot {
 		return errors.New("slot-based uninstall requires a maintenance window")
 	}
+	// Uninstall stops the agent first.
+	ctx, cancel := context.WithTimeout(ctx, stopTimeout)
+	defer cancel()
 	if err := c.h.Service.Uninstall(ctx, c.r.Label); err != nil {
 		return err
 	}
@@ -247,7 +268,7 @@ func (c *commands) stop(ctx context.Context, s site, stdout io.Writer) error {
 		return err
 	}
 	if st.Installed && st.Loaded {
-		if err := c.h.Service.Stop(ctx, c.r.Label); err != nil {
+		if err := c.stopAgent(ctx, c.r.Label); err != nil {
 			return err
 		}
 		fmt.Fprintln(stdout, "stopped; launchd will start it again at next login or on 'router start'")
@@ -421,7 +442,7 @@ func (c *commands) stopSlots(ctx context.Context, s site, stdout io.Writer) erro
 			return err
 		}
 		if st.Loaded {
-			if err := c.h.Service.Stop(ctx, label); err != nil {
+			if err := c.stopAgent(ctx, label); err != nil {
 				return err
 			}
 		}

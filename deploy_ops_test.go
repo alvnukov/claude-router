@@ -91,17 +91,21 @@ func TestDeployOpsUseConfiguredScratchLabels(t *testing.T) {
 		t.Fatalf("blue label %q", got)
 	}
 	calls := recordLaunchctl(ops)
-	if err := ops.stop(t.Context(), "green"); err != nil || len(*calls) != 1 || !strings.Contains((*calls)[0], file.LabelPrefix+".green") {
+	if err := ops.stop(t.Context(), "green"); err != nil || len(*calls) != 2 || strings.Count(strings.Join(*calls, "\n"), file.LabelPrefix+".green") != 2 {
 		t.Fatalf("stop touched another label: %v %v", err, *calls)
 	}
 }
 
 // recordLaunchctl points ops at a launchd in its agents directory whose
-// launchctl only records the calls.
+// launchctl only records the calls. print finds no agent, as once bootout
+// has unloaded it, so a stop does not wait.
 func recordLaunchctl(ops *systemDeployOps) *[]string {
 	calls := new([]string)
 	ops.service = platform.Launchd{Dir: ops.agents, Domain: platform.LaunchdDomain(), Run: func(_ context.Context, args ...string) error {
 		*calls = append(*calls, strings.Join(args, " "))
+		if args[0] == "print" {
+			return platform.ErrNotLoaded
+		}
 		return nil
 	}}
 	return calls

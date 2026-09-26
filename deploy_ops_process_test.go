@@ -44,7 +44,7 @@ func TestSystemStartAndStopUsesLaunchdSlotPlist(t *testing.T) {
 	if err := ops.stop(t.Context(), "green"); err != nil {
 		t.Fatal(err)
 	}
-	if len(*commands) != 2 || !strings.HasPrefix((*commands)[1], "bootout ") {
+	if len(*commands) != 3 || !strings.HasPrefix((*commands)[1], "bootout ") || !strings.HasPrefix((*commands)[2], "print ") {
 		t.Fatalf("unexpected stop commands: %v", *commands)
 	}
 }

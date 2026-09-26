@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"localrouter/internal/platform"
 )
@@ -27,9 +28,20 @@ type fakeService struct {
 	calls   []string
 	started func()
 	stopErr error // Stop fails with it and leaves the agent loaded
+	// waits holds, for each Stop and Uninstall, how long its context lets
+	// it wait for the program to exit; zero if unbounded.
+	waits []time.Duration
 }
 
 func (f *fakeService) record(verb, label string) { f.calls = append(f.calls, verb+" "+label) }
+
+func (f *fakeService) wait(ctx context.Context) {
+	var wait time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		wait = time.Until(deadline)
+	}
+	f.waits = append(f.waits, wait)
+}
 
 func (f *fakeService) Install(_ context.Context, spec platform.ServiceSpec) error {
 	f.record("Install", spec.Label)
@@ -40,7 +52,8 @@ func (f *fakeService) Install(_ context.Context, spec platform.ServiceSpec) erro
 	return nil
 }
 
-func (f *fakeService) Uninstall(_ context.Context, label string) error {
+func (f *fakeService) Uninstall(ctx context.Context, label string) error {
+	f.wait(ctx)
 	f.record("Uninstall", label)
 	delete(f.state, label)
 	return nil
@@ -55,7 +68,8 @@ func (f *fakeService) Start(_ context.Context, label string) error {
 	return nil
 }
 
-func (f *fakeService) Stop(_ context.Context, label string) error {
+func (f *fakeService) Stop(ctx context.Context, label string) error {
+	f.wait(ctx)
 	f.record("Stop", label)
 	if f.stopErr != nil {
 		return f.stopErr
@@ -77,7 +91,7 @@ type fixture struct {
 	svc      *fakeService
 	launchd  *platform.Launchd // the service instead of svc, when set
 	alive    bool              // /healthz answers
-	upOnLoad bool // /healthz answers once something starts the router
+	upOnLoad bool              // /healthz answers once something starts the router
 	probes   int
 	health   []string
 	spawned  []string
@@ -304,6 +318,88 @@ func TestStopFailsWhenLaunchdCannotTellTheAgentUnloaded(t *testing.T) {
 	code, stdout, stderr := f.run(t, "stop")
 	if code != 1 || stdout != "" || !strings.Contains(stderr, context.DeadlineExceeded.Error()) {
 		t.Fatalf("stop = exit %d, stdout %q, stderr %q; want exit 1 with the timeout", code, stdout, stderr)
+	}
+}
+
+// A router drains its requests after SIGTERM, and launchd keeps its agent
+// loaded until it exits. restart is stop, then start: stop returns once the
+// agent is gone, so start loads it again. Had stop returned at bootout,
+// start would find the agent loaded, not load it and leave the router down.
+func TestRestartWhileTheRouterDrains(t *testing.T) {
+	f := newFixture(t)
+	f.alive = true
+	state, drainPrints := "running", 3 // prints that find the agent while it drains
+	var verbs []string
+	f.launchd = &platform.Launchd{Dir: t.TempDir(), Domain: "gui/501", Poll: time.Nanosecond, Run: func(_ context.Context, args ...string) error {
+		verbs = append(verbs, args[0])
+		switch args[0] {
+		case "bootout":
+			state, f.alive = "draining", false // a draining router takes no new requests
+		case "bootstrap":
+			state, f.alive = "running", true
+		case "print":
+			if state == "draining" {
+				if drainPrints == 0 {
+					state = "gone"
+				}
+				drainPrints--
+			}
+			if state == "gone" {
+				return fmt.Errorf("launchctl print: %w", platform.ErrNotLoaded)
+			}
+		}
+		return nil
+	}}
+	if err := os.WriteFile(filepath.Join(f.launchd.Dir, legacyLabel+".plist"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := f.run(t, "stop")
+	expect(t, code, stdout, stderr, 0, "stopped; launchd will start it again at next login or on 'router start'\n", "")
+	code, stdout, stderr = f.run(t, "start")
+	expect(t, code, stdout, stderr, 0, "started by launchd on 127.0.0.1:8787\n", "")
+	want := []string{"print", "bootout", "print", "print", "print", "print", "print", "bootstrap"}
+	if !reflect.DeepEqual(verbs, want) {
+		t.Fatalf("launchctl verbs = %v; want %v", verbs, want)
+	}
+}
+
+// A router may drain for up to its agent's ExitTimeOut, 960 s, before launchd
+// kills it, and Stop waits for that. Every wait the commands start is
+// bounded, and longer than that.
+func TestStopWaitsAsLongAsTheRouterMayDrain(t *testing.T) {
+	const exitTimeOut = 960 * time.Second
+	for _, tc := range []struct {
+		name    string
+		slot    bool
+		command string
+	}{
+		{"install", false, "install"},
+		{"stop", false, "stop"},
+		{"uninstall", false, "uninstall"},
+		{"slot stop", true, "stop"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			labels := []string{legacyLabel}
+			if tc.slot {
+				f.slotMode(t, "blue\n")
+				labels = []string{"p.caddy", "p.blue", "p.green"}
+			}
+			for _, label := range labels {
+				f.svc.state[label] = platform.Status{Installed: true, Loaded: true}
+			}
+			if code, _, stderr := f.run(t, tc.command); code != 0 {
+				t.Fatalf("%s: exit %d, stderr %q", tc.command, code, stderr)
+			}
+			if len(f.svc.waits) != len(labels) {
+				t.Fatalf("waits = %v; want one per agent of %v", f.svc.waits, labels)
+			}
+			for _, wait := range f.svc.waits {
+				if wait <= exitTimeOut {
+					t.Fatalf("waits = %v; want each bounded and over %s", f.svc.waits, exitTimeOut)
+				}
+			}
+		})
 	}
 }
 

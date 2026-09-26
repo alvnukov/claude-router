@@ -339,7 +339,7 @@ func TestSystemCutoverUsesConfiguredScratchLabels(t *testing.T) {
 		t.Fatalf("Caddy label %q", got)
 	}
 	calls := recordLaunchctl(ops.systemDeployOps)
-	if err := ops.stopLegacy(t.Context()); err != nil || len(*calls) != 1 || !strings.Contains((*calls)[0], prefix) {
+	if err := ops.stopLegacy(t.Context()); err != nil || len(*calls) != 2 || strings.Count(strings.Join(*calls, "\n"), prefix) != 2 {
 		t.Fatalf("stopLegacy touched another label: %v %v", err, *calls)
 	}
 }
@@ -399,8 +399,8 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 		t.Fatalf("stopped Caddy would come back at next login: %v", err)
 	}
 	domain := platform.LaunchdDomain()
-	want := []string{"bootout " + domain + "/com.claude-local-router", "bootstrap " + domain + " " + legacy,
-		"bootstrap " + domain + " " + installed, "bootout " + domain + "/com.claude-local-router.caddy"}
+	want := []string{"bootout " + domain + "/com.claude-local-router", "print " + domain + "/com.claude-local-router", "bootstrap " + domain + " " + legacy,
+		"bootstrap " + domain + " " + installed, "bootout " + domain + "/com.claude-local-router.caddy", "print " + domain + "/com.claude-local-router.caddy"}
 	if strings.Join(*commands, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("launchctl calls:\n%s\nwant:\n%s", strings.Join(*commands, "\n"), strings.Join(want, "\n"))
 	}

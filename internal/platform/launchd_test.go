@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,16 +74,36 @@ type exitCode int
 func (e exitCode) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
 func (e exitCode) ExitCode() int { return int(e) }
 
+// notFound is launchctl print's answer once launchd has no such agent.
+var notFound = launchctlError([]string{"print"}, exitCode(launchctlNotFound), nil)
+
 // fakeLaunchctl records launchctl calls; fail holds the error each failing
-// verb returns.
+// verb returns. prints, when set, scripts print's answers in turn, the last
+// one repeated: nil finds the agent.
 type fakeLaunchctl struct {
-	calls [][]string
-	fail  map[string]error
+	calls  [][]string
+	fail   map[string]error
+	prints []error
 }
 
 func (f *fakeLaunchctl) run(_ context.Context, args ...string) error {
 	f.calls = append(f.calls, args)
+	if args[0] == "print" && len(f.prints) > 0 {
+		err := f.prints[0]
+		if len(f.prints) > 1 {
+			f.prints = f.prints[1:]
+		}
+		return err
+	}
 	return f.fail[args[0]]
+}
+
+func (f *fakeLaunchctl) verbs() []string {
+	var verbs []string
+	for _, call := range f.calls {
+		verbs = append(verbs, call[0])
+	}
+	return verbs
 }
 
 // newFakeLaunchd fails the named verbs as launchctl does: print with its
@@ -90,13 +111,19 @@ func (f *fakeLaunchctl) run(_ context.Context, args ...string) error {
 func newFakeLaunchd(t *testing.T, fail ...string) (Launchd, *fakeLaunchctl) {
 	fake := &fakeLaunchctl{fail: map[string]error{}}
 	for _, verb := range fail {
-		code := exitCode(5)
+		fake.fail[verb] = launchctlError([]string{verb}, exitCode(5), nil)
 		if verb == "print" {
-			code = launchctlNotFound
+			fake.fail[verb] = notFound
 		}
-		fake.fail[verb] = launchctlError([]string{verb}, code, nil)
 	}
-	return Launchd{Dir: filepath.Join(t.TempDir(), "LaunchAgents"), Domain: "gui/501", Run: fake.run}, fake
+	return Launchd{Dir: filepath.Join(t.TempDir(), "LaunchAgents"), Domain: "gui/501", Poll: time.Nanosecond, Run: fake.run}, fake
+}
+
+// expired is a context already over: a wait on it ends at once.
+func expired(t *testing.T) context.Context {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	return ctx
 }
 
 func TestLaunchdInstallWritesPlistWithoutLoading(t *testing.T) {
@@ -124,19 +151,21 @@ func TestLaunchdInstallWritesPlistWithoutLoading(t *testing.T) {
 
 func TestLaunchdStartStopAndStatusCallLaunchctl(t *testing.T) {
 	l, fake := newFakeLaunchd(t)
+	fake.prints = []error{nil, notFound}
 	ctx := t.Context()
 	if err := l.Start(ctx, "svc"); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.Stop(ctx, "svc"); err != nil {
 		t.Fatal(err)
 	}
 	st, err := l.Status(ctx, "svc")
 	if err != nil || st != (Status{Loaded: true}) {
 		t.Fatalf("Status = %+v, %v; want loaded, not installed", st, err)
 	}
+	if err := l.Stop(ctx, "svc"); err != nil {
+		t.Fatal(err)
+	}
 	want := [][]string{
 		{"bootstrap", "gui/501", filepath.Join(l.Dir, "svc.plist")},
+		{"print", "gui/501/svc"},
 		{"bootout", "gui/501/svc"},
 		{"print", "gui/501/svc"},
 	}
@@ -158,59 +187,84 @@ func TestLaunchdStatusReportsInstalledButNotLoaded(t *testing.T) {
 
 func TestLaunchdUninstall(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		fail      []string
-		wantCalls []string
-		wantErr   bool
+		name  string
+		fail  []string
+		stuck bool // the agent stays loaded until the wait for it is over
 	}{
-		{"loaded", nil, []string{"bootout"}, false},
-		{"not loaded", []string{"bootout", "print"}, []string{"bootout", "print"}, false},
-		{"stuck loaded", []string{"bootout"}, []string{"bootout", "print"}, true},
+		{"loaded", nil, false},
+		{"not loaded", []string{"bootout"}, false},
+		{"stuck loaded", []string{"bootout"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, fake := newFakeLaunchd(t, tc.fail...)
 			if err := l.Install(t.Context(), ServiceSpec{Label: "svc", Exe: "/bin/svc"}); err != nil {
 				t.Fatal(err)
 			}
-			err := l.Uninstall(t.Context(), "svc")
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("Uninstall error = %v; want error %t", err, tc.wantErr)
+			ctx := t.Context()
+			fake.prints = []error{notFound}
+			if tc.stuck {
+				ctx, fake.prints = expired(t), []error{nil}
 			}
-			var verbs []string
-			for _, call := range fake.calls {
-				verbs = append(verbs, call[0])
+			err := l.Uninstall(ctx, "svc")
+			if (err != nil) != tc.stuck {
+				t.Fatalf("Uninstall error = %v; want error %t", err, tc.stuck)
 			}
-			if !reflect.DeepEqual(verbs, tc.wantCalls) {
-				t.Fatalf("launchctl verbs = %v; want %v", verbs, tc.wantCalls)
+			if verbs, want := fake.verbs(), []string{"bootout", "print"}; !reflect.DeepEqual(verbs, want) {
+				t.Fatalf("launchctl verbs = %v; want %v", verbs, want)
 			}
 			// A plist whose agent could not be unloaded stays, so a retry
 			// finds it; otherwise it is gone.
 			_, statErr := os.Stat(filepath.Join(l.Dir, "svc.plist"))
-			if kept := statErr == nil; kept != tc.wantErr {
+			if kept := statErr == nil; kept != tc.stuck {
 				t.Fatalf("plist kept = %t after %s", kept, tc.name)
 			}
 		})
 	}
 }
 
-// launchctl bootout can report failure while launchd still unloads the
-// agent. Only an agent left loaded is a failure; otherwise install goes on to
-// load it again, and restart, which is stop then start, is not left with the
-// router down.
-func TestLaunchdFailedBootoutCountsOnlyIfTheAgentStaysLoaded(t *testing.T) {
+// bootout only starts an unload: launchd sends SIGTERM and keeps the agent
+// until the program exits, which for a router draining its requests is up
+// to its ExitTimeOut. Stop returns once print no longer finds the agent, so
+// a start after it loads the agent again rather than find it loaded and
+// leave the router down. An agent still loaded when the context ends is a
+// failure, and so is a failed bootout only then: launchctl can report one
+// while launchd unloads the agent.
+func TestLaunchdStopWaitsForTheAgentToUnload(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		fail    []string
-		wantErr bool
+		name       string
+		bootout    bool // bootout fails
+		prints     []error
+		expired    bool
+		wantErr    bool
+		wantPrints int // prints after bootout
 	}{
-		{"unloaded anyway", []string{"bootout", "print"}, false},
-		{"still loaded", []string{"bootout"}, true},
+		{"unloads", false, []error{notFound}, false, false, 1},
+		{"drains first", false, []error{nil, nil, nil, notFound}, false, false, 4},
+		{"failed bootout, unloaded anyway", true, []error{notFound}, false, false, 1},
+		{"outlasts the wait", false, []error{nil}, true, true, 1},
+		{"failed bootout, still loaded", true, []error{nil}, true, true, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			l, fake := newFakeLaunchd(t, tc.fail...)
-			err := l.Stop(t.Context(), "svc")
-			if (err != nil) != tc.wantErr || tc.wantErr && !errors.Is(err, fake.fail["bootout"]) {
-				t.Fatalf("Stop = %v; want error %t, carrying bootout's", err, tc.wantErr)
+			var fail []string
+			if tc.bootout {
+				fail = []string{"bootout"}
+			}
+			l, fake := newFakeLaunchd(t, fail...)
+			fake.prints = tc.prints
+			ctx := t.Context()
+			if tc.expired {
+				ctx = expired(t)
+			}
+			err := l.Stop(ctx, "svc")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("Stop = %v; want error %t", err, tc.wantErr)
+			}
+			if tc.wantErr && (!errors.Is(err, context.Canceled) || tc.bootout && !errors.Is(err, fake.fail["bootout"])) {
+				t.Fatalf("Stop = %v; want the context's end and bootout's failure", err)
+			}
+			want := append([]string{"bootout"}, slices.Repeat([]string{"print"}, tc.wantPrints)...)
+			if verbs := fake.verbs(); !reflect.DeepEqual(verbs, want) {
+				t.Fatalf("launchctl verbs = %v; want %v", verbs, want)
 			}
 		})
 	}

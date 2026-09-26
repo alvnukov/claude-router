@@ -37,8 +37,10 @@ type Service interface {
 	Uninstall(ctx context.Context, label string) error
 	// Start loads the installed definition, which starts the program.
 	Start(ctx context.Context, label string) error
-	// Stop unloads the service, which stops the program. A service that is
-	// not loaded is stopped already; an error means it may still run.
+	// Stop unloads the service, which stops the program, and returns once
+	// the program has exited, so a Start after it starts a new one. A
+	// service that is not loaded is stopped already; an error, such as ctx
+	// ending first, means it may still run.
 	Stop(ctx context.Context, label string) error
 	Status(ctx context.Context, label string) (Status, error)
 }
