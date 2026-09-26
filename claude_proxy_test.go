@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -19,6 +20,10 @@ import (
 func TestRouterEnvPointsClaudeAtTheRouter(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "localrouter")
+	// Windows runs a file only by an executable extension.
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}

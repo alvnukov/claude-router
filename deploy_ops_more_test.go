@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +41,9 @@ func TestSystemStateReportsSlotAndInstalledBinaryDigest(t *testing.T) {
 
 func TestCaddyPersistentConfigIsValidAndTargetsSelectedSlot(t *testing.T) {
 	skipDarwinOnlyDeploy(t)
+	if _, err := exec.LookPath("caddy"); err != nil {
+		t.Skip("caddy not installed")
+	}
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	ops := newSystemDeployOps(cfg, "http://127.0.0.1:1", home, filepath.Join(home, "agents"), filepath.Join(home, "binary"))
@@ -53,6 +57,9 @@ func TestCaddyPersistentConfigIsValidAndTargetsSelectedSlot(t *testing.T) {
 
 func TestCaddyAdaptedConfigListensOnLoopbackAndResolvesSlot(t *testing.T) {
 	skipDarwinOnlyDeploy(t)
+	if _, err := exec.LookPath("caddy"); err != nil {
+		t.Skip("caddy not installed")
+	}
 	cfg := testDeployConfig(t)
 	home := t.TempDir()
 	ops := newSystemDeployOps(cfg, "http://127.0.0.1:1", home, filepath.Join(home, "agents"), filepath.Join(home, "binary"))

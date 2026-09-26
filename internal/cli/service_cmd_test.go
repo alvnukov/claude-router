@@ -232,7 +232,10 @@ func TestLegacySpecMatchesInstalledAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := platform.LaunchdPlist(legacySpec(legacyLabel, "/home/router/.claude/local-router")); !bytes.Equal(got, want) {
+	// legacySpec joins the binary and log paths with the host's separator;
+	// the golden is darwin's plist, where ToSlash changes nothing.
+	got := []byte(filepath.ToSlash(string(platform.LaunchdPlist(legacySpec(legacyLabel, "/home/router/.claude/local-router")))))
+	if !bytes.Equal(got, want) {
 		t.Fatalf("legacy plist differs:\n--- got\n%s\n--- want\n%s", got, want)
 	}
 }
@@ -248,7 +251,7 @@ func TestInstallStopsTheHandStartedRouterAndLoadsTheAgent(t *testing.T) {
 	}
 	// The pattern also catches an instance claude-local started without a
 	// pidfile, and is anchored so the slot binaries survive.
-	if want := []string{regexp.QuoteMeta(f.home+"/localrouter") + "( |$)"}; !reflect.DeepEqual(f.killed, want) {
+	if want := []string{regexp.QuoteMeta(filepath.Join(f.home, "localrouter")) + "( |$)"}; !reflect.DeepEqual(f.killed, want) {
 		t.Fatalf("killed %q; want %q", f.killed, want)
 	}
 	if !reflect.DeepEqual(f.stopped, []int{77}) {
