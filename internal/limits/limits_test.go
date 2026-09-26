@@ -458,34 +458,71 @@ func TestAnthropicLimitsSaveErrorKeepsMemory(t *testing.T) {
 	}
 }
 
-// The proxy never waits for the disk: Observe only schedules a save, and
-// Close flushes whatever is pending.
+// The proxy never waits for the disk: Observe only schedules a save. An
+// observation made while a save is under way is not lost: the save in flight
+// writes nothing, so it reaches the disk only by a later save, at the latest
+// the one Close flushes.
 func TestAnthropicLimitsBackgroundSave(t *testing.T) {
 	captureLog(t)
 	path := filepath.Join(t.TempDir(), "limits.json")
 	l := New(path, MaxAge)
-	l.Observe(limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("observation never saved")
-		}
-		time.Sleep(5 * time.Millisecond)
+	t.Cleanup(l.Close)
+	gate := &heldGate{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(gate.release) })
+	t.Cleanup(release) // runs before l.Close, so a failed test never leaves the saver held
+	l.SetGate(gate)
+	observeReturns(t, l, limitsHeader("Anthropic-Ratelimit-A", "1"), time.Now())
+	select {
+	case <-gate.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("observation never saved in the background")
 	}
-	l.Observe(limitsHeader("Anthropic-Ratelimit-B", "1"), time.Now().Add(time.Second))
+	observeReturns(t, l, limitsHeader("Anthropic-Ratelimit-B", "1"), time.Now().Add(time.Second))
+	release()
 	l.Close()
-	l.Close()
+	l.Close() // a second Close is a no-op
 	if v := New(path, MaxAge).View(time.Now().Add(time.Second)); limitKeys(v) != "anthropic-ratelimit-b" {
-		t.Fatalf("close did not flush the last observation: %+v", v)
+		t.Fatalf("observation made during a save never reached the disk: %+v", v)
 	}
 	l.Observe(http.Header{}, time.Now().Add(2*time.Second)) // after close: memory only
 	var nilStore *Store
 	nilStore.Close()
 	if err := nilStore.Save(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// heldGate holds every save until release is closed and reports the first one
+// on entered. The first save then writes nothing, so whatever was observed
+// while it was held has to be written by a later one. Only the saver calls it.
+type heldGate struct {
+	entered chan struct{}
+	release chan struct{}
+	calls   int
+}
+
+func (g *heldGate) WritesSharedState() bool {
+	select {
+	case g.entered <- struct{}{}:
+	default:
+	}
+	<-g.release
+	g.calls++
+	return g.calls > 1
+}
+
+// observeReturns fails the test if Observe waits for a save.
+func observeReturns(t *testing.T, l *Store, h http.Header, at time.Time) {
+	t.Helper()
+	returned := make(chan struct{})
+	go func() {
+		l.Observe(h, at)
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Observe waited for the disk")
 	}
 }
 
