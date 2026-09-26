@@ -15,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/cli"
+	"localrouter/internal/platform"
 )
 
 // cutoverFixture puts a fake legacy router on the public ports and lets a
@@ -273,10 +276,21 @@ func TestCutoverRefusesBusyCaddyAdmin(t *testing.T) {
 func TestCutoverReturnsToLegacyWhenCaddyDoesNotAnswer(t *testing.T) {
 	f := newCutoverFixture(t, 0)
 	f.fail = "caddy"
+	var left time.Duration
+	f.onStop = func(ctx context.Context, slot string) {
+		if deadline, ok := ctx.Deadline(); ok && slot == "blue" {
+			left = time.Until(deadline)
+		}
+	}
 	if _, err := f.run("yes\n", "-ready-timeout", "300ms"); err == nil {
 		t.Fatal("cutover succeeded without Caddy")
 	}
 	f.order(t, "stop-legacy", "start-caddy", "stop-caddy", "mark:legacy", "stop:blue", "start-legacy")
+	// Caddy stopped at once here; launchd may take its time with Caddy and
+	// blue alike, and the legacy router must still come back.
+	if want := 2*cli.StopTimeout + 300*time.Millisecond - time.Second; left < want {
+		t.Fatalf("the rollback had %s left when it stopped blue; want %s", left, want)
+	}
 	if f.committed || f.marker != "legacy" {
 		t.Fatalf("rollback left slot mode behind: marker=%s committed=%v", f.marker, f.committed)
 	}
@@ -333,16 +347,43 @@ func TestSystemCutoverUsesConfiguredScratchLabels(t *testing.T) {
 	home := t.TempDir()
 	prefix := "com.claude-local-router.scratch-123"
 	ops := newSystemCutoverOps(deployFile{CaddyAdmin: "127.0.0.1:1", LabelPrefix: prefix, deployConfig: cfg}, home, filepath.Join(home, "agents"), filepath.Join(home, "binary"), "/opt/caddy")
-	if got := ops.caddyPlist().Label; got != prefix+".caddy" {
+	if got := ops.caddySpec().Label; got != prefix+".caddy" {
 		t.Fatalf("Caddy label %q", got)
 	}
-	var calls []string
-	ops.launchctl = func(_ context.Context, args ...string) error {
-		calls = append(calls, strings.Join(args, " "))
-		return nil
+	calls := recordLaunchctl(ops.systemDeployOps)
+	if err := ops.stopLegacy(t.Context()); err != nil || len(*calls) != 2 || strings.Count(strings.Join(*calls, "\n"), prefix) != 2 {
+		t.Fatalf("stopLegacy touched another label: %v %v", err, *calls)
 	}
-	if err := ops.stopLegacy(t.Context()); err != nil || len(calls) != 1 || !strings.Contains(calls[0], prefix) {
-		t.Fatalf("stopLegacy touched another label: %v %v", err, calls)
+}
+
+// Stop waits for launchd to unload the agent, and nothing else ends a stop
+// launchd never finishes: each one gives up once launchd has had the longest
+// ExitTimeOut it grants, 60 s, and time to kill and unload.
+func TestSystemStopsGiveUpAfterLaunchdHadItsTime(t *testing.T) {
+	home := t.TempDir()
+	ops := newSystemCutoverOps(deployFile{CaddyAdmin: "127.0.0.1:1", deployConfig: testDeployConfig(t)}, home, filepath.Join(home, "agents"), filepath.Join(home, "binary"), "/opt/caddy")
+	var left []time.Duration
+	ops.service = platform.Launchd{Dir: ops.agents, Domain: platform.LaunchdDomain(), Run: func(ctx context.Context, args ...string) error {
+		if deadline, ok := ctx.Deadline(); ok && args[0] == "bootout" {
+			left = append(left, time.Until(deadline))
+		}
+		if args[0] == "print" {
+			return platform.ErrNotLoaded
+		}
+		return nil
+	}}
+	for _, stop := range []func(context.Context) error{func(ctx context.Context) error { return ops.stop(ctx, "blue") }, ops.stopLegacy, ops.stopCaddy} {
+		if err := stop(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(left) != 3 {
+		t.Fatalf("stops without a deadline: %d of 3 bounded", len(left))
+	}
+	for _, wait := range left {
+		if wait <= time.Minute || wait > cli.StopTimeout {
+			t.Fatalf("stops wait %v; want past launchd's 60 s and at most %s", left, cli.StopTimeout)
+		}
 	}
 }
 
@@ -366,11 +407,7 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 	}
 	file := deployFile{CaddyAdmin: "127.0.0.1:1", Caddy: caddy, deployConfig: cfg}
 	ops := newSystemCutoverOps(file, home, agents, filepath.Join(home, "binary"), caddy)
-	var commands []string
-	ops.launchctl = func(_ context.Context, args ...string) error {
-		commands = append(commands, strings.Join(args, " "))
-		return nil
-	}
+	commands := recordLaunchctl(ops.systemDeployOps)
 	if err := ops.prepare(t.Context(), "blue"); err != nil {
 		t.Fatal(err)
 	}
@@ -404,11 +441,11 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 	if _, err := os.Stat(installed); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stopped Caddy would come back at next login: %v", err)
 	}
-	domain := launchdDomain()
-	want := []string{"bootout " + domain + "/com.claude-local-router", "bootstrap " + domain + " " + legacy,
-		"bootstrap " + domain + " " + installed, "bootout " + domain + "/com.claude-local-router.caddy"}
-	if strings.Join(commands, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("launchctl calls:\n%s\nwant:\n%s", strings.Join(commands, "\n"), strings.Join(want, "\n"))
+	domain := platform.LaunchdDomain()
+	want := []string{"bootout " + domain + "/com.claude-local-router", "print " + domain + "/com.claude-local-router", "bootstrap " + domain + " " + legacy,
+		"bootstrap " + domain + " " + installed, "bootout " + domain + "/com.claude-local-router.caddy", "print " + domain + "/com.claude-local-router.caddy"}
+	if strings.Join(*commands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("launchctl calls:\n%s\nwant:\n%s", strings.Join(*commands, "\n"), strings.Join(want, "\n"))
 	}
 	if err := ops.commit(t.Context(), file); err != nil {
 		t.Fatal(err)
@@ -426,5 +463,27 @@ func TestSystemCutoverDrivesLaunchdLabelsAndMovesLegacyPlist(t *testing.T) {
 	var saved deployFile
 	if err := json.Unmarshal(data, &saved); err != nil || saved != file {
 		t.Fatalf("deploy.json does not round-trip: %+v %v", saved, err)
+	}
+}
+
+// The slot and Caddy agents a cutover already installed must stay byte for
+// byte what the next deploy writes. The fixed paths and addresses match the
+// goldens that platform's renderer test keeps.
+func TestSlotAndCaddyPlistsMatchGolden(t *testing.T) {
+	skipDarwinOnlyDeploy(t)
+	home := "/home/router/.claude/local-router"
+	cfg := deployConfig{PublicAPI: "127.0.0.1:18787", PublicUI: "127.0.0.1:18788", BlueAPI: "127.0.0.1:18791", BlueUI: "127.0.0.1:18793", GreenAPI: "127.0.0.1:18792", GreenUI: "127.0.0.1:18794"}
+	ops := newSystemCutoverOps(deployFile{CaddyAdmin: "127.0.0.1:12019", deployConfig: cfg}, home, "/home/router/Library/LaunchAgents", home+"/localrouter.candidate", "/opt/homebrew/bin/caddy")
+	for golden, got := range map[string][]byte{
+		"launchd-com.claude-local-router.green.plist": platform.LaunchdPlist(ops.slotSpec("green")),
+		"launchd-com.claude-local-router.caddy.plist": platform.LaunchdPlist(ops.caddySpec()),
+	} {
+		want, err := os.ReadFile(filepath.Join("internal", "platform", "testdata", golden))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s differs:\n--- got\n%s\n--- want\n%s", golden, got, want)
+		}
 	}
 }

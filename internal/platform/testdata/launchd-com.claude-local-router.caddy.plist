@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.claude-local-router.caddy</string>
+  <key>ProgramArguments</key>
+  <array><string>/opt/homebrew/bin/caddy</string><string>run</string><string>--config</string><string>/home/router/.claude/local-router/Caddyfile</string><string>--adapter</string><string>caddyfile</string></array>
+  <key>WorkingDirectory</key><string>/home/router/.claude/local-router</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ExitTimeOut</key><integer>30</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>XDG_CONFIG_HOME</key><string>/home/router/.claude/local-router/caddy/config</string>
+    <key>XDG_DATA_HOME</key><string>/home/router/.claude/local-router/caddy/data</string>
+  </dict>
+  <key>StandardOutPath</key><string>/home/router/.claude/local-router/caddy.log</string>
+  <key>StandardErrorPath</key><string>/home/router/.claude/local-router/caddy.log</string>
+</dict>
+</plist>

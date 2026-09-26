@@ -1,113 +1,37 @@
 #!/usr/bin/env bash
-# Manage the local-router: start|stop|restart|status|logs|build|deploy|install|uninstall
+# Manage the local-router: start|stop|restart|status|logs|build|env|deploy|install|uninstall
 #
-# Once installed as a launchd agent, launchd owns the process. Every command
-# below then delegates to launchctl, because a plain kill would only be undone
-# by KeepAlive a second later.
+# start, stop, status, install, uninstall and env are commands of the
+# localrouter binary, which manages the launchd agent; this script builds the
+# binary and hands them over. It keeps what needs the sources: build, restart,
+# deploy and install --cutover.
 #
 # Sources live where this script does; the binary and its state (env,
 # providers.json, models.json, history.jsonl, log) live in ROUTER_HOME,
 # ~/.claude/local-router by default. This script may be reached through a
 # symlink from there.
 set -euo pipefail
-SRC="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+SRC="$(cd "$(dirname "$SELF")" && pwd)"
 DIR="${ROUTER_HOME:-$HOME/.claude/local-router}"
-PIDFILE="$DIR/router.pid"
-LOG="$DIR/router.log"
-LABEL="com.claude-local-router"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-TARGET="gui/${UID}/${LABEL}"
 
 [ -f "$DIR/env" ] && { set -a; . "$DIR/env"; set +a; }
 ADDR="${ROUTER_LISTEN:-127.0.0.1:8787}"
 UI_ADDR="${ROUTER_UI_LISTEN:-127.0.0.1:8788}"
 SLOT_MODE=0
 [ -f "$DIR/deploy.json" ] && SLOT_MODE=1
-CADDY_LABEL=""
-BLUE_LABEL=""
-GREEN_LABEL=""
-CADDY_PLIST=""
-CADDY_TARGET=""
 
-load_slot_labels() {
-  local json
-  local active
-  active="$(cat "$DIR/active-slot" 2>/dev/null || true)"
-  case "$active" in blue|green) ;; *) echo "invalid active slot marker" >&2; return 1 ;; esac
-  json="$("$DIR/localrouter.$active" service-labels -home "$DIR")" || return
-  # The Go command validates the configuration and generates the label names.
-  # Read JSON without eval or trusting any unquoted shell expansion.
-  CADDY_LABEL="$(printf '%s' "$json" | /usr/bin/plutil -extract caddy raw -o - -)" || return
-  BLUE_LABEL="$(printf '%s' "$json" | /usr/bin/plutil -extract blue raw -o - -)" || return
-  GREEN_LABEL="$(printf '%s' "$json" | /usr/bin/plutil -extract green raw -o - -)" || return
-  CADDY_PLIST="$HOME/Library/LaunchAgents/$CADDY_LABEL.plist"
-  CADDY_TARGET="gui/${UID}/${CADDY_LABEL}"
-}
+build() { mkdir -p "$DIR" && (cd "$SRC" && go build -o "$DIR/localrouter" .); }
 
-alive()   { curl -sf "http://${ADDR}/healthz" >/dev/null 2>&1; }
-build()   { mkdir -p "$DIR" && (cd "$SRC" && go build -o "$DIR/localrouter" .); }
-loaded()  { launchctl print "$TARGET" >/dev/null 2>&1; }
-managed() { [ -f "$PLIST" ]; }
+# A binary older than this script may predate its commands, and such a
+# binary takes any command for serve.
+stale() { [ ! -x "$DIR/localrouter" ] || [ "$DIR/localrouter" -ot "$SELF" ]; }
 
-waitup() {
-  for _ in $(seq 25); do alive && return 0; sleep 0.2; done
-  echo "failed to come up; last log lines:" >&2
-  tail -5 "$LOG" >&2
-  return 1
-}
-
-write_plist() {
-  mkdir -p "$(dirname "$PLIST")"
-  cat > "$PLIST" <<PLIST_EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key>
-  <array><string>${DIR}/localrouter</string></array>
-  <key>WorkingDirectory</key><string>${DIR}</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>10</integer>
-  <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>${LOG}</string>
-  <key>StandardErrorPath</key><string>${LOG}</string>
-</dict>
-</plist>
-PLIST_EOF
-}
-
-install_agent() {
-  build
-  # A hand-started instance would hold the port against the agent.
-  stop_manual
-  write_plist
-  loaded && launchctl bootout "$TARGET" 2>/dev/null || true
-  launchctl bootstrap "gui/${UID}" "$PLIST"
-  waitup && echo "installed as ${LABEL}, listening on ${ADDR}"
-}
-
-uninstall_agent() {
-  loaded && launchctl bootout "$TARGET" 2>/dev/null || true
-  rm -f "$PLIST"
-  echo "uninstalled ${LABEL}"
-}
-
-stop_manual() {
-  if [ -f "$PIDFILE" ]; then
-    kill "$(cat "$PIDFILE")" 2>/dev/null || true
-    rm -f "$PIDFILE"
+current() {
+  if stale; then
+    echo "the localrouter binary is missing or older than this script; run ./router build" >&2
+    exit 1
   fi
-  # Also catch an instance started by claude-local, which writes no pidfile.
-  # Anchored: the slot binaries localrouter.blue and .green share the prefix.
-  pkill -f "$DIR/localrouter( |\$)" 2>/dev/null || true
-}
-
-slot_label() {
-  local slot
-  slot="$(cat "$DIR/active-slot" 2>/dev/null || true)"
-  case "$slot" in blue) printf '%s' "$BLUE_LABEL" ;; green) printf '%s' "$GREEN_LABEL" ;; *) return 1 ;; esac
 }
 
 build_candidate() {
@@ -135,64 +59,19 @@ install_cutover() {
     -green-api "${ROUTER_GREEN_API:-127.0.0.1:8792}" -green-ui "${ROUTER_GREEN_UI:-127.0.0.1:8794}" "$@"
 }
 
-slot_start() {
-  local slot label plist
-  load_slot_labels
-  slot="$(cat "$DIR/active-slot" 2>/dev/null || true)"
-  label="$(slot_label)" || { echo "invalid active slot marker" >&2; return 1; }
-  plist="$HOME/Library/LaunchAgents/$label.plist"
-  [ -f "$CADDY_PLIST" ] && [ -f "$plist" ] || { echo "slot or Caddy launchd agent missing" >&2; return 1; }
-  launchctl print "gui/${UID}/$label" >/dev/null 2>&1 || launchctl bootstrap "gui/${UID}" "$plist"
-  launchctl print "$CADDY_TARGET" >/dev/null 2>&1 || launchctl bootstrap "gui/${UID}" "$CADDY_PLIST"
-  waitup && echo "Caddy and $slot started on $ADDR"
-}
-
-slot_stop() {
-  load_slot_labels
-  # Explicit stop is an outage, not a deploy. Caddy stops taking new
-  # requests, then both KeepAlive agents are unloaded until next login.
-  launchctl bootout "$CADDY_TARGET" 2>/dev/null || true
-  launchctl bootout "gui/${UID}/${BLUE_LABEL}" 2>/dev/null || true
-  launchctl bootout "gui/${UID}/${GREEN_LABEL}" 2>/dev/null || true
-  echo "Caddy and both router slots stopped"
-}
-
-start() {
-  if managed; then
-    loaded || launchctl bootstrap "gui/${UID}" "$PLIST"
-    launchctl kickstart "$TARGET" >/dev/null 2>&1 || true
-    waitup && echo "started by launchd on ${ADDR}"
-    return
-  fi
-  if alive; then echo "already running on ${ADDR}"; return 0; fi
-  [ -x "$DIR/localrouter" ] || build
-  "$DIR/localrouter" >>"$LOG" 2>&1 &
-  echo $! > "$PIDFILE"
-  waitup && echo "started on ${ADDR} (pid $(cat "$PIDFILE"))"
-}
-
-stop() {
-  if managed && loaded; then
-    launchctl bootout "$TARGET" 2>/dev/null || true
-    echo "stopped; launchd will start it again at next login or on 'router start'"
-    return
-  fi
-  stop_manual
-  echo "stopped"
-}
-
 case "${1:-status}" in
-  start)     if [ "$SLOT_MODE" = 1 ]; then slot_start; else start; fi ;;
-  stop)      if [ "$SLOT_MODE" = 1 ]; then slot_stop; else stop; fi ;;
+  start)
+    if stale; then build; fi
+    exec "$DIR/localrouter" start -home "$DIR" ;;
+  stop|status|uninstall|env)
+    current
+    exec "$DIR/localrouter" "${1:-status}" -home "$DIR" ;;
   restart)
     if [ "$SLOT_MODE" = 1 ]; then run_deploy -force; exit; fi
     build
-    if managed && loaded; then
-      launchctl kickstart -k "$TARGET" >/dev/null
-      waitup && echo "restarted by launchd on ${ADDR}"
-    else
-      stop; sleep 0.5; start
-    fi ;;
+    "$DIR/localrouter" stop -home "$DIR"
+    sleep 0.5
+    exec "$DIR/localrouter" start -home "$DIR" ;;
   build)     build; echo "built" ;;
   deploy)
     shift
@@ -200,26 +79,8 @@ case "${1:-status}" in
   install)
     shift
     if [ "${1:-}" = "--cutover" ]; then shift; install_cutover "$@"
-    elif [ "$SLOT_MODE" = 1 ]; then echo "cutover already installed; use 'router deploy'" >&2; exit 1
-    elif [ "$#" = 0 ]; then install_agent
+    elif [ "$#" = 0 ]; then build; exec "$DIR/localrouter" install -home "$DIR"
     else echo "usage: router install [--cutover]" >&2; exit 2; fi ;;
-  uninstall) if [ "$SLOT_MODE" = 1 ]; then echo "slot-based uninstall requires a maintenance window" >&2; exit 1; else uninstall_agent; fi ;;
-  status)
-    if [ "$SLOT_MODE" = 1 ]; then
-      load_slot_labels
-      echo "slot-based router: $(cat "$DIR/active-slot" 2>/dev/null || echo unknown)"
-      launchctl print "$CADDY_TARGET" >/dev/null 2>&1 && echo "Caddy: loaded" || echo "Caddy: not loaded"
-      launchctl print "gui/${UID}/${BLUE_LABEL}" >/dev/null 2>&1 && echo "blue: loaded" || echo "blue: not loaded"
-      launchctl print "gui/${UID}/${GREEN_LABEL}" >/dev/null 2>&1 && echo "green: loaded" || echo "green: not loaded"
-      alive && echo "running on $ADDR" || echo "not running"
-      exit
-    fi
-    if managed; then
-      loaded && echo "launchd agent ${LABEL}: loaded" || echo "launchd agent ${LABEL}: installed but not loaded"
-    else
-      echo "launchd agent: not installed (run 'router install')"
-    fi
-    alive && echo "running on ${ADDR}" || echo "not running" ;;
-  logs)      tail -f "$LOG" ;;
-  *) echo "usage: router {start|stop|restart|status|logs|build|deploy [-force]|install [--cutover]|uninstall}" >&2; exit 2 ;;
+  logs)      tail -f "$DIR/router.log" ;;
+  *) echo "usage: router {start|stop|restart|status|logs|build|env|deploy [-force]|install [--cutover]|uninstall}" >&2; exit 2 ;;
 esac

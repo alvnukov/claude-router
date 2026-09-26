@@ -204,8 +204,13 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 		return err
 	}
 	// The new slot serves now. Beyond this point nothing rolls back: a failure
-	// leaves the old slot to the next deploy's retire.
+	// leaves the old slot to the next deploy's retire. The disk names the new
+	// slot before the old one drains, so no failure while it drains or exits
+	// leaves the disk naming it.
 	committed = true
+	if err = d.ops.save(ctx, newSlot); err != nil {
+		return err
+	}
 	if err = d.ops.admin(ctx, old, "drain"); err != nil {
 		return err
 	}
@@ -216,10 +221,7 @@ func (d *deployController) deploy(ctx context.Context, digest string, force bool
 		return err
 	}
 	// Nothing else appends to the history now.
-	if err = d.ops.admin(ctx, newSlot, "compact"); err != nil {
-		return err
-	}
-	return d.ops.save(ctx, newSlot)
+	return d.ops.admin(ctx, newSlot, "compact")
 }
 
 // retire drains and unloads a slot that Caddy no longer routes to. Standby

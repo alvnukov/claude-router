@@ -18,6 +18,7 @@ To use the regular `claude` command, click **Подключить Claude к ро
 in the dashboard. The same button becomes **Восстановить настройки Claude**.
 It changes only `env.ANTHROPIC_BASE_URL` in the user's Claude settings and
 keeps the original value in a private `settings.json.router-proxy-backup` file.
+`./router env` does the same connect from the terminal and prints the value.
 Restore preserves unrelated edits made since connection. `CLAUDE_CONFIG_DIR`
 is respected. Relaunch Claude Code after switching; project or managed
 settings can override the user setting. See the official
@@ -40,6 +41,13 @@ there is nothing to manage. For the rest:
     ./router stop
     ./router restart     # rebuilds first; use after editing env or Go sources
     ./router logs        # tail -f router.log
+    ./router env         # point Claude Code's settings.json at the router
+
+`start`, `stop`, `status`, `install`, `uninstall` and `env` are commands of the
+binary (`localrouter <command> -home DIR`); the script builds it and passes
+them on. `install` always rebuilds it, and `start` rebuilds one that is
+missing or older than the script; the others refuse such a binary and ask for
+`./router build`.
 
 ## Routing and pools
 
@@ -301,9 +309,16 @@ which is what the terminal actually needs, and it avoids running a proxy that
 holds an API key as root. The key stays in `env` (mode 600), read by the binary
 itself; the plist is world-readable and never sees it.
 
-Once the agent is installed, `start`, `stop` and `restart` delegate to
-`launchctl` -- a plain kill would only be undone by `KeepAlive`. `stop` unloads
-the agent, so it stays down until the next login or an explicit `start`.
+Once the agent is installed, `start`, `stop` and `restart` go through launchd
+-- a plain kill would only be undone by `KeepAlive`. `stop` unloads the agent,
+so it stays down until the next login or an explicit `start`. It returns once
+the router has exited: under launchd a stopped router gets 60 s for the
+requests in flight -- the agent's `ExitTimeOut`, the most launchd grants -- and
+is killed then. The long drain belongs to the slot deploy, which drains the old
+slot before unloading it, and to cutover, which waits for the legacy router to
+go idle. `restart`, and `install` over a loaded agent, unload it the same way
+and load it again. An agent installed before `ExitTimeOut` was added gets it at
+the next `./router install`.
 
 ### One-time move to Caddy and blue/green deploys
 
@@ -330,8 +345,8 @@ not run cutover on the public ports.
 Caddy. Identical binaries are a no-op; `./router deploy -force` switches even
 when the digest is unchanged, as does `./router restart` after cutover. A
 serving request stays on its original slot until it ends, or until
-`-drain-timeout` (15 minutes) passes; then the old slot is stopped and its own
-`ROUTER_DRAIN_TIMEOUT` shutdown ends what is left. A deploy interrupted before
+`-drain-timeout` (15 minutes) passes; then the old slot is stopped, and launchd
+ends what is left within 60 s. A deploy interrupted before
 the switch is resumed by the next one. The new slot runs the config migrations
 when it becomes active, once the old slot has stopped writing. `./router status`
 reports the active slot and launchd labels; `./router start` reloads its slot

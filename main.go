@@ -15,6 +15,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"localrouter/internal/cli"
 )
 
 // respCaptureLimit bounds how much of a response the UI keeps per request.
@@ -319,35 +321,36 @@ func newRouterHandler(cfg config, cs *configStore, st *store, hl *health, u *uiS
 }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "deploy" {
-		if err := runDeploy(context.Background(), os.Args[2:], os.Stdout, newDeployOps); err != nil {
-			log.Fatal(err)
+	serve := cli.Entry{Name: "serve", Run: func(context.Context, []string, io.Writer, io.Writer) error {
+		loadEnvFile()
+		codexAuth = newCodexAuthStore()
+		cfg := loadConfig()
+		life := newLifecycle(routerStartsStandby())
+		server := newRouterServer(cfg, life, statePath())
+		if life.mode() != modeStandby {
+			if err := server.cs.ensureProfiles(); err != nil {
+				return fmt.Errorf("profile migration: %w", err)
+			}
 		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "service-labels" {
-		if err := runServiceLabels(os.Args[2:], os.Stdout); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	if len(os.Args) > 1 && os.Args[1] == "cutover" {
-		if err := runCutover(context.Background(), os.Args[2:], os.Stdin, os.Stdout, newCutoverOps); err != nil {
-			log.Fatal(err)
-		}
-		return
-	}
-	loadEnvFile()
-	codexAuth = newCodexAuthStore()
-	cfg := loadConfig()
-	life := newLifecycle(routerStartsStandby())
-	server := newRouterServer(cfg, life, statePath())
-	if life.mode() != modeStandby {
-		if err := server.cs.ensureProfiles(); err != nil {
-			log.Fatalf("profile migration: %v", err)
-		}
-	}
-	if err := server.run(); err != nil {
-		log.Fatal(err)
-	}
+		return server.run()
+	}}
+	service := cli.Commands(cli.Router{
+		Label:        defaultRouterLabel,
+		SlotLabels:   runServiceLabels,
+		ClientURL:    routerClientURL,
+		SetClaudeURL: func(url string) error { return newClaudeProxy().set(url, true) },
+		ReadEnv:      readEnv,
+	}, cli.SystemHost())
+	table := append(append([]cli.Entry{serve}, service...),
+		cli.Entry{Name: "deploy", Run: func(ctx context.Context, args []string, stdout, _ io.Writer) error {
+			return runDeploy(ctx, args, stdout, newDeployOps)
+		}},
+		cli.Entry{Name: "cutover", Run: func(ctx context.Context, args []string, stdout, _ io.Writer) error {
+			return runCutover(ctx, args, os.Stdin, stdout, newCutoverOps)
+		}},
+		cli.Entry{Name: "service-labels", Run: func(_ context.Context, args []string, stdout, _ io.Writer) error {
+			return runServiceLabels(args, stdout)
+		}},
+	)
+	os.Exit(cli.Dispatch(context.Background(), table, os.Args[1:], os.Stdout, os.Stderr))
 }

@@ -22,6 +22,7 @@ type deployFixture struct {
 	calls      []string
 	fail       string
 	onState    func(slot string, s *deploySlotState) error // simulates launchd restarts
+	onStop     func(ctx context.Context, slot string)
 	controller *deployController
 	api        *httptest.Server
 }
@@ -124,7 +125,10 @@ func (f *deployFixture) flip(_ context.Context, slot string) error {
 	f.active = slot
 	return nil
 }
-func (f *deployFixture) stop(_ context.Context, slot string) error {
+func (f *deployFixture) stop(ctx context.Context, slot string) error {
+	if f.onStop != nil {
+		f.onStop(ctx, slot)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "stop:"+slot)
@@ -157,6 +161,9 @@ func TestDeployOrdersReadinessBeforeDrainAndSavesCaddy(t *testing.T) {
 	}
 	if strings.Index(got, "public-ready:green") > strings.Index(got, "drain:blue") || strings.Index(got, "drain:blue") > strings.Index(got, "stop:blue") {
 		t.Fatalf("wrong deploy ordering: %s", got)
+	}
+	if strings.Index(got, "save:green") > strings.Index(got, "drain:blue") {
+		t.Fatalf("the disk named green only once blue drained: %s", got)
 	}
 	if f.active != "green" || f.slots["blue"].PID != 0 {
 		t.Fatalf("incomplete deploy: %+v", f)
@@ -241,7 +248,7 @@ func TestDeployNoopSameDigestAndForcedSwitch(t *testing.T) {
 }
 
 // Once Caddy routes to the new slot and it answered, it is the router; no
-// later failure may unload it.
+// later failure may unload it or leave the disk naming the old slot.
 func TestDeployDoesNotStopNewSlotAfterDrainFailure(t *testing.T) {
 	for _, point := range []string{"drain", "drain-state", "stop:blue", "save"} {
 		t.Run(point, func(t *testing.T) {
@@ -260,6 +267,9 @@ func TestDeployDoesNotStopNewSlotAfterDrainFailure(t *testing.T) {
 			}
 			if f.active != "green" || f.slots["green"].PID == 0 || f.slots["green"].Mode != modeActive {
 				t.Fatalf("post-flip failure destroyed the serving slot: active=%s green=%+v calls=%s", f.active, *f.slots["green"], strings.Join(f.calls, ","))
+			}
+			if got := strings.Join(f.calls, ","); point != "save" && !strings.Contains(got, "save:green") {
+				t.Fatalf("post-flip failure left the disk naming blue: %s", got)
 			}
 		})
 	}
@@ -291,7 +301,7 @@ func TestDeployTreatsOldSlotRestartedDuringDrainAsDrained(t *testing.T) {
 			if err := f.controller.deploy(ctx, "new", false); err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Join(f.calls, ","); !strings.Contains(got, "stop:blue") || !strings.HasSuffix(got, "save:green") {
+			if got := strings.Join(f.calls, ","); !strings.Contains(got, "stop:blue") || !strings.HasSuffix(got, "compact:green") {
 				t.Fatalf("restarted old slot was not retired: %s", got)
 			}
 		})
@@ -368,7 +378,7 @@ func TestDeployStopsASlotThatOutlivesTheDrainTimeout(t *testing.T) {
 			if err := f.controller.deploy(ctx, "new", false); err != nil {
 				t.Fatal(err)
 			}
-			if got := strings.Join(f.calls, ","); !strings.Contains(got, "stop:"+slot) || !strings.HasSuffix(got, "save:green") {
+			if got := strings.Join(f.calls, ","); !strings.Contains(got, "stop:"+slot) || !strings.HasSuffix(got, "compact:green") {
 				t.Fatalf("slot %s that would not drain was left running: %s", slot, got)
 			}
 		})
