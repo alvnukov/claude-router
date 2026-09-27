@@ -444,3 +444,27 @@ func TestSessionOracleExplicitPseudonymException(t *testing.T) {
 		t.Fatal("mismatched real reused an explicit pseudonym")
 	}
 }
+
+func TestSessionOracleExplicitStemCollisionOnOpen(t *testing.T) {
+	const baseRules = `{"entries":[{"kind":"person","forms":["Rrzx*"],"pseudonym":"Xqzzp"}]}`
+	home := t.TempDir()
+	rules := sessionOracleRules(t, baseRules)
+	e := sessionOracleEngine(t, home, rules)
+	masked, req := sessionOracleMask(t, e, "rr-explicit-stem", "Rrzxzzx keep-sentinel")
+	if masked != "Xqzzpzzx keep-sentinel" {
+		t.Fatal("explicit stem did not expand to its configured alias")
+	}
+	if _, err := Open(home, rules, Options{Home: "/home/rr-synthetic", Hostname: "rr-host.invalid"}); err != nil {
+		t.Fatal("original explicit stem rejected on reopen", err)
+	}
+	for _, alias := range []string{"Xqzzpzzx", "xqzzpzzx"} {
+		other := `{"entries":[{"kind":"person","forms":["Rrzx*"],"pseudonym":"Xqzzp"},{"kind":"person","forms":["Rrbx"],"pseudonym":"` + alias + `"}]}`
+		if _, err := Open(home, sessionOracleRules(t, other), Options{Home: "/home/rr-synthetic", Hostname: "rr-host.invalid"}); err == nil {
+			t.Fatalf("expanded alias %q was reassigned without rejection on Open", alias)
+		}
+	}
+	back, err := e.UnmaskJSON(req, sessionOracleResponse(masked))
+	if err != nil || sessionOracleResponseText(t, back) != "Rrzxzzx keep-sentinel" {
+		t.Fatal("original stem mapping could not restore after refused rule", err)
+	}
+}

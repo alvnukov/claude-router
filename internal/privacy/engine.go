@@ -130,9 +130,11 @@ func Open(routerHome string, rules *Rules, opt Options) (*Engine, error) {
 			banned.reserved[strings.ToLower(strings.TrimSuffix(f, "*"))] = true
 		}
 	}
+	issued := make(map[string]mapRecord)
 	for _, sd := range all {
 		for _, entry := range sd.entries {
 			banned.reserved[strings.ToLower(entry.Real)] = true
+			issued[strings.ToLower(entry.Pseudo)] = entry
 			if explicitPseudonym(&r, entry.Kind, entry.Real) != entry.Pseudo {
 				banned.reserved[strings.ToLower(entry.Pseudo)] = true
 			}
@@ -140,6 +142,10 @@ func Open(routerHome string, rules *Rules, opt Options) (*Engine, error) {
 	}
 	for _, entry := range r.Entries {
 		if entry.Pseudonym != "" {
+			if prior, ok := issued[strings.ToLower(entry.Pseudonym)]; ok &&
+				(prior.Kind != entry.Kind || prior.Pseudo != entry.Pseudonym || !entryMatches(entry, prior.Real) || explicitPseudonym(&r, prior.Kind, prior.Real) != prior.Pseudo) {
+				return nil, &RejectError{Reason: "entries: pseudonym collision", Path: "entries.pseudonym"}
+			}
 			if banned.collision(entry.Pseudonym) {
 				return nil, &RejectError{Reason: "entries: pseudonym collision", Path: "entries.pseudonym"}
 			}
