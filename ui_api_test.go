@@ -213,6 +213,77 @@ func TestUIJSONUsageInvalidatedAfterAccountChange(t *testing.T) {
 		t.Fatal("in-flight refresh reported fabricated timestamp")
 	}
 }
+
+func TestUIJSONCodexLoginReplacesStaleCatalogError(t *testing.T) {
+	u, h := codexLoginUI(t)
+	p, _ := u.cs.get().local.provider("work")
+	store, err := codexStoreFor(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Model discovery ran before the second account's first login.
+	probe := u.probeProvider(p, true)
+	if probe.OK || !strings.Contains(probe.Msg, "no such file or directory") {
+		t.Fatalf("expected missing credential before login: %+v", probe)
+	}
+	u.cs.c.local.Catalog.Providers = map[string]providerCatalog{p.Name: {Error: probe.Msg}}
+	login := postForm(h, "/settings/codex/login", url.Values{"provider": {p.Name}})
+	if login.Code != http.StatusSeeOther {
+		t.Fatalf("login: %d", login.Code)
+	}
+	completeCodexCallback(t, login.Header().Get("Location"))
+	if status, problem := waitCodexLogin(t, u); status != "complete" {
+		t.Fatalf("login %s: %s", status, problem)
+	}
+	for _, fromDisk := range []bool{false, true} {
+		store.mu.Lock()
+		store.loaded = !fromDisk
+		store.mu.Unlock()
+		var state webui.State
+		if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		for _, connection := range state.Connections {
+			if connection.Name == p.Name && (!connection.Connected || connection.Error != "") {
+				t.Errorf("disk=%v: completed login still reports an error: %+v", fromDisk, connection)
+			}
+		}
+	}
+}
+
+func TestUIJSONCodexRetainsCurrentErrors(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	u, h := codexUI(t)
+	p, _ := u.cs.get().local.provider("work")
+	store, _ := codexStoreFor(p)
+	if err := store.save(usageCredential("work-account")); err != nil {
+		t.Fatal(err)
+	}
+	u.oauthTarget = p
+	cache := u.usageCache(p)
+	cache.key = accountFromCredential(usageCredential("work-account")).key()
+	for _, source := range []string{"oauth", "auth", "usage"} {
+		u.oauthError, store.authProblem, cache.view.Error = "", "", ""
+		switch source {
+		case "oauth":
+			u.oauthError = "authorization was denied"
+		case "auth":
+			store.authProblem = "войдите заново"
+		case "usage":
+			cache.view.Error = "Codex usage: HTTP 503"
+		}
+		var state webui.State
+		if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		for _, connection := range state.Connections {
+			if connection.Name == p.Name && connection.Error == "" {
+				t.Errorf("current %s error was hidden", source)
+			}
+		}
+	}
+}
+
 func TestUIJSONRouteProfileGuard(t *testing.T) {
 	u, h := testUI(t)
 	u.cs.c.local.ActiveProfile = "active"

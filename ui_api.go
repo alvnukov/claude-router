@@ -582,6 +582,9 @@ func (u *uiServer) removeUIModelOrConnection(name, key string) (webui.Result, er
 // inverting the cache -> auth lock order used by the network refresh worker.
 func (u *uiServer) codexUIState(p provider, v *webui.Connection) {
 	v.Updated = time.Time{}
+	// Model discovery may have failed before login. Its cached error does not
+	// describe the current credential, OAuth flow or subscription usage.
+	v.Error = ""
 	u.oauthMu.Lock()
 	if u.oauthTarget.Name == p.Name && u.oauthTarget.AuthID == p.AuthID {
 		v.Pending = u.oauthStatus == "pending"
