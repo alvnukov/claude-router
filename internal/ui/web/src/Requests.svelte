@@ -4,6 +4,7 @@
   import { get, fail, time, revision } from "./api";
   import ActionForm from "./ActionForm.svelte";
   import Transcript from "./Transcript.svelte";
+  import ConnectionUsage from "./ConnectionUsage.svelte";
   let { data }: { data: UIState } = $props();
   let params = new URLSearchParams(location.hash.split("?")[1] || "");
   let q = $state(params.get("q") || "");
@@ -45,6 +46,7 @@
   function filter(event?: SubmitEvent) {
     event?.preventDefault();
     offset = 0;
+    list = { ...list, sessionUsage: undefined };
     const p = new URLSearchParams();
     if (q) p.set("q", q);
     if (model) p.set("model", model);
@@ -130,6 +132,10 @@
   <label class="check"><input type="checkbox" bind:checked={unrecognized} onchange={() => filter()} />Не распознано</label
   ><button type="submit" class="primary">Найти</button>
 </form>
+{#if session && list.sessionUsage}<div class="panel session-usage-panel">
+    <div class="spread"><h2>Сессия · {session.slice(0, 12)}</h2><button class="text-button" onclick={() => { session = ""; filter(); }}>Все сессии</button></div>
+    <ConnectionUsage usage={list.sessionUsage} scope="session" />
+  </div>{/if}
 <div class="section-head">
   <h2>{list.total} запросов</h2>
   <span class="muted" aria-live="polite"
@@ -140,7 +146,7 @@
   {#each list.items as item, index}{#if index === 0 || list.items[index - 1].session !== item.session}<div
         class="request-session"
       >
-        Сессия · {item.session ? item.session.slice(0, 12) : "Без сессии"}
+        {#if item.session}<button class="text-button" onclick={() => { session = item.session; filter(); }}>Сессия · {item.session.slice(0, 12)} <span aria-hidden="true">↗</span></button>{:else}Сессия · Без сессии{/if}
       </div>{/if}<button
       class="request-row"
       onclick={() => void select(item.id)}

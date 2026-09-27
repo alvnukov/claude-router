@@ -58,6 +58,8 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	u := b.u
 	c := u.cs.get()
 	now := time.Now()
+	records := u.st.List()
+	usage := u.connectionMetrics.view(records, now, c.local.Providers)
 	out := webui.State{Now: now, Started: u.started, Lifecycle: "active", ActiveProfile: c.local.ActiveProfile, Profiles: []webui.Profile{}, Connections: []webui.Connection{}, Models: []webui.Model{}, Families: []webui.RouteRow{}, Routes: []webui.RouteRow{}, Pools: []webui.Pool{}, Efforts: append([]string{}, claudeEfforts...), Sessions: []webui.Session{}, ReloadErrors: []string{}}
 	out.DefaultPool = c.local.DefaultPool
 	if u.life != nil {
@@ -122,6 +124,10 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		}
 		v.Error = u.publicUIMessage(v.Error)
 		out.Connections = append(out.Connections, v)
+	}
+	for i := range out.Connections {
+		out.Connections[i].Usage = usage.connections[out.Connections[i].Name]
+		out.Connections[i].Usage.Since = now.Add(-24 * time.Hour)
 	}
 	for _, m := range c.local.Models {
 		out.Models = append(out.Models, webui.Model{Key: m.Key(), Provider: m.Provider, Model: m.Model, Efforts: append([]string{}, modelEffortOptions(c.local, m.Key(), infos)...)})
@@ -194,7 +200,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	}
 	sort.Slice(out.Pools, func(i, j int) bool { return out.Pools[i].Name < out.Pools[j].Name })
 	sessions := map[string]*webui.Session{}
-	for _, rec := range u.st.List() {
+	for _, rec := range records {
 		out.Summary.Total++
 		if !rec.Done() {
 			out.Summary.Pending++
@@ -230,6 +236,8 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		}
 	}
 	for _, s := range sessions {
+		s.Usage = usage.sessions[s.ID]
+		s.Usage.Since = now.Add(-24 * time.Hour)
 		out.Sessions = append(out.Sessions, *s)
 	}
 	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].LastAt.After(out.Sessions[j].LastAt) })
@@ -281,8 +289,15 @@ func (b uiBackend) Requests(q url.Values) webui.RequestList {
 	offset, _ := strconv.Atoi(q.Get("offset"))
 	offset = max(0, offset)
 	out := webui.RequestList{Items: []webui.Request{}, Limit: limit, Offset: offset}
+	records := b.u.st.List()
+	if session := q.Get("session"); session != "" {
+		now := time.Now()
+		usage := b.u.connectionMetrics.view(records, now, b.u.cs.get().local.Providers).sessions[session]
+		usage.Since = now.Add(-24 * time.Hour)
+		out.SessionUsage = &usage
+	}
 	needle := strings.ToLower(q.Get("q"))
-	for _, r := range b.u.st.List() {
+	for _, r := range records {
 		item := b.requestDTO(r)
 		if q.Get("unrecognized") == "1" && item.Unrecognized == "" {
 			continue
@@ -582,6 +597,9 @@ func (u *uiServer) removeUIModelOrConnection(name, key string) (webui.Result, er
 // inverting the cache -> auth lock order used by the network refresh worker.
 func (u *uiServer) codexUIState(p provider, v *webui.Connection) {
 	v.Updated = time.Time{}
+	// Model discovery may have failed before login. Its cached error does not
+	// describe the current credential, OAuth flow or subscription usage.
+	v.Error = ""
 	u.oauthMu.Lock()
 	if u.oauthTarget.Name == p.Name && u.oauthTarget.AuthID == p.AuthID {
 		v.Pending = u.oauthStatus == "pending"

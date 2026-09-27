@@ -35,7 +35,7 @@ func twoCodexPool() config {
 const codexStreamOK = `data: {"type":"response.output_text.delta","delta":"ok"}
 
 ` +
-	`data: {"type":"response.completed","response":{"status":"completed"}}
+	`data: {"type":"response.completed","response":{"id":"resp_test","status":"completed"}}
 
 `
 
@@ -87,6 +87,79 @@ func runLocalRequest(t *testing.T, ctx context.Context, cfg config, hl *health, 
 func runLocalSession(t *testing.T, cfg config, hl *health, session string) (*httptest.ResponseRecorder, *history.Trace) {
 	t.Helper()
 	return runLocalRequest(t, context.Background(), cfg, hl, session, false)
+}
+
+func TestCodexCacheAffinityFollowsClaudeSession(t *testing.T) {
+	seedTwoConnections(t)
+	cfg, hl := twoCodexPool(), newHealth("")
+	keys := make([]string, 0, 4)
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+		var body struct {
+			CacheKey string `json:"prompt_cache_key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.Header.Get("session-id"); got != body.CacheKey {
+			t.Errorf("session-id = %q, prompt_cache_key = %q", got, body.CacheKey)
+		}
+		keys = append(keys, body.CacheKey)
+		return usageResponse(200, codexStreamOK), nil
+	})
+	for _, session := range []string{"first", "first", "second", ""} {
+		w, _ := runLocalSession(t, cfg, hl, session)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d", w.Code)
+		}
+	}
+	if len(keys) != 4 || keys[0] == "" || keys[0] != keys[1] || keys[0] == keys[2] || keys[3] != "" {
+		t.Fatalf("cache keys must be stable, session-scoped, and absent without a session: %q", keys)
+	}
+}
+
+func TestCodexContinuesReasoningOnlyResponse(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprint(streaming), func(t *testing.T) {
+			seedTwoConnections(t)
+			calls := 0
+			old := http.DefaultTransport
+			t.Cleanup(func() { http.DefaultTransport = old })
+			http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
+				calls++
+				var request struct {
+					Input []json.RawMessage `json:"input"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Fatal(err)
+				}
+				if calls == 1 {
+					response := usageResponse(200, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[],\"encrypted_content\":\"opaque-test-state\"}}\n\n"+
+						"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"end_turn\":false,\"usage\":{\"input_tokens\":100,\"output_tokens\":5}}}\n\n")
+					response.Header.Set("x-codex-turn-state", "turn-test-state")
+					return response, nil
+				}
+				if calls != 2 {
+					t.Fatalf("unbounded continuation: %d calls", calls)
+				}
+				if r.Header.Get("x-codex-turn-state") != "turn-test-state" {
+					t.Error("lost sticky turn routing")
+				}
+				last := string(request.Input[len(request.Input)-1])
+				if !strings.Contains(last, `"encrypted_content":"opaque-test-state"`) {
+					t.Errorf("lost reasoning: %s", last)
+				}
+				return usageResponse(200, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"id\":\"msg_2\",\"role\":\"assistant\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"answer\"}]}}\n\n"+
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_2\",\"status\":\"completed\",\"end_turn\":true,\"usage\":{\"input_tokens\":105,\"output_tokens\":2}}}\n\n"), nil
+			})
+			w, _ := runLocalRequest(t, context.Background(), twoCodexPool(), newHealth(""), "continuation", streaming)
+			response := history.ParseResponse(w.Header().Get("Content-Type"), "", w.Body.Bytes(), false)
+			if calls != 2 || response.Text() != "answer" || response.StopReason != "end_turn" {
+				t.Fatalf("calls=%d text=%q stop=%q", calls, response.Text(), response.StopReason)
+			}
+		})
+	}
 }
 
 func TestCodexFailoverNewSessionSkipsLimitedFirst(t *testing.T) {

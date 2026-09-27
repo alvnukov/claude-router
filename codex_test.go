@@ -17,7 +17,94 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"localrouter/internal/history"
 )
+
+// Cache reads must survive both adapters and history capture. Responses counts
+// cached tokens inside input_tokens; Anthropic reports them separately.
+func TestCodexCachedUsageSurvivesAdapters(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		details string
+		cached  int
+		known   bool
+	}{
+		{name: "missing"},
+		{name: "missing_count", details: `,"input_tokens_details":{}`},
+		{name: "zero", details: `,"input_tokens_details":{"cached_tokens":0}`, known: true},
+		{name: "hit", details: `,"input_tokens_details":{"cached_tokens":80}`, cached: 80, known: true},
+		{name: "all_cached", details: `,"input_tokens_details":{"cached_tokens":100}`, cached: 100, known: true},
+		{name: "invalid_negative", details: `,"input_tokens_details":{"cached_tokens":-1}`},
+		{name: "invalid_excess", details: `,"input_tokens_details":{"cached_tokens":101}`},
+	} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, streaming), func(t *testing.T) {
+				upstream := "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n" +
+					fmt.Sprintf("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":7%s}}}\n\n", tc.details)
+				w := httptest.NewRecorder()
+				if streaming {
+					pipe := codexChatStream(strings.NewReader(upstream))
+					defer pipe.Close()
+					if err := streamResponse(w, pipe, "gpt-test"); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					result, err := readCodexEvents(strings.NewReader(upstream))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := blockingResponse(w, strings.NewReader(string(codexAsChatResponse(result))), "gpt-test"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				response := history.ParseResponse(w.Header().Get("Content-Type"), "", w.Body.Bytes(), false)
+				usage := response.Usage
+				cached, known := usage["cache_read_input_tokens"]
+				if usage["input_tokens"] != 100-tc.cached || usage["output_tokens"] != 7 || cached != tc.cached || known != tc.known {
+					t.Fatalf("usage = %v; want input=%d output=7 cached=%d known=%t", usage, 100-tc.cached, tc.cached, tc.known)
+				}
+			})
+		}
+	}
+}
+
+// Codex's own ev_assistant_message fixture delivers text in output_item.done
+// without delta events. Both response paths must retain that final content.
+func TestCodexCompletedMessageText(t *testing.T) {
+	for _, prefix := range []string{"", "hel", "hello"} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("prefix=%q/stream=%t", prefix, streaming), func(t *testing.T) {
+				var upstream strings.Builder
+				if prefix != "" {
+					fmt.Fprintf(&upstream, "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":%q}\n\n", prefix)
+				}
+				upstream.WriteString("data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}}\n\n")
+				upstream.WriteString("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\"}}\n\n")
+				w := httptest.NewRecorder()
+				if streaming {
+					pipe := codexChatStream(strings.NewReader(upstream.String()))
+					defer pipe.Close()
+					if err := streamResponse(w, pipe, "gpt-test"); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					result, err := readCodexEvents(strings.NewReader(upstream.String()))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := blockingResponse(w, strings.NewReader(string(codexAsChatResponse(result))), "gpt-test"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				response := history.ParseResponse(w.Header().Get("Content-Type"), "", w.Body.Bytes(), false)
+				if got := response.Text(); got != "hello" {
+					t.Fatalf("text = %q, want hello", got)
+				}
+			})
+		}
+	}
+}
 
 // The ChatGPT subscription endpoint rejects max_output_tokens with HTTP 400;
 // every request that carried it failed in production.
@@ -86,7 +173,7 @@ func TestCodexRequestAndResponse(t *testing.T) {
 	stream := strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"hello"}`,
 		`data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call-2","name":"shell","arguments":"{\"cmd\":\"ls\"}"}}`,
-		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":12,"output_tokens":3}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_test","status":"completed","usage":{"input_tokens":12,"output_tokens":3}}}`,
 	}, "\n\n")
 	result, err := readCodexEvents(strings.NewReader(stream))
 	if err != nil {
@@ -116,7 +203,7 @@ func TestCodexRequestAndResponse(t *testing.T) {
 		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"cmd\":"}`,
 		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"\"pwd\"}"}`,
 		`data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","call_id":"call-3","name":"shell","arguments":"{\"cmd\":\"pwd\"}"}}`,
-		`data: {"type":"response.completed","response":{"status":"completed"}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_test","status":"completed"}}`,
 	}, "\n\n")
 	toolOut := httptest.NewRecorder()
 	if err := streamResponse(toolOut, codexChatStream(strings.NewReader(toolStream)), "gpt-test"); err != nil {

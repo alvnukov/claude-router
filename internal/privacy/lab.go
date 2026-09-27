@@ -39,13 +39,16 @@ type previewItem struct {
 	timer   *time.Timer
 }
 type PreviewInput struct {
-	Mode    string          `json:"mode"`
-	Input   string          `json:"input"`
-	Rules   json.RawMessage `json:"rules"`
-	Enabled bool            `json:"enabled"`
-	Filter  string          `json:"filter"`
+	Mode      string          `json:"mode"`
+	Operation FilterMode      `json:"operation,omitempty"`
+	Input     string          `json:"input"`
+	Rules     json.RawMessage `json:"rules"`
+	Enabled   bool            `json:"enabled"`
+	Filter    string          `json:"filter"`
 }
 type PreviewResult struct {
+	Operation   FilterMode   `json:"operation"`
+	Detected    map[Kind]int `json:"detected"`
 	ID          string       `json:"id"`
 	Output      string       `json:"output"`
 	Expires     time.Time    `json:"expires"`
@@ -66,11 +69,14 @@ type Observation struct {
 	InputBytes   int       `json:"inputBytes"`
 	OutputBytes  int       `json:"outputBytes"`
 	Replacements int       `json:"replacements"`
+	Findings     int       `json:"findings"`
 }
 type LabState struct {
 	TrafficApplied bool          `json:"trafficApplied"`
 	Started        time.Time     `json:"started"`
 	Checks         int           `json:"checks"`
+	Detects        int           `json:"detects"`
+	Detected       map[Kind]int  `json:"detected"`
 	Restores       int           `json:"restores"`
 	Rejected       int           `json:"rejected"`
 	Masked         map[Kind]int  `json:"masked"`
@@ -84,13 +90,14 @@ func NewLab(home string) *Lab {
 	return newLab(home, previewTTL)
 }
 func newLab(home string, ttl time.Duration) *Lab {
-	return &Lab{home: home, ttl: ttl, busy: make(chan struct{}, 1), items: map[string]*previewItem{}, stats: LabState{Started: time.Now(), Masked: map[Kind]int{}, Events: []Observation{}, InputLimit: PreviewLimit, TTLSeconds: int(ttl.Seconds())}}
+	return &Lab{home: home, ttl: ttl, busy: make(chan struct{}, 1), items: map[string]*previewItem{}, stats: LabState{Started: time.Now(), Masked: map[Kind]int{}, Detected: map[Kind]int{}, Events: []Observation{}, InputLimit: PreviewLimit, TTLSeconds: int(ttl.Seconds())}}
 }
 func (l *Lab) State() LabState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	s := l.stats
 	s.Masked, s.Events, s.Active = maps.Clone(s.Masked), slices.Clone(s.Events), len(l.items)
+	s.Detected = maps.Clone(s.Detected)
 	return s
 }
 func (l *Lab) enter(ctx context.Context) error {
@@ -108,9 +115,12 @@ func (l *Lab) observe(op string, start time.Time, input int, r PreviewResult, er
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	o := Observation{At: time.Now(), Operation: op, Outcome: "ok", InputBytes: input, OutputBytes: r.OutputBytes, DurationMS: float64(time.Since(start).Microseconds()) / 1000}
-	if op == "mask" {
+	switch op {
+	case "mask":
 		l.stats.Checks++
-	} else {
+	case "detect":
+		l.stats.Detects++
+	case "restore":
 		l.stats.Restores++
 	}
 	if err != nil {
@@ -124,6 +134,10 @@ func (l *Lab) observe(op string, start time.Time, input int, r PreviewResult, er
 	for kind, count := range r.Masked {
 		l.stats.Masked[kind] += count
 		o.Replacements += count
+	}
+	for kind, count := range r.Detected {
+		l.stats.Detected[kind] += count
+		o.Findings += count
 	}
 	for _, count := range r.Unmasked {
 		o.Replacements += count
@@ -168,7 +182,12 @@ func (l *Lab) Preview(ctx context.Context, in PreviewInput) (result PreviewResul
 	}
 	defer func() { <-l.busy }()
 	start := time.Now()
-	defer func() { l.observe("mask", start, len(in.Input), result, err) }()
+	operation := effectiveMode(in.Operation)
+	if operation != ModeMask && operation != ModeDetect {
+		return result, errors.New("invalid_mode")
+	}
+	// Only fixed, validated operation labels may enter aggregate observation.
+	defer func() { l.observe(string(operation), start, len(in.Input), result, err) }()
 	body, err := previewBody(in.Mode, in.Input, PreviewLimit)
 	if err != nil {
 		return result, err
@@ -190,6 +209,25 @@ func (l *Lab) Preview(ctx context.Context, in PreviewInput) (result PreviewResul
 		}
 		in.Enabled = true // explicit isolated test, independent of profile switches
 	}
+	if operation == ModeDetect {
+		result = PreviewResult{Operation: ModeDetect, Detected: map[Kind]int{}, Masked: map[Kind]int{}, Unmasked: map[Kind]int{}, Output: in.Input, Enabled: in.Enabled, InputBytes: len(in.Input), OutputBytes: len(in.Input)}
+		if in.Enabled {
+			engine, openErr := Open("", rules, Options{ephemeral: true})
+			if openErr != nil {
+				return PreviewResult{}, errors.New("invalid_rules")
+			}
+			result.Detected, err = engine.Detect(body)
+			if err != nil {
+				return PreviewResult{}, errors.New("detect_rejected")
+			}
+		}
+		if ctx.Err() != nil {
+			return PreviewResult{}, errors.New("cancelled")
+		}
+		result.DurationMS = float64(time.Since(start).Microseconds()) / 1000
+		return result, nil
+	}
+	result.Operation, result.Detected = ModeMask, map[Kind]int{}
 	l.mu.Lock()
 	full := len(l.items) >= previewCapacity
 	l.mu.Unlock()
@@ -264,7 +302,8 @@ func (l *Lab) Restore(ctx context.Context, id, input string) (result PreviewResu
 		return result, err
 	}
 	out := body
-	result.Unmasked, result.Masked = map[Kind]int{}, map[Kind]int{}
+	result.Operation = ModeMask
+	result.Unmasked, result.Masked, result.Detected = map[Kind]int{}, map[Kind]int{}, map[Kind]int{}
 	if item.request != nil {
 		before := item.request.Stats()
 		out, err = item.engine.UnmaskJSON(item.request, body)

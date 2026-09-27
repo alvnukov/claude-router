@@ -45,18 +45,41 @@ type Target struct {
 	EffortMap map[string]string `json:"effortMap,omitempty"`
 }
 type Connection struct {
-	Name        string    `json:"name"`
-	DisplayName string    `json:"displayName"`
-	Type        string    `json:"type"`
-	BaseURL     string    `json:"baseURL"`
-	KeySet      bool      `json:"keySet"`
-	Connected   bool      `json:"connected"`
-	Pending     bool      `json:"pending"`
-	Error       string    `json:"error"`
-	Models      []string  `json:"models"`
-	Limits      []Limit   `json:"limits"`
-	Updated     time.Time `json:"updated"`
-	Refreshing  bool      `json:"refreshing"`
+	Name        string          `json:"name"`
+	DisplayName string          `json:"displayName"`
+	Type        string          `json:"type"`
+	BaseURL     string          `json:"baseURL"`
+	KeySet      bool            `json:"keySet"`
+	Connected   bool            `json:"connected"`
+	Pending     bool            `json:"pending"`
+	Error       string          `json:"error"`
+	Models      []string        `json:"models"`
+	Limits      []Limit         `json:"limits"`
+	Updated     time.Time       `json:"updated"`
+	Refreshing  bool            `json:"refreshing"`
+	Usage       ConnectionUsage `json:"usage"`
+}
+
+// ConnectionUsage contains only measured counters, never private replay state.
+// CacheInputTokens is the denominator for CachedInputTokens: missing cache
+// metadata must not dilute the hit rate with an invented zero.
+type ConnectionUsage struct {
+	Since                     time.Time `json:"since"`
+	Requests                  int       `json:"requests"`
+	MeasuredRequests          int       `json:"measuredRequests"`
+	CacheMeasuredRequests     int       `json:"cacheMeasuredRequests"`
+	InputTokens               int64     `json:"inputTokens"`
+	CacheInputTokens          int64     `json:"cacheInputTokens"`
+	CachedInputTokens         int64     `json:"cachedInputTokens"`
+	UncachedInputTokens       int64     `json:"uncachedInputTokens"`
+	CacheWriteTokens          int64     `json:"cacheWriteTokens"`
+	OutputTokens              int64     `json:"outputTokens"`
+	ReasoningTokens           int64     `json:"reasoningTokens"`
+	ReasoningMeasuredRequests int       `json:"reasoningMeasuredRequests"`
+	UpstreamCalls             int       `json:"upstreamCalls"`
+	ContinuationRequests      int       `json:"continuationRequests"`
+	InvalidRequests           int       `json:"invalidRequests"`
+	LowCache                  bool      `json:"lowCache"`
 }
 type Limit struct {
 	ID        string    `json:"id"`
@@ -105,17 +128,18 @@ type Summary struct {
 	Pending  int `json:"pending"`
 }
 type Session struct {
-	ID             string    `json:"id"`
-	Model          string    `json:"model"`
-	RequestedModel string    `json:"requestedModel"`
-	Preview        string    `json:"preview"`
-	Connection     string    `json:"connection"`
-	Effort         string    `json:"effort"`
-	Route          string    `json:"route"`
-	Pending        int       `json:"pending"`
-	LastAt         time.Time `json:"lastAt"`
-	Error          string    `json:"error"`
-	Requests       int       `json:"requests"`
+	ID             string          `json:"id"`
+	Model          string          `json:"model"`
+	RequestedModel string          `json:"requestedModel"`
+	Preview        string          `json:"preview"`
+	Connection     string          `json:"connection"`
+	Effort         string          `json:"effort"`
+	Route          string          `json:"route"`
+	Pending        int             `json:"pending"`
+	LastAt         time.Time       `json:"lastAt"`
+	Error          string          `json:"error"`
+	Requests       int             `json:"requests"`
+	Usage          ConnectionUsage `json:"usage"`
 }
 type Interception struct {
 	Enabled    bool   `json:"enabled"`
@@ -143,10 +167,11 @@ type Request struct {
 	Error        string    `json:"error"`
 }
 type RequestList struct {
-	Items  []Request `json:"items"`
-	Total  int       `json:"total"`
-	Offset int       `json:"offset"`
-	Limit  int       `json:"limit"`
+	Items        []Request        `json:"items"`
+	Total        int              `json:"total"`
+	Offset       int              `json:"offset"`
+	Limit        int              `json:"limit"`
+	SessionUsage *ConnectionUsage `json:"sessionUsage,omitempty"`
 }
 type Attempt struct {
 	Model      string `json:"model"`

@@ -13,21 +13,23 @@ export function editableRules(value: unknown): value is FilterRules {
   if ("filters" in r && (!r.filters || typeof r.filters !== "object" || Array.isArray(r.filters) || !Object.values(r.filters).every(v => typeof v === "boolean"))) return false;
   return true;
 }
-export interface FilterProfile { id: string; name: string; enabled: boolean; rules: FilterRules }
+export type PrivacyOperation = "mask" | "detect";
+export interface FilterProfile { id: string; name: string; enabled: boolean; mode?: PrivacyOperation; rules: FilterRules }
 export interface Binding { kind: string; target: string; profile: string }
 export interface PrivacyConfig { version: number; enabled: boolean; default: string; profiles: FilterProfile[]; bindings: Binding[] }
 export interface ProfileSnapshot { status: string; revision: string; config: PrivacyConfig | null }
 export interface PrivacyMetrics {
-  traffic?: {status:string;enabled:boolean;protected:number;bypassed:number;rejected:number;restored:number;active:number;buffered:boolean};
-  trafficApplied: boolean; started: string; checks: number; restores: number; rejected: number;
-  masked: Record<string, number>; active: number; inputLimit: number; ttlSeconds: number;
-  events: { at: string; operation: string; outcome: string; durationMs: number; inputBytes: number; outputBytes: number; replacements: number }[];
+  traffic?: {status:string;enabled:boolean;protected:number;detected:number;findings:Record<string,number>;bypassed:number;rejected:number;restored:number;active:number;buffered:boolean};
+  trafficApplied: boolean; started: string; checks: number; detects: number; restores: number; rejected: number;
+  masked: Record<string, number>; detected: Record<string, number>; active: number; inputLimit: number; ttlSeconds: number;
+  events: { at: string; operation: string; outcome: string; durationMs: number; inputBytes: number; outputBytes: number; replacements: number; findings: number }[];
 }
 export interface PreviewResult {
-  id: string; output: string; expires: string; roundtrip: boolean; enabled: boolean;
-  masked: Record<string, number>; unmasked: Record<string, number>; unexpected: number;
+  id: string; output: string; expires: string; roundtrip: boolean; enabled: boolean; operation?: PrivacyOperation;
+  masked: Record<string, number>; detected?: Record<string, number>; unmasked: Record<string, number>; unexpected: number;
   inputBytes: number; outputBytes: number; durationMs: number;
 }
+export const detectNotice = "Режим детекта не защищает данные. Исходные данные уходят модели без маскирования. Используйте только заведомо несекретные тестовые данные.";
 export const filters = [
   { id: "ipv4", name: "IPv4 и подсети", group: "Инфраструктура", description: "Частные, link-local и явно заданные публичные сети. Сохраняет формат и длину префикса; адреса восстанавливаются по снимку запроса." },
   { id: "ipv6", name: "IPv6 и подсети", group: "Инфраструктура", description: "ULA, link-local и заданные сети IPv6. Публичные адреса вне списка сетей остаются видимыми." },
@@ -41,6 +43,19 @@ export const filters = [
   { id: "fields", name: "Типизированные поля", group: "Контекст", description: "JSON-пути назначают тип целому строковому полю. В аргументах инструмента изменённый псевдоним или неверный тип вызывает отказ, без автокоррекции." },
   { id: "sources", name: "Вложения", group: "Секреты", description: "При sources: withhold заменяет содержимое поддержанных изображений и документов заглушкой. Вложения не анализируются и не восстанавливаются." },
 ] as const;
+export const detectDescriptions: Record<typeof filters[number]["id"], string> = {
+  ipv4: "Находит частные, link-local и явно заданные публичные адреса и сети IPv4. Значения остаются без изменений.",
+  ipv6: "Находит ULA, link-local и заданные сети IPv6. Публичные адреса вне списка сетей остаются вне детекта.",
+  mac: "Считает адреса оборудования с двоеточиями, дефисами и точками, сохраняя исходный текст.",
+  host: "Находит имена в указанных доменах и поддоменах. Для отдельных имён серверов без домена нужен словарь.",
+  email: "Находит почту в указанных доменах. Для остальных адресов нужны записи в словаре или свои шаблоны.",
+  phone: "Считает международные номера с + и 8–15 цифрами. Локальные номера требуют своих правил.",
+  dictionary: "Находит формы из явного словаря, имя пользователя и компьютера. Семантическое распознавание неизвестных имён не выполняется.",
+  secret: "Находит известные префиксы ключей, Bearer, URL-пароли и значения в контексте password / api_key. Секреты остаются открытыми.",
+  patterns: "Считает совпадения регулярных выражений RE2 по выбранной группе и типу сущности, без замены значений.",
+  fields: "Применяет тип сущности к строковым полям по настроенным JSON-путям. Исходные значения остаются без изменений.",
+  sources: "При sources: withhold считает вложения, которые правило скрыло бы. Содержимое не анализируется и не удаляется.",
+};
 export const kindName = (kind: string) => ({ ipv4:"IPv4",ipv6:"IPv6",cidr4:"IPv4 / сеть",cidr6:"IPv6 / сеть",mac:"MAC",host:"Домены",email:"Почта",phone:"Телефоны",person:"Персоны",login:"Логины",org:"Организации",unit:"Подразделения",project:"Проекты",address:"Адреса",secret:"Секреты",source:"Вложения" }[kind] || kind);
 export const demoRules: FilterRules = {
   domains: ["example.internal"],

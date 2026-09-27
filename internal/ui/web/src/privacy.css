@@ -49,6 +49,13 @@
   .privacy-hint { background:var(--field); border-left:3px solid var(--orange); padding:12px 16px; border-radius:0 8px 8px 0; font-size:12px; color:var(--muted); }
   .privacy-hint strong { color:var(--ink); }
   .privacy-hint p { margin-bottom:0; }
+  .privacy-detect-warning { margin:16px 0; padding:16px 20px; border:1px solid color-mix(in srgb,var(--orange) 55%,var(--line)); border-left:4px solid var(--orange); border-radius:10px; background:color-mix(in srgb,var(--orange) 9%,var(--raise)); }
+  .privacy-detect-warning strong { color:var(--ink); }
+  .privacy-detect-warning p { margin:7px 0; }
+  .privacy-detect-warning small { display:block; color:var(--muted); line-height:1.7; }
+  .privacy-profile-mode { display:grid; grid-template-columns:minmax(220px,1fr) 2fr; gap:20px; align-items:center; margin-bottom:20px; }
+  .privacy-profile-mode .help { margin:0; }
+  .privacy-detected { border-color:color-mix(in srgb,var(--orange) 55%,var(--line)); }
   .privacy-config-bar { display:flex; gap:18px; flex-wrap:wrap; align-items:center; background:var(--field); border:1px solid var(--line); padding:16px 20px; border-radius:10px; }
   .privacy-config-bar > :last-child { margin-left:auto; }
   .privacy-profile-layout { display:grid; grid-template-columns:210px 1fr; gap:24px; margin-top:28px; }
@@ -80,14 +87,21 @@
   .privacy-profile-actions { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; margin-top:16px; }
   .privacy-assignments { border-top:1px solid var(--line); margin-top:32px; padding-top:4px; }
   .privacy-binding { display:grid; grid-template-columns:130px minmax(0,1fr) minmax(0,1fr) auto; gap:12px; align-items:end; padding:12px 0; border-bottom:1px solid var(--line); }
-  .privacy-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin:24px 0; }
+  .privacy-metrics { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px; margin:24px 0; }
   .privacy-metrics article { border:1px solid var(--line); border-radius:12px; background:var(--raise); padding:20px; display:flex; flex-direction:column; gap:8px; }
   .privacy-metrics article > strong { font-size:36px; font-weight:550; letter-spacing:-1px; color:var(--teal); }
   .privacy-metrics article > strong small { font-size:18px; color:var(--muted); }
   .privacy-metrics article > span { color:var(--muted); font-size:11px; }
   .privacy-metrics article.has-errors > strong { color:var(--orange); }
+  .privacy-metrics article.is-detect > strong { color:var(--orange); }
   .privacy-observability { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
   .privacy-observability > .panel { margin:0; }
+  .privacy-facts-panel { grid-column:1/-1; }
+  .privacy-traffic-findings { padding:14px 18px; border:1px solid var(--line); border-radius:10px; background:var(--field); }
+  .privacy-traffic-findings h4 { margin:0; font-size:13px; font-weight:550; }
+  .privacy-traffic-findings .privacy-kind-list { margin-bottom:0; }
+  .privacy-detect-chart .privacy-meter meter { accent-color:var(--orange); }
+  .privacy-detect-chart .privacy-meter meter::-webkit-meter-optimum-value { background:var(--orange); }
   .privacy-meter { display:grid; grid-template-columns:110px 1fr 45px; gap:14px; align-items:center; margin:16px 0; font-size:12px; }
   .privacy-meter meter { width:100%; height:9px; accent-color:var(--teal); }
   .privacy-meter meter::-webkit-meter-bar { background:var(--field); border:0; }
@@ -103,9 +117,9 @@
   .privacy-events th,.privacy-events td { padding:12px 16px 12px 0; border-bottom:1px solid var(--line); }
 }
 @layer responsive {
-  @media(max-width:1100px) { .privacy-filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .privacy-profile-layout { grid-template-columns:180px 1fr; } }
+  @media(max-width:1100px) { .privacy-metrics { grid-template-columns:repeat(3,minmax(0,1fr)); } .privacy-filter-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .privacy-profile-layout { grid-template-columns:180px 1fr; } }
   @media(max-width:760px) {
-    .privacy-editors,.privacy-observability { grid-template-columns:1fr; }
+    .privacy-editors,.privacy-observability,.privacy-profile-mode { grid-template-columns:1fr; }
     .privacy-status { align-items:flex-start; flex-wrap:wrap; padding:18px; gap:12px; }
     .privacy-status > div:nth-child(2) { flex:1; min-width:180px; }
     .privacy-file-state { width:100%; border-left:0; border-top:1px solid var(--line); padding:12px 0 0; margin-left:0; }

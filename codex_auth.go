@@ -371,6 +371,9 @@ func (s *codexAuthStore) doWithReauth(client *http.Client, req *http.Request) (*
 	if err != nil {
 		return nil, err
 	}
+	if credential.Tokens.AccountID != req.Header.Get("ChatGPT-Account-Id") {
+		return nil, errors.New("аккаунт Codex изменился; повторите запрос")
+	}
 	retry := req.Clone(req.Context())
 	retry.Body, err = req.GetBody()
 	if err != nil {

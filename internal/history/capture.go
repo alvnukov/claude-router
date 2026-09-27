@@ -38,12 +38,14 @@ type Record struct {
 	ReqBody            []byte
 
 	// Local path only.
-	OpenAIBody []byte
-	TrimBefore int
-	TrimAfter  int
-	TrimNotes  []string
-	Served     string
-	Attempts   []Attempt
+	OpenAIBody    []byte
+	ProviderState json.RawMessage `json:",omitempty"` // private opaque protocol replay, never exposed by the UI
+	UsageKnown    *bool           `json:",omitempty"` // nil for records written before upstream usage provenance
+	TrimBefore    int
+	TrimAfter     int
+	TrimNotes     []string
+	Served        string
+	Attempts      []Attempt
 
 	Status        int
 	RespCT        string
@@ -88,12 +90,14 @@ func (r *Record) Failed() bool {
 // is written before the response starts and read only after the handler
 // returns, so it needs no lock.
 type Trace struct {
-	OpenAIBody []byte
-	TrimBefore int
-	TrimAfter  int
-	TrimNotes  []string
-	Served     string    // model that produced the response
-	Attempts   []Attempt // every model tried, in order
+	OpenAIBody    []byte
+	ProviderState json.RawMessage
+	UsageKnown    *bool
+	TrimBefore    int
+	TrimAfter     int
+	TrimNotes     []string
+	Served        string    // model that produced the response
+	Attempts      []Attempt // every model tried, in order
 }
 
 type Attempt struct {
@@ -306,6 +310,11 @@ func (s *Store) Finish(id string, rw *Recorder, tr *Trace, incoming ...*RequestC
 		r.Resp = parsed
 		if tr != nil {
 			r.OpenAIBody = tr.OpenAIBody
+			r.ProviderState = append(json.RawMessage(nil), tr.ProviderState...)
+			if tr.UsageKnown != nil {
+				known := *tr.UsageKnown
+				r.UsageKnown = &known
+			}
 			r.TrimBefore = tr.TrimBefore
 			r.TrimAfter = tr.TrimAfter
 			r.TrimNotes = tr.TrimNotes

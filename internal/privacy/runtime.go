@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,14 +26,16 @@ type Runtime struct {
 	stats    RuntimeState
 }
 type RuntimeState struct {
-	Status    string `json:"status"`
-	Enabled   bool   `json:"enabled"`
-	Protected int    `json:"protected"`
-	Bypassed  int    `json:"bypassed"`
-	Rejected  int    `json:"rejected"`
-	Restored  int    `json:"restored"`
-	Active    int    `json:"active"`
-	Buffered  bool   `json:"buffered"`
+	Status    string       `json:"status"`
+	Enabled   bool         `json:"enabled"`
+	Protected int          `json:"protected"`
+	Detected  int          `json:"detected"`
+	Findings  map[Kind]int `json:"findings"`
+	Bypassed  int          `json:"bypassed"`
+	Rejected  int          `json:"rejected"`
+	Restored  int          `json:"restored"`
+	Active    int          `json:"active"`
+	Buffered  bool         `json:"buffered"`
 }
 type Policy struct {
 	config  *Profiles
@@ -48,7 +51,7 @@ type Exchange struct {
 }
 
 func NewRuntime(home string) *Runtime {
-	return &Runtime{home: home, stats: RuntimeState{Status: "missing", Buffered: true}}
+	return &Runtime{home: home, stats: RuntimeState{Status: "missing", Buffered: true, Findings: map[Kind]int{}}}
 }
 func (r *Runtime) Snapshot() (*Policy, error) {
 	r.mu.Lock()
@@ -86,7 +89,12 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 			}
 			sum := sha256.Sum256(append([]byte("transport-v1\x00"), profile.Rules...))
 			namespace := filepath.Join(r.home, "privacy-runtime", profile.ID+"-"+hex.EncodeToString(sum[:]))
-			engine, err := Open(namespace, rules, Options{})
+			opt := Options{}
+			if effectiveMode(profile.Mode) == ModeDetect {
+				namespace = ""
+				opt.ephemeral = true
+			}
+			engine, err := Open(namespace, rules, opt)
 			if err != nil {
 				r.stats.Status = "invalid"
 				r.stats.Enabled = false
@@ -99,9 +107,15 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 	r.stats.Enabled = p.Enabled()
 	return p, nil
 }
-func (p *Policy) Enabled() bool        { return p != nil && p.config != nil && p.config.Enabled }
-func (r *Runtime) State() RuntimeState { r.mu.Lock(); defer r.mu.Unlock(); return r.stats }
-func (r *Runtime) Reject()             { r.mu.Lock(); r.stats.Rejected++; r.mu.Unlock() }
+func (p *Policy) Enabled() bool { return p != nil && p.config != nil && p.config.Enabled }
+func (r *Runtime) State() RuntimeState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state := r.stats
+	state.Findings = maps.Clone(state.Findings)
+	return state
+}
+func (r *Runtime) Reject() { r.mu.Lock(); r.stats.Rejected++; r.mu.Unlock() }
 func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) {
 	resolution := p.config.Resolve(target)
 	if !resolution.Enabled {
@@ -113,6 +127,19 @@ func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) 
 	e := p.engines[resolution.Profile]
 	if e == nil || len(body) > TrafficInputLimit {
 		return nil, nil, errTraffic
+	}
+	if resolution.Mode == ModeDetect {
+		counts, err := e.Detect(body)
+		if err != nil {
+			return nil, nil, errTraffic
+		}
+		p.runtime.mu.Lock()
+		p.runtime.stats.Detected++
+		for kind, count := range counts {
+			p.runtime.stats.Findings[kind] += count
+		}
+		p.runtime.mu.Unlock()
+		return nil, body, nil
 	}
 	if err := e.checkTransport(body); err != nil {
 		return nil, nil, errTraffic

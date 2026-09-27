@@ -22,8 +22,24 @@ type FilterProfile struct {
 	ID      string          `json:"id"`
 	Name    string          `json:"name"`
 	Enabled bool            `json:"enabled"`
+	Mode    FilterMode      `json:"mode,omitempty"`
 	Rules   json.RawMessage `json:"rules"`
 }
+
+type FilterMode string
+
+const (
+	ModeMask   FilterMode = "mask"
+	ModeDetect FilterMode = "detect"
+)
+
+func effectiveMode(mode FilterMode) FilterMode {
+	if mode == "" {
+		return ModeMask
+	}
+	return mode
+}
+
 type Binding struct {
 	Kind    string `json:"kind"`
 	Target  string `json:"target"`
@@ -35,9 +51,10 @@ type Target struct {
 	Provider string `json:"provider"`
 }
 type Resolution struct {
-	Profile string `json:"profile"`
-	Via     string `json:"via"`
-	Enabled bool   `json:"enabled"`
+	Profile string     `json:"profile"`
+	Via     string     `json:"via"`
+	Enabled bool       `json:"enabled"`
+	Mode    FilterMode `json:"mode"`
 }
 
 var profileID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
@@ -60,6 +77,9 @@ func ParseProfiles(body []byte) (*Profiles, error) {
 	}
 	ids := map[string]bool{}
 	for _, p := range c.Profiles {
+		if mode := effectiveMode(p.Mode); mode != ModeMask && mode != ModeDetect {
+			return nil, invalid
+		}
 		if !profileID.MatchString(p.ID) || ids[p.ID] || strings.TrimSpace(p.Name) == "" || len(p.Name) > 160 || len(p.Rules) > 64<<10 {
 			return nil, invalid
 		}
@@ -92,7 +112,7 @@ func ParseProfiles(body []byte) (*Profiles, error) {
 // after routing. Failover must resolve again, before sending any request bytes.
 // Enabled=false is an explicit bypass, including a disabled matching profile.
 func (c *Profiles) Resolve(t Target) Resolution {
-	r := Resolution{Profile: c.Default, Via: "default"}
+	r := Resolution{Profile: c.Default, Via: "default", Mode: ModeMask}
 	for _, match := range []struct{ kind, value string }{{"model", t.Model}, {"pool", t.Pool}, {"provider", t.Provider}} {
 		found := false
 		for _, b := range c.Bindings {
@@ -108,6 +128,7 @@ func (c *Profiles) Resolve(t Target) Resolution {
 	for _, p := range c.Profiles {
 		if p.ID == r.Profile {
 			r.Enabled = c.Enabled && p.Enabled
+			r.Mode = effectiveMode(p.Mode)
 			return r
 		}
 	}

@@ -32,7 +32,26 @@ export interface Connection {
   models: string[];
   limits: Limit[];
   updated: string;
+  usage?: ConnectionUsage;
   catalog?: { id: string; name?: string }[];
+}
+export interface ConnectionUsage {
+  since: string;
+  requests: number;
+  measuredRequests: number;
+  cacheMeasuredRequests: number;
+  inputTokens: number;
+  cacheInputTokens: number;
+  cachedInputTokens: number;
+  uncachedInputTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  reasoningMeasuredRequests: number;
+  upstreamCalls: number;
+  continuationRequests: number;
+  invalidRequests: number;
+  lowCache: boolean;
 }
 export interface Model {
   key: string;
@@ -61,6 +80,7 @@ export interface Pool {
   }[];
 }
 export interface Session {
+  usage?: ConnectionUsage;
   requestedModel: string;
   preview: string;
   connection: string;
@@ -112,6 +132,7 @@ export interface RequestItem {
   error: string;
 }
 export interface RequestList {
+  sessionUsage?: ConnectionUsage;
   items: RequestItem[];
   total: number;
   offset: number;

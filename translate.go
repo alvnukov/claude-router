@@ -56,17 +56,18 @@ type imageSource struct {
 // ---- OpenAI request shapes ----
 
 type openaiRequest struct {
-	Model           string         `json:"model"`
-	Messages        []openaiMsg    `json:"messages"`
-	Tools           []openaiTool   `json:"tools,omitempty"`
-	ToolChoice      any            `json:"tool_choice,omitempty"`
-	MaxTokens       int            `json:"max_tokens,omitempty"`
-	Temperature     *float64       `json:"temperature,omitempty"`
-	TopP            *float64       `json:"top_p,omitempty"`
-	Stop            []string       `json:"stop,omitempty"`
-	Stream          bool           `json:"stream,omitempty"`
-	StreamOpts      *streamOptions `json:"stream_options,omitempty"`
-	ReasoningEffort string         `json:"reasoning_effort,omitempty"`
+	Model             string         `json:"model"`
+	Messages          []openaiMsg    `json:"messages"`
+	Tools             []openaiTool   `json:"tools,omitempty"`
+	ToolChoice        any            `json:"tool_choice,omitempty"`
+	MaxTokens         int            `json:"max_tokens,omitempty"`
+	Temperature       *float64       `json:"temperature,omitempty"`
+	TopP              *float64       `json:"top_p,omitempty"`
+	Stop              []string       `json:"stop,omitempty"`
+	Stream            bool           `json:"stream,omitempty"`
+	StreamOpts        *streamOptions `json:"stream_options,omitempty"`
+	ReasoningEffort   string         `json:"reasoning_effort,omitempty"`
+	ParallelToolCalls *bool          `json:"parallel_tool_calls,omitempty"`
 }
 
 type streamOptions struct {
@@ -150,6 +151,10 @@ func toolResultText(raw json.RawMessage) string {
 }
 
 func toOpenAI(req anthropicRequest, model string) (openaiRequest, error) {
+	return toOpenAIWithToolImages(req, model, false)
+}
+
+func toOpenAIWithToolImages(req anthropicRequest, model string, toolImages bool) (openaiRequest, error) {
 	out := openaiRequest{
 		Model:       model,
 		MaxTokens:   req.MaxTokens,
@@ -176,10 +181,18 @@ func toOpenAI(req anthropicRequest, model string) (openaiRequest, error) {
 		// whatever else the same user turn carried.
 		for _, blk := range blocks {
 			if blk.Type == "tool_result" {
+				var content any = toolResultText(blk.Content)
+				if toolImages {
+					var err error
+					content, err = codexToolContent(blk.Content)
+					if err != nil {
+						return out, err
+					}
+				}
 				out.Messages = append(out.Messages, openaiMsg{
 					Role:       "tool",
 					ToolCallID: blk.ToolUseID,
-					Content:    toolResultText(blk.Content),
+					Content:    content,
 				})
 			}
 		}
@@ -258,6 +271,13 @@ func toOpenAI(req anthropicRequest, model string) (openaiRequest, error) {
 	}
 
 	out.ToolChoice = convertToolChoice(req.ToolChoice)
+	var choice struct {
+		DisableParallel *bool `json:"disable_parallel_tool_use"`
+	}
+	if json.Unmarshal(req.ToolChoice, &choice) == nil && choice.DisableParallel != nil {
+		parallel := !*choice.DisableParallel
+		out.ParallelToolCalls = &parallel
+	}
 	return out, nil
 }
 

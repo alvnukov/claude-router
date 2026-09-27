@@ -103,6 +103,58 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 	}
 }
 func fmtHeader(h http.Header) string { b, _ := json.Marshal(h); return string(b) }
+
+func TestPrivacyTrafficDetectOnlyPreservesOriginalData(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		t.Run(map[bool]string{false: "anthropic", true: "openai"}[local], func(t *testing.T) {
+			var calls atomic.Int32
+			const responseText = "password=" + trafficCanary + " <secret:credential:deadbeef>"
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				b, _ := io.ReadAll(r.Body)
+				if !bytes.Contains(b, []byte(trafficCanary)) {
+					t.Error("detect-only masked request")
+				}
+				if !local && string(b) != trafficBody {
+					t.Error("direct detect-only request bytes changed")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if local {
+					_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": responseText}, "finish_reason": "stop"}}})
+				} else {
+					_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": responseText}}})
+				}
+			}))
+			defer up.Close()
+			h, history, home := trafficFixture(t, up, local)
+			path := filepath.Join(home, "privacy-profiles.json")
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b = bytes.Replace(b, []byte(`"rules":`), []byte(`"mode":"detect","rules":`), 1)
+			if err = os.WriteFile(path, b, 0600); err != nil {
+				t.Fatal(err)
+			}
+			w := trafficCall(h, "/v1/messages", trafficBody)
+			var response struct {
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			}
+			if json.Unmarshal(w.Body.Bytes(), &response) != nil || w.Code != 200 || len(response.Content) != 1 || response.Content[0].Text != responseText || calls.Load() != 1 {
+				t.Fatalf("detect output altered: status=%d body=%s", w.Code, w.Body)
+			}
+			if len(history.List()) != 0 {
+				t.Fatal("detect-only retained input in history")
+			}
+			if _, err := os.Stat(filepath.Join(home, "privacy-runtime")); !os.IsNotExist(err) {
+				t.Fatal("detect-only created dictionaries")
+			}
+		})
+	}
+}
+
 func TestPrivacyTrafficFailClosedRoutesAndConfig(t *testing.T) {
 	var seen atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +360,7 @@ func TestPrivacyTrafficCodexJSONAndStream(t *testing.T) {
 			t.Fatal("bad Codex input")
 		}
 		delta, _ := json.Marshal(map[string]string{"type": "response.output_text.delta", "delta": req.Input[0].Content})
-		return usageResponse(200, "data: "+string(delta)+"\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"), nil
+		return usageResponse(200, "data: "+string(delta)+"\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp-private\",\"status\":\"completed\"}}\n\n"), nil
 	})
 	for _, stream := range []bool{false, true} {
 		home := t.TempDir()

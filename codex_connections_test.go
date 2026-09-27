@@ -254,7 +254,7 @@ func TestCodexRequestsUseTheirOwnAccount(t *testing.T) {
 		return usageResponse(200, `{"ok":true}`), nil
 	})
 	for _, p := range []provider{a, b} {
-		res := tryModel(httptest.NewRequest("POST", "/", nil), config{firstByte: time.Second}, candidate{Key: p.Name + "/m", Provider: p}, []byte(`{}`), false)
+		res := tryModel(httptest.NewRequest("POST", "/", nil), config{firstByte: time.Second}, candidate{Key: p.Name + "/m", Provider: p}, []byte(`{}`), false, "")
 		if res.err != nil {
 			t.Fatal(res.err)
 		}

@@ -1,0 +1,78 @@
+name: Codex protocol compatibility
+
+on:
+  pull_request:
+    paths:
+      - 'internal/protocolcheck/**'
+      - 'cmd/codex-protocol-check/**'
+      - 'internal/providers/**'
+      - 'internal/history/**'
+      - 'codex*.go'
+      - 'local*.go'
+      - 'translate.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/codex-protocol.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'internal/protocolcheck/**'
+      - 'cmd/codex-protocol-check/**'
+      - 'internal/providers/**'
+      - 'internal/history/**'
+      - 'codex*.go'
+      - 'local*.go'
+      - 'translate.go'
+      - '.github/workflows/codex-protocol.yml'
+  schedule:
+    - cron: '23 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test detector and adapter contracts
+        run: |
+          go test ./internal/protocolcheck ./cmd/codex-protocol-check ./internal/providers/... -count=1
+          go test . -run 'TestCodex|TestGenericUsageProvenance' -count=1
+      - name: Read pinned upstream revision
+        id: baseline
+        shell: bash
+        run: |
+          revision=$(jq -er '.revision | select(test("^[0-9a-f]{40}$"))' internal/protocolcheck/baseline.json)
+          printf 'revision=%s\n' "$revision" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v5
+        with:
+          repository: openai/codex
+          ref: ${{ steps.baseline.outputs.revision }}
+          path: .codex-protocol-baseline
+          persist-credentials: false
+      - name: Verify reviewed baseline
+        shell: bash
+        run: |
+          go build -o "$RUNNER_TEMP/codex-protocol-check" ./cmd/codex-protocol-check
+          "$RUNNER_TEMP/codex-protocol-check" -codex .codex-protocol-baseline
+      - uses: actions/checkout@v5
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        with:
+          repository: openai/codex
+          ref: main
+          path: .codex-protocol-latest
+          persist-credentials: false
+      - name: Detect upstream protocol drift
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          git -C .codex-protocol-latest log -1 --format='Upstream %H (%cs): %s'
+          "$RUNNER_TEMP/codex-protocol-check" -codex .codex-protocol-latest
