@@ -58,6 +58,38 @@ func TestRegressionCatalogProviderOracleRejectsMutationAfterStartup(t *testing.T
 	}
 }
 
+func TestRegressionCatalogProviderFileRejectsPostSnapshotAuthMutation(t *testing.T) {
+	home := t.TempDir()
+	planned := []catalogProviderSpec{{Name: "fixture-a", BaseURL: "http://127.0.0.1:19001/v1", APIKey: "fixture-local"}}
+	stand := &testStand{home: home, plannedProviders: append([]catalogProviderSpec(nil), planned...)}
+	file := filepath.Join(home, "providers.json")
+	writeProviders := func(providers []catalogProviderSpec) {
+		t.Helper()
+		body, err := json.Marshal(struct {
+			Providers []catalogProviderSpec `json:"providers"`
+		}{Providers: providers})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeProviders(planned)
+	if err := stand.checkCatalogProviders(); err != nil {
+		t.Fatal(err)
+	}
+	for _, changed := range []catalogProviderSpec{
+		{Name: "fixture-a", BaseURL: planned[0].BaseURL, APIKey: "changed"},
+		{Name: "fixture-a", BaseURL: planned[0].BaseURL, APIKey: planned[0].APIKey, AuthID: "changed"},
+	} {
+		writeProviders([]catalogProviderSpec{changed})
+		if err := stand.checkCatalogProviders(); err == nil {
+			t.Fatal("post-snapshot auth mutation passed the persisted provider oracle")
+		}
+	}
+}
+
 func TestRegressionCatalogProbeJournalDoesNotPolluteRouteAttempts(t *testing.T) {
 	stub := newUpstreamStub(t, []byte(`{"choices":[]}`))
 	stub.name, stub.probes = "fixture-a", new(startupJournal)

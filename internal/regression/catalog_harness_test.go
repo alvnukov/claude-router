@@ -130,19 +130,23 @@ func compareCatalogProviders(observed, expected []catalogProviderSpec) error {
 	return nil
 }
 
-func (s *testStand) expectedCatalogProbes(t *testing.T) []startupProbe {
-	t.Helper()
+func (s *testStand) checkCatalogProviders() error {
 	body, err := os.ReadFile(filepath.Join(s.home, "providers.json"))
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
 	var config struct {
 		Providers []catalogProviderSpec `json:"providers"`
 	}
 	if err := json.Unmarshal(body, &config); err != nil {
-		t.Fatal(err)
+		return err
 	}
-	if err := compareCatalogProviders(config.Providers, s.plannedProviders); err != nil {
+	return compareCatalogProviders(config.Providers, s.plannedProviders)
+}
+
+func (s *testStand) expectedCatalogProbes(t *testing.T) []startupProbe {
+	t.Helper()
+	if err := s.checkCatalogProviders(); err != nil {
 		t.Fatalf("router mutated the immutable fixture provider list: %v", err)
 	}
 	want := []startupProbe{{Target: "official", Method: http.MethodGet, URI: "/overview"}}
@@ -181,6 +185,9 @@ func (s *testStand) awaitCatalog(t *testing.T, prior time.Time, before int, want
 			}
 			catalog := s.catalogState(t)
 			if catalog.CheckedAt.After(prior) {
+				if err := s.checkCatalogProviders(); err != nil {
+					t.Fatalf("router mutated the immutable fixture provider list after catalog persistence: %v", err)
+				}
 				if len(catalog.Anthropic) != 1 || catalog.Anthropic[0] != "claude-opus-5-5" || catalog.AnthropicUpdated.IsZero() {
 					t.Fatal("synthetic official catalog was not parsed and persisted")
 				}
