@@ -1,0 +1,31 @@
+name: Private router regression (manual)
+
+on:
+  workflow_dispatch:
+
+# Defense in depth only: the runner must independently prove no token reaches jobs.
+permissions: {}
+
+jobs:
+  regression:
+    runs-on: router-wsl-test
+    steps:
+      - name: Run staged regression in the isolated image
+        shell: bash
+        env:
+          ROUTER_CI_EVENT: ${{ github.event_name }}
+          ROUTER_CI_REF: ${{ github.ref }}
+          ROUTER_CI_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$ROUTER_CI_EVENT" != workflow_dispatch ] ||
+             [ "$ROUTER_CI_REF" != refs/heads/main ] ||
+             ! [[ "$ROUTER_CI_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'status=blocked reason=untrusted-ref\n' >&2
+            exit 78
+          fi
+          exec /usr/local/bin/router-ci-entrypoint \
+            --event-sha "$ROUTER_CI_SHA" \
+            --proof /run/router-ci/proof.json \
+            --source /workspace/source \
+            --output /workspace/output
