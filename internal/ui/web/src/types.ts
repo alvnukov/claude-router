@@ -91,6 +91,9 @@ export interface SessionRoute {
   pending: number;
 }
 export interface Session {
+  title?: string;
+  project?: string;
+  branch?: string;
   routes?: SessionRoute[];
   usage?: ConnectionUsage;
   requestedModel: string;

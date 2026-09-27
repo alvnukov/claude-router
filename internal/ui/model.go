@@ -140,6 +140,9 @@ type SessionRoute struct {
 }
 
 type Session struct {
+	Title          string          `json:"title"`
+	Project        string          `json:"project"`
+	Branch         string          `json:"branch"`
 	Routes         []SessionRoute  `json:"routes"`
 	ID             string          `json:"id"`
 	Model          string          `json:"model"`

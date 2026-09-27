@@ -83,6 +83,25 @@ export async function runSessionChecks(browser, base) {
     await expect(page.locator('.request-list')).toHaveAttribute('aria-busy', 'false');
     await expect(page.locator('.request-row')).toHaveCount(0);
   });
+  await check('readable session names keep identity across navigation', async (page, state) => {
+    Object.assign(state.sessions[0], {title: 'Разобрать кеш', project: 'coordinator', branch: 'main'});
+    Object.assign(state.sessions[1], {title: 'Название второй сессии с очень длинным описанием задачи и проверкой переносов', project: 'another-project', branch: 'codex/session-names'});
+    await page.route('**/api/ui/requests?*', route => route.fulfill({json: requestList('session-a')}));
+    await page.goto(base);
+    await expect(page.locator('.session-node').first()).toContainText('Разобрать кеш');
+    await expect(page.locator('.session-node').first()).toContainText('coordinator · main');
+    await expect(page.locator('.session-node').first()).toContainText('session-');
+    await expect(page.locator('.session-row').first()).toContainText('Разобрать кеш');
+    await page.setViewportSize({width: 390, height: 844});
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'readable names overflow on mobile');
+    await page.screenshot({path: '/tmp/router-session-names-mobile.png', fullPage: true});
+    await page.setViewportSize({width: 1440, height: 1000});
+    await page.screenshot({path: '/tmp/router-session-names-desktop.png', fullPage: true});
+    await page.locator('.session-node').first().click();
+    await expect(page.locator('.request-session')).toContainText('Разобрать кеш');
+    await expect(page.locator('.filters select').nth(2)).toHaveValue('session-a');
+    assert.match(await page.locator('.filters select').nth(2).evaluate(el => el.selectedOptions[0].textContent), /Разобрать кеш/);
+  });
   await check('every recorded route has its own node and wire', async (page, state) => {
     state.sessions = [state.sessions[0]];
     await page.goto(base);
