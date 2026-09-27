@@ -56,7 +56,14 @@ func TestPrivacyTrafficClaudeBetaQuery(t *testing.T) {
 							t.Fatal(err)
 						}
 					}
-					response := trafficCall(h, path+"?beta=true", trafficBody)
+					body := trafficBody
+					if mode == "detect" {
+						// These controls were observed in the installed Claude Code's
+						// first request. Detect must preserve them; mask support is
+						// a separate, currently unsupported transport contract.
+						body = strings.TrimSuffix(body, "}") + `,"thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`
+					}
+					response := trafficCall(h, path+"?beta=true", body)
 					wantCalls := int32(1)
 					if local && strings.HasSuffix(path, "count_tokens") {
 						wantCalls = 0
