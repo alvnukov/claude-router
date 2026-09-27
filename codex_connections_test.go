@@ -11,6 +11,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"localrouter/internal/catalogstartup"
+	"localrouter/internal/codextesttransport"
 )
 
 const testAuthA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -206,6 +209,15 @@ func TestCodexActionsRejectUnknownProvider(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Dir(codexAuth.path)); len(entries) != 0 {
 		t.Fatalf("files written: %v", entries)
 	}
+	if codextesttransport.DisableBackground() {
+		r := httptest.NewRequest(http.MethodPost, "http://localhost/settings/codex/login", strings.NewReader("provider=codex"))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Location") != "" {
+			t.Fatalf("tagged login redirected to a real provider: %d %q", w.Code, w.Header().Get("Location"))
+		}
+	}
 }
 
 func TestCodexImportTargetsNamedProvider(t *testing.T) {
@@ -283,6 +295,17 @@ func TestCodexProbeUsesOwnAccount(t *testing.T) {
 		mu.Unlock()
 		return usageResponse(200, `{"models":[]}`), nil
 	})
+	if codextesttransport.DisableBackground() {
+		deps := catalogstartup.Production(anthropicCatalogURL, codexBaseURL)
+		defer deps.Close()
+		deps.SetCodexTestTransport(codextesttransport.AuthTransport())
+		u.catalog = &deps
+		probe := u.probeProvider(a, true)
+		if probe.OK || len(seen) != 0 {
+			t.Fatalf("tagged probe reached the default transport: %+v calls=%d", probe, len(seen))
+		}
+		return
+	}
 	u.probeProvider(a, true)
 	u.probeProvider(b, true)
 	if strings.Join(seen, ",") != "acct-a,acct-b" {

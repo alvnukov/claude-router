@@ -1,4 +1,4 @@
-//go:build catalogsynthetic
+//go:build catalogsynthetic && !router_codex_loopback
 
 package catalogstartup
 
@@ -76,6 +76,8 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer deps.Close()
+	rejected := new(blockedTransport)
+	deps.SetCodexTestTransport(rejected)
 	if client := deps.SyntheticAuthClient(20 * time.Second); client == nil {
 		t.Fatal("synthetic Codex credential refresh is not isolated")
 	} else if resp, err := client.Get("https://auth.openai.com/oauth/token"); err == nil {
@@ -129,6 +131,9 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
+	if rejected.calls != 0 {
+		t.Fatal("test transport bypassed the synthetic catalog guard")
+	}
 	for _, want := range []string{"/overview", "/v1/models", "/models?client_version=0.156.0"} {
 		if got := <-requests; got != want {
 			t.Fatalf("request = %q, want %q", got, want)

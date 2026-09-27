@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/limits"
 )
 
@@ -169,6 +170,9 @@ func fetchCodexUsage(ctx context.Context, client *http.Client, c codexCredential
 	}
 	bounded := *client
 	bounded.Timeout = 10 * time.Second
+	if codextesttransport.DisableBackground() {
+		bounded.Transport = codextesttransport.AuthTransport()
+	}
 	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	response, err := bounded.Do(req)
 	if err != nil {

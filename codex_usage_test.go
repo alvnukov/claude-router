@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 )
 
@@ -84,6 +85,12 @@ func TestCodexUsageRequestIsReadOnlyAndSanitized(t *testing.T) {
 		}
 		return usageResponse(200, " \n{} "), nil
 	})}
+	if codextesttransport.DisableBackground() {
+		if _, err := fetchCodexUsage(t.Context(), client, c); err == nil || calls != 0 {
+			t.Fatalf("tagged usage reached the injected transport: calls=%d err=%v", calls, err)
+		}
+		return
+	}
 	if _, err := fetchCodexUsage(t.Context(), client, c); err != nil || calls != 1 {
 		t.Fatal("fetch failed")
 	}

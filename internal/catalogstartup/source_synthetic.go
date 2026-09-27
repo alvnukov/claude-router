@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/codextesttransport"
 )
 
 const syntheticManifestEnv = "ROUTER_CATALOG_SYNTHETIC_MANIFEST"
@@ -47,6 +49,9 @@ type syntheticTransport struct {
 // ForProcess is a separate test binary source. No production build reads the
 // manifest, and a synthetic build without one cannot fall back to the internet.
 func ForProcess(_, _ string) (Dependencies, error) {
+	if codextesttransport.DisableBackground() {
+		return Dependencies{}, errors.New("incompatible synthetic build tags: catalogsynthetic and router_codex_loopback")
+	}
 	manifest, err := loadSyntheticManifest(os.Getenv(syntheticManifestEnv))
 	if err != nil {
 		return Dependencies{}, err

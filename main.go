@@ -19,6 +19,7 @@ import (
 
 	"localrouter/internal/catalogstartup"
 	"localrouter/internal/cli"
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 )
@@ -404,6 +405,7 @@ func main() {
 		if err != nil {
 			return fmt.Errorf("catalog startup: %w", err)
 		}
+		catalog.SetCodexTestTransport(codextesttransport.AuthTransport())
 		defer catalog.Close()
 		codexAuth = newCodexAuthStore()
 		if client := catalog.SyntheticAuthClient(20 * time.Second); client != nil {

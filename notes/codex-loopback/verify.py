@@ -10,6 +10,7 @@ import select
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -23,6 +24,22 @@ SCENARIOS = {
     'off': {'transient': (429, '2'), 'quota': (429, None),
             'unknown': (429, None), 'no-code-429': (429, None),
             'mapped-503': (429, None)},
+}
+ERRORS = {
+    'on': {
+        'transient': ('rate_limit_error', 'The upstream service reported a rate limit.'),
+        'quota': ('rate_limit_error', 'The upstream service reported a usage or spending limit.'),
+        'unknown': ('rate_limit_error', 'The upstream service reported a limit.'),
+        'no-code-429': ('rate_limit_error', 'The upstream service reported a limit.'),
+        'mapped-503': ('api_error', 'privacy: upstream response rejected'),
+    },
+    'off': {
+        'transient': ('rate_limit_error', 'The upstream service reported a rate limit.'),
+        'quota': ('rate_limit_error', 'The upstream service reported a usage or spending limit.'),
+        'unknown': ('rate_limit_error', 'The upstream service reported a limit.'),
+        'no-code-429': ('rate_limit_error', 'The upstream service reported a limit.'),
+        'mapped-503': ('api_error', 'The upstream service failed.'),
+    },
 }
 
 
@@ -74,9 +91,10 @@ def run(binary, fixtures):
     with tempfile.TemporaryDirectory(prefix='router-codex-loopback-') as temp:
         temp = Path(temp)
         with (temp / 'stub.log').open('w') as stub_log:
-            stub = subprocess.Popen(['python3', str(fixtures / 'stub.py')],
+            stub = subprocess.Popen([sys.executable, str(fixtures / 'stub.py')],
                 stdout=subprocess.PIPE, stderr=stub_log, text=True,
-                env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+                env={'HOME': str(temp), 'PATH': os.defpath,
+                     'PYTHONNOUSERSITE': '1', 'PYTHONDONTWRITEBYTECODE': '1'})
             try:
                 if not select.select([stub.stdout], [], [], 5)[0]:
                     raise AssertionError('stub did not print a loopback port')
@@ -107,13 +125,17 @@ def run(binary, fixtures):
                     shutil.copyfile(fixtures / f'privacy-{privacy}.json',
                                     router_home / 'privacy-profiles.json')
                     api, ui = free_port(), free_port()
-                    env = {**os.environ, 'HOME': str(home / 'home'),
+                    env = {'PATH': os.defpath, 'HOME': str(home / 'home'),
                         'CODEX_HOME': str(home / 'codex-home'),
                         'ROUTER_HOME': str(router_home),
                         'ROUTER_ENV_FILE': str(router_home / 'missing-env'),
                         'ROUTER_SLOT': '',
                         'ROUTER_PROVIDERS_FILE': str(providers),
-                        'ROUTER_CODEX_AUTH_FILE': str(router_home / 'codex-auth.json'),
+                        'ROUTER_CODEX_AUTH_FILE': str(auth_path),
+                        'ROUTER_UI_HISTORY_FILE': str(router_home / 'history.jsonl'),
+                        'ROUTER_STATE_FILE': str(router_home / 'state.json'),
+                        'ROUTER_ANTHROPIC_LIMITS_FILE': str(router_home / 'limits.json'),
+                        'ROUTER_ACTIVE_SLOT_FILE': str(router_home / 'active-slot'),
                         'ROUTER_CODEX_TEST_STUB_URL': f'http://127.0.0.1:{stub_port}',
                         'ROUTER_UPSTREAM_URL': f'http://127.0.0.1:{stub_port}',
                         'ROUTER_LISTEN': f'127.0.0.1:{api}',
@@ -140,8 +162,22 @@ def run(binary, fixtures):
                                 if state['calls'] != 1 or state['paths'] != ['/backend-api/codex/responses']:
                                     raise AssertionError(f'{privacy}/{mode}: wrong Codex route: {state}')
                                 if (b'RR_SYNTHETIC_UPSTREAM_ERROR_CANARY' in content or
-                                        b'RR_SYNTHETIC.' in content):
+                                        b'RR_SYNTHETIC.' in content or
+                                        'RR_SYNTHETIC_UPSTREAM_ERROR_CANARY' in str(headers) or
+                                        TOKEN in str(headers)):
                                     raise AssertionError(f'{privacy}/{mode}: unsafe error response')
+                                if (headers.get('Content-Type', '').split(';', 1)[0].strip().lower() != 'application/json' or
+                                        headers.get('Cache-Control') != 'no-store'):
+                                    raise AssertionError(f'{privacy}/{mode}: missing JSON/no-store response headers')
+                                try:
+                                    envelope = json.loads(content)
+                                except (UnicodeError, ValueError) as exc:
+                                    raise AssertionError(f'{privacy}/{mode}: invalid public error JSON') from exc
+                                kind, message = ERRORS[privacy][mode]
+                                if (not isinstance(envelope, dict) or set(envelope) != {'type', 'error'} or
+                                        envelope['type'] != 'error' or not isinstance(envelope['error'], dict) or
+                                        envelope['error'] != {'type': kind, 'message': message}):
+                                    raise AssertionError(f'{privacy}/{mode}: unexpected public error envelope')
                                 print(f'{privacy}/{mode}: HTTP {status}, Codex Exchange once')
                         finally:
                             stop(router)

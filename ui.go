@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"localrouter/internal/catalogstartup"
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 	"localrouter/internal/privacy"
@@ -1099,6 +1100,10 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 	p, store, err := u.codexProvider(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if codextesttransport.DisableBackground() {
+		http.Error(w, "synthetic Codex build cannot start browser login", http.StatusServiceUnavailable)
 		return
 	}
 	u.oauthMu.Lock()

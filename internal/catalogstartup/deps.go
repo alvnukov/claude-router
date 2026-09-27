@@ -8,10 +8,11 @@ import (
 
 // Dependencies keeps catalog network access separate from request routing.
 type Dependencies struct {
-	officialURL string
-	codexURL    string
-	transport   *http.Transport
-	guard       http.RoundTripper
+	officialURL        string
+	codexURL           string
+	transport          *http.Transport
+	guard              http.RoundTripper
+	codexTestTransport http.RoundTripper
 }
 
 func Production(officialURL, codexBaseURL string) Dependencies {
@@ -30,6 +31,10 @@ func (d Dependencies) OfficialURL() string    { return d.officialURL }
 func (d Dependencies) CodexModelsURL() string { return d.codexURL }
 func (d Dependencies) IsSynthetic() bool      { return d.guard != nil }
 
+func (d *Dependencies) SetCodexTestTransport(transport http.RoundTripper) {
+	d.codexTestTransport = transport
+}
+
 func (d Dependencies) Client(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout}
 	if d.transport != nil {
@@ -47,6 +52,9 @@ func (d Dependencies) Client(timeout time.Duration) *http.Client {
 func (d Dependencies) CodexClient(timeout time.Duration) *http.Client {
 	client := d.Client(timeout)
 	if d.guard == nil {
+		if d.codexTestTransport != nil {
+			client.Transport = d.codexTestTransport
+		}
 		client.CheckRedirect = func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
