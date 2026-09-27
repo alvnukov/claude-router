@@ -200,6 +200,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	}
 	sort.Slice(out.Pools, func(i, j int) bool { return out.Pools[i].Name < out.Pools[j].Name })
 	sessions := map[string]*webui.Session{}
+	routeIndexes := map[string]map[[5]string]int{}
 	for _, rec := range records {
 		out.Summary.Total++
 		if !rec.Done() {
@@ -211,21 +212,34 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if (rec.UnrecognizedReason != "" && rec.FallbackPool == "") || (rec.Path != "" && rec.Path != "/v1/messages") {
 			continue
 		}
+		model := rec.Served
+		if model == "" {
+			model = rec.Model
+		}
+		var request struct {
+			OutputConfig struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
+		}
+		_ = json.Unmarshal(rec.ReqBody, &request)
+		connection := requestConnection(rec)
 		s := sessions[rec.Session]
 		if s == nil {
-			model := rec.Served
-			if model == "" {
-				model = rec.Model
-			}
 			item := b.requestDTO(rec)
-			var request struct {
-				OutputConfig struct {
-					Effort string `json:"effort"`
-				} `json:"output_config"`
-			}
-			_ = json.Unmarshal(rec.ReqBody, &request)
-			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: item.Preview, Connection: item.Connection, Effort: request.OutputConfig.Effort, Route: rec.Route, LastAt: rec.Start}
+			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: item.Preview, Connection: connection, Effort: request.OutputConfig.Effort, Route: rec.Route, LastAt: rec.Start, Routes: []webui.SessionRoute{}}
 			sessions[rec.Session] = s
+			routeIndexes[rec.Session] = map[[5]string]int{}
+		}
+		key := [5]string{rec.Model, model, connection, request.OutputConfig.Effort, rec.Route}
+		index, exists := routeIndexes[rec.Session][key]
+		if !exists {
+			index = len(s.Routes)
+			routeIndexes[rec.Session][key] = index
+			s.Routes = append(s.Routes, webui.SessionRoute{RequestedModel: rec.Model, Model: model, Connection: connection, Effort: request.OutputConfig.Effort, Route: rec.Route})
+		}
+		s.Routes[index].Requests++
+		if !rec.Done() {
+			s.Routes[index].Pending++
 		}
 		s.Requests++
 		if !rec.Done() {
@@ -255,6 +269,14 @@ func requestError(r *history.Record) string {
 	}
 	return ""
 }
+func requestConnection(r *history.Record) string {
+	if r.Route == "cloud" || r.Route == "passthrough" {
+		return "anthropic"
+	}
+	connection, _, _ := strings.Cut(r.Served, "/")
+	return connection
+}
+
 func (b uiBackend) requestDTO(r *history.Record) webui.Request {
 	_, _, preview := quickSummary(r.ReqBody)
 	method, path := r.Method, r.Path
@@ -274,10 +296,7 @@ func (b uiBackend) requestDTO(r *history.Record) webui.Request {
 	if preview == "" && reason != "" {
 		preview = reason
 	}
-	connection, _, _ := strings.Cut(r.Served, "/")
-	if r.Route == "cloud" || r.Route == "passthrough" {
-		connection = "anthropic"
-	}
+	connection := requestConnection(r)
 	return webui.Request{ID: r.ID, Method: method, Path: path, Unrecognized: reason, FallbackPool: r.FallbackPool, Session: r.Session, Start: r.Start, End: r.End, Model: r.Model, Served: r.Served, Connection: connection, Route: r.Route, Status: r.Status, Pending: !r.Done(), Failed: r.Failed(), DurationMs: r.Duration().Milliseconds(), Preview: preview, Error: b.u.publicUIMessage(requestError(r))}
 }
 func (b uiBackend) Requests(q url.Values) webui.RequestList {
@@ -298,20 +317,20 @@ func (b uiBackend) Requests(q url.Values) webui.RequestList {
 	}
 	needle := strings.ToLower(q.Get("q"))
 	for _, r := range records {
-		item := b.requestDTO(r)
-		if q.Get("unrecognized") == "1" && item.Unrecognized == "" {
-			continue
-		}
 		if q.Get("session") != "" && r.Session != q.Get("session") {
 			continue
 		}
 		if q.Get("model") != "" && !strings.Contains(strings.ToLower(r.Model+" "+r.Served), strings.ToLower(q.Get("model"))) {
 			continue
 		}
-		if q.Get("connection") != "" && item.Connection != q.Get("connection") {
+		if q.Get("connection") != "" && requestConnection(r) != q.Get("connection") {
 			continue
 		}
 		if q.Get("errors") == "1" && !r.Failed() {
+			continue
+		}
+		item := b.requestDTO(r)
+		if q.Get("unrecognized") == "1" && item.Unrecognized == "" {
 			continue
 		}
 		if needle != "" {

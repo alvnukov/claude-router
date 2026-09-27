@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { UIState, RequestList, RequestDetail } from "./types";
   import { get, fail, time, revision } from "./api";
   import ActionForm from "./ActionForm.svelte";
@@ -21,9 +21,8 @@
   let tab = $state("response");
   let dialog: HTMLDialogElement;
   let generation = 0;
-  async function refresh() {
-    const gen = ++generation;
-    loading = true;
+  let activeQuery = "";
+  async function refresh(invalidate = false) {
     const p = new URLSearchParams({
       q,
       model,
@@ -34,11 +33,17 @@
     });
     if (errors) p.set("errors", "1");
     if (unrecognized) p.set("unrecognized", "1");
+    const query = p.toString();
+    // State updates must not invalidate an identical request still in flight.
+    if (!invalidate && loading && activeQuery === query) return;
+    const gen = ++generation;
+    activeQuery = query;
+    loading = true;
     try {
-      const result = await get<RequestList>("/api/ui/requests?" + p);
+      const result = await get<RequestList>("/api/ui/requests?" + query);
       if (gen === generation) list = result;
     } catch (e) {
-      fail(e);
+      if (gen === generation) fail(e);
     } finally {
       if (gen === generation) loading = false;
     }
@@ -74,12 +79,11 @@
     }
   }
   onMount(() => {
-    void refresh();
-    return revision.subscribe(() => void refresh());
+    return revision.subscribe(() => void refresh(true));
   });
   $effect(() => {
     data.now;
-    void refresh();
+    untrack(() => void refresh());
   });
 </script>
 
@@ -169,12 +173,12 @@
       ><span aria-hidden="true">↗</span></button
     >{/each}{#if !list.items.length}<div class="empty">
       <h3>
-        {q || model || connection || errors || unrecognized || session
+        {loading ? "Загружаем запросы…" : q || model || connection || errors || unrecognized || session
           ? "Ничего не найдено"
           : "Пока нет запросов"}
       </h3>
       <p>
-        {q || model || connection || errors || unrecognized || session
+        {loading ? "Получаем историю сессии." : q || model || connection || errors || unrecognized || session
           ? "Попробуйте изменить фильтры."
           : "Отправьте первый запрос через роутер — он появится здесь."}
       </p>
