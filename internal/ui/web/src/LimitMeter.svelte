@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Limit } from "./types";
-  import { resetIn } from "./api";
+  import { resetAt, resetIn } from "./api";
   let { limit, now }: { limit: Limit; now: string } = $props();
+  const resetDate = $derived(resetAt(limit.reset));
 </script>
 
 <div
@@ -31,6 +32,10 @@
     >{limit.blocked ? "Лимит исчерпан · " : ""}{resetIn(
       limit.reset,
       now,
-    )}</small
+    )}{#if resetDate}<br /><time
+        datetime={limit.reset}
+        title="Дата и время сброса по местному времени"
+        >{resetDate}</time
+      >{/if}</small
   >
 </div>

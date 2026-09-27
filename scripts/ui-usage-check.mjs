@@ -32,9 +32,9 @@ await once(server, "listening");
 const base = `http://127.0.0.1:${server.address().port}`;
 const screenshots = await mkdtemp(join(tmpdir(), "router-usage-ui-"));
 console.log(JSON.stringify({ screenshots }));
-const now = new Date().toISOString();
+const now = '2026-09-27T00:00:00Z';
 const usage = {
-  since: new Date(Date.now() - 86400000).toISOString(), requests: 12, measuredRequests: 12, cacheMeasuredRequests: 12,
+  since: new Date(Date.parse(now) - 86400000).toISOString(), requests: 12, measuredRequests: 12, cacheMeasuredRequests: 12,
   inputTokens: 1200000, cacheInputTokens: 1200000, cachedInputTokens: 1020000, uncachedInputTokens: 180000,
   outputTokens: 45000, cacheWriteTokens: 0, reasoningTokens: 36000, reasoningMeasuredRequests: 12,
   upstreamCalls: 14, continuationRequests: 2, invalidRequests: 0, lowCache: false,
@@ -46,13 +46,16 @@ const connection = (name, displayName, data, type = "codex") => ({ name, display
 const session = (id, data) => ({ id, model: "codex/gpt-6-sol", requestedModel: "claude-sonnet", preview: "Локальная проверка", connection: "codex", effort: "high", route: "local", pending: 0, lastAt: now, error: "", requests: 12, usage: data });
 const state = {
   now, started: now, lifecycle: "active", activeProfile: "default", defaultPool: "", profiles: [],
-  connections: [connection("codex", "Рабочий Codex", usage), connection("second", "Второй Codex", low), connection("unknown", "Старые измерения", unknown, "openai"), connection("anthropic", "Anthropic", empty, "anthropic")],
+  connections: [connection("codex", "Рабочий Codex", usage), connection("second", "Второй Codex", low), connection("unknown", "Старые измерения", unknown), connection("anthropic", "Anthropic", empty, "anthropic")],
   models: [], families: [], routes: [], pools: [], efforts: ["default", "high"],
   summary: { total: 24, pending: 0, errors5m: 0 }, sessions: [session("good-session-1", usage), session("low-session-2", low)],
   interception: { enabled: true, canRestore: true, error: "" }, reloadErrors: [],
 };
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 1080 }, locale: "ru-RU", colorScheme: "light" });
+state.connections[0].limits = [{ id: 'primary', label: 'За неделю', known: true, remaining: 62, blocked: false, reset: '2026-10-03T14:26:00Z' }];
+Object.assign(state.connections[0], { resetsKnown: true, resets: 2 });
+Object.assign(state.connections[1], { resetsKnown: true, resets: 0 });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1080 }, locale: "ru-RU", timezoneId: 'Europe/Moscow', colorScheme: "light" });
 async function capture(name) {
   await page.evaluate(async () => {
     await new Promise(resolve => requestAnimationFrame(resolve));
@@ -77,6 +80,12 @@ try {
   const good = page.locator(".connection-card").filter({ has: page.getByRole("heading", { name: "Рабочий Codex", exact: true }) });
   const bad = page.locator(".connection-card").filter({ has: page.getByRole("heading", { name: "Второй Codex", exact: true }) });
   const missing = page.locator(".connection-card").filter({ has: page.getByRole("heading", { name: "Старые измерения", exact: true }) });
+  await expect(good.locator('.limit')).toContainText('Сброс через 6 дн. 14 ч.');
+  await expect(good.locator('.limit time')).toHaveAttribute('datetime', '2026-10-03T14:26:00Z');
+  await expect(good.locator('.limit time')).toHaveText('3 октября 2026 г. в 17:26');
+  await expect(good.getByText('Доступно сбросов лимита: 2', { exact: true })).toBeVisible();
+  await expect(bad.getByText('Доступно сбросов лимита: 0', { exact: true })).toBeVisible();
+  await expect(missing.getByText('Доступно сбросов лимита: не сообщено', { exact: true })).toBeVisible();
   await expect(good.locator(".cache-rate")).toContainText("85%");
   await expect(good.locator(".usage-numbers")).toContainText("180");
   await expect(good.locator(".usage-notice")).toHaveCount(0);

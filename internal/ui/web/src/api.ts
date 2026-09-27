@@ -59,11 +59,30 @@ export function resetIn(value: string, now: string): string {
   const minutes = Math.ceil(
     (new Date(value).getTime() - new Date(now).getTime()) / 60000,
   );
-  return !Number.isFinite(minutes) || new Date(value).getFullYear() < 2000
-    ? "Время сброса неизвестно"
-    : minutes <= 0
-      ? "Ожидается обновление лимита"
-      : "Сброс через " + minutes + " мин";
+  if (!Number.isFinite(minutes) || new Date(value).getFullYear() < 2000)
+    return "Время сброса неизвестно";
+  if (minutes <= 0) return "Ожидается обновление лимита";
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor(minutes / 60) % 24;
+  const rest = minutes % 60;
+  const duration = days
+    ? `${days} дн.${hours ? ` ${hours} ч.` : ""}`
+    : hours
+      ? `${hours} ч.${rest ? ` ${rest} мин` : ""}`
+      : `${minutes} мин`;
+  return "Сброс через " + duration;
+}
+export function resetAt(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.getFullYear() >= 2000
+    ? date.toLocaleString("ru-RU", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
 }
 export function targetLabel(value: string): string {
   if (value === "anthropic") return "Anthropic";

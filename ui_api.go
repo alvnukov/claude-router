@@ -640,6 +640,7 @@ func (u *uiServer) codexUIState(p provider, v *webui.Connection) {
 	}
 	usage := cache.view
 	v.Updated = usage.Updated
+	v.ResetsKnown, v.Resets = usage.ResetsKnown, usage.Resets
 	if usage.Error != "" {
 		v.Error = usage.Error
 	}

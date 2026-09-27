@@ -55,6 +55,8 @@ type Connection struct {
 	Error       string          `json:"error"`
 	Models      []string        `json:"models"`
 	Limits      []Limit         `json:"limits"`
+	ResetsKnown bool            `json:"resetsKnown"`
+	Resets      int64           `json:"resets"`
 	Updated     time.Time       `json:"updated"`
 	Refreshing  bool            `json:"refreshing"`
 	Usage       ConnectionUsage `json:"usage"`

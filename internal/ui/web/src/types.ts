@@ -31,6 +31,8 @@ export interface Connection {
   error: string;
   models: string[];
   limits: Limit[];
+  resetsKnown: boolean;
+  resets: number;
   updated: string;
   usage?: ConnectionUsage;
   catalog?: { id: string; name?: string }[];

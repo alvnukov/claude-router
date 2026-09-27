@@ -139,6 +139,11 @@
         />{/each}{#if !connection.limits.length}<p class="muted">
           {connection.refreshing ? "Обновляем лимиты…" : "Лимиты не получены"}
         </p>{/if}
+      {#if connection.type === "codex" && connection.connected}<p class="muted">
+          Доступно сбросов лимита: <strong
+            >{connection.resetsKnown ? connection.resets : "не сообщено"}</strong
+          >
+        </p>{/if}
       {#if connection.type === "codex"}<div class="actions">
           <CodexLogin {connection} />
           <ActionForm
