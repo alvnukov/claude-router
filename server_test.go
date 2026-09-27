@@ -124,6 +124,87 @@ func TestNilLifecycleGatesWriteAndCompact(t *testing.T) {
 }
 
 func TestRouterServerStandbyAndActivation(t *testing.T) {
+	t.Run("shutdown joins canceled catalog refresh", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
+		t.Setenv("ROUTER_UI_HISTORY_FILE", filepath.Join(dir, "history.jsonl"))
+		t.Setenv("ROUTER_ANTHROPIC_LIMITS_FILE", filepath.Join(dir, "limits.json"))
+		server := newRouterServer(config{uiHistory: 10}, newLifecycle(false), filepath.Join(dir, "state.json"))
+		entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		t.Cleanup(func() {
+			server.cancel()
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		})
+		server.ui.fetchAnthropic = func(ctx context.Context) ([]string, error) {
+			close(entered)
+			<-ctx.Done()
+			close(canceled)
+			<-release
+			return nil, ctx.Err()
+		}
+		server.startBackground()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("immediate catalog refresh did not start")
+		}
+		stopped := make(chan error, 1)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			stopped <- server.shutdown(ctx)
+		}()
+		select {
+		case <-canceled:
+		case <-time.After(time.Second):
+			t.Fatal("shutdown did not cancel in-flight catalog fetch")
+		}
+		select {
+		case err := <-stopped:
+			t.Fatalf("shutdown returned before catalog refresh exited: %v", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(release)
+		select {
+		case err := <-stopped:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("shutdown did not join released catalog refresh")
+		}
+	})
+	t.Run("listener error cancels catalog refresh", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(dir, "providers.json"))
+		server := newRouterServer(config{listen: "127.0.0.1:-1", uiHistory: 10}, newLifecycle(false), filepath.Join(dir, "state.json"))
+		entered, canceled := make(chan struct{}), make(chan struct{})
+		server.ui.fetchAnthropic = func(ctx context.Context) ([]string, error) {
+			close(entered)
+			<-ctx.Done()
+			close(canceled)
+			return nil, ctx.Err()
+		}
+		server.startBackground()
+		defer server.cancel()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("immediate catalog refresh did not start")
+		}
+		if err := server.run(); err == nil {
+			t.Fatal("invalid listener was accepted")
+		}
+		select {
+		case <-canceled:
+		case <-time.After(time.Second):
+			t.Fatal("listener error left catalog refresh running")
+		}
+	})
 	dir := t.TempDir()
 	api, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -141,6 +222,12 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	cfg := config{listen: api.Addr().String(), uiListen: ui.Addr().String(), uiHistory: 10}
 	life := newLifecycle(true)
 	server := newRouterServer(cfg, life, filepath.Join(dir, "state.json"))
+	catalogEntered := make(chan struct{})
+	server.ui.fetchAnthropic = func(ctx context.Context) ([]string, error) {
+		close(catalogEntered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	done := make(chan error, 1)
 	go func() { done <- server.serve(api, ui) }()
 	// Without keep-alives the client never dials a spare connection, which
@@ -175,6 +262,9 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || health.PID != os.Getpid() || health.Mode != "standby" {
 		t.Fatalf("standby health: %d %+v", resp.StatusCode, health)
 	}
+	if server.catalogRun.Done != nil {
+		t.Fatal("standby started catalog updates before activation")
+	}
 	request, _ := http.NewRequest(http.MethodPost, "http://"+cfg.listen+"/admin/activate", nil)
 	resp, err = client.Do(request)
 	if err != nil {
@@ -183,6 +273,11 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("activate: %d", resp.StatusCode)
+	}
+	select {
+	case <-catalogEntered:
+	case <-time.After(time.Second):
+		t.Fatal("standby activation did not start immediate catalog refresh")
 	}
 	status, _ = get(cfg.uiListen, "/status")
 	if status != http.StatusOK {
@@ -209,6 +304,11 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	defer cancel()
 	if err := server.shutdown(ctx); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-server.catalogRun.Done:
+	default:
+		t.Fatal("shutdown returned before catalog worker stopped")
 	}
 	if _, err := io.ReadAll(stream.Body); err != nil {
 		t.Fatalf("UI event stream did not end cleanly: %v", err)

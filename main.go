@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"localrouter/internal/catalogstartup"
 	"localrouter/internal/cli"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
@@ -399,10 +400,23 @@ func boundDebugRequest(rec *history.Record) {
 func main() {
 	serve := cli.Entry{Name: "serve", Run: func(context.Context, []string, io.Writer, io.Writer) error {
 		loadEnvFile()
+		catalog, err := catalogstartup.ForProcess(anthropicCatalogURL, codexBaseURL)
+		if err != nil {
+			return fmt.Errorf("catalog startup: %w", err)
+		}
+		defer catalog.Close()
 		codexAuth = newCodexAuthStore()
+		if client := catalog.SyntheticAuthClient(20 * time.Second); client != nil {
+			codexAuth.client = client
+		}
 		cfg := loadConfig()
+		for _, p := range cfg.local.Providers {
+			if err := catalog.ValidateProvider(p.Name, p.Type, p.BaseURL, p.AuthID); err != nil {
+				return fmt.Errorf("catalog provider %q: %w", p.Name, err)
+			}
+		}
 		life := newLifecycle(routerStartsStandby())
-		server := newRouterServer(cfg, life, statePath())
+		server := newRouterServer(cfg, life, statePath(), &catalog)
 		if life.mode() != modeStandby {
 			if err := server.cs.ensureProfiles(); err != nil {
 				return fmt.Errorf("profile migration: %w", err)

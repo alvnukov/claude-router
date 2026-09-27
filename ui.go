@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/catalogstartup"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 	"localrouter/internal/privacy"
@@ -42,6 +43,7 @@ type uiServer struct {
 	limits            *limits.Store
 	claudeProxy       *claudeProxy
 	catalogMu         sync.Mutex
+	catalog           *catalogstartup.Dependencies
 	fetchAnthropic    func(context.Context) ([]string, error)
 	st                *history.Store
 	connectionMetrics connectionUsageCache
@@ -107,8 +109,13 @@ func uiTemplates() (*template.Template, error) {
 	return template.New("").Funcs(funcs).ParseFS(uiFS, "ui/*.html")
 }
 
-func newUIServer(st *history.Store, cs *configStore, hl *health) *uiServer {
-	return &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: fetchAnthropicCatalog, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: limits.New("", limits.MaxAge)}
+func newUIServer(st *history.Store, cs *configStore, hl *health, catalog ...*catalogstartup.Dependencies) *uiServer {
+	u := &uiServer{claudeProxy: newClaudeProxy(), fetchAnthropic: func(ctx context.Context) ([]string, error) { return fetchAnthropicCatalog(ctx) }, st: st, cs: cs, tpl: template.Must(uiTemplates()), started: time.Now(), hl: hl, limits: limits.New("", limits.MaxAge)}
+	if len(catalog) > 0 && catalog[0] != nil {
+		u.catalog = catalog[0]
+		u.fetchAnthropic = func(ctx context.Context) ([]string, error) { return fetchAnthropicCatalog(ctx, *catalog[0]) }
+	}
+	return u
 }
 
 func (u *uiServer) handler() http.Handler {
@@ -603,7 +610,11 @@ type providerRow struct {
 	Fresh   bool // a form for a provider that does not exist yet
 }
 
-func (u *uiServer) settingsView() settingsView {
+func (u *uiServer) settingsView(contexts ...context.Context) settingsView {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	c := u.cs.get()
 	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.View(time.Now())}
 	for name := range c.local.Profiles {
@@ -615,7 +626,7 @@ func (u *uiServer) settingsView() settingsView {
 		if p.Type == "codex" {
 			v.Logins = append(v.Logins, u.codexLoginViewFor(p))
 		}
-		row := u.providerRow(c, p, false, modelFilter{})
+		row := u.providerRow(c, p, false, modelFilter{}, ctx)
 		v.Providers = append(v.Providers, row)
 		for _, m := range row.Probe.Info {
 			info[p.Name+"/"+m.ID] = m
@@ -734,16 +745,16 @@ func (u *uiServer) settingsView() settingsView {
 
 func (u *uiServer) settings(w http.ResponseWriter, r *http.Request) {
 	if r.Header.Get("HX-Request") == "" {
-		v := u.settingsView()
+		v := u.settingsView(r.Context())
 		u.render(w, "layout", pageView{Settings: &v})
 		return
 	}
-	u.render(w, "settings", u.settingsView())
+	u.render(w, "settings", u.settingsView(r.Context()))
 }
 
 func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
-		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
+		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "", r.Context())
 		return
 	}
 	if !sameOriginPost(r) {
@@ -761,7 +772,7 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = u.cs.savePoolSettings(r.FormValue("name"), settings, r.FormValue("profile"))
 	}
-	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены")
+	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены", r.Context())
 }
 
 func splitList(s string) []string {
@@ -791,7 +802,7 @@ func routeDestination(route modelRoute) string {
 // settingsRoute saves family defaults or explicit version overrides.
 func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
-		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
+		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "", r.Context())
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
@@ -813,7 +824,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	for _, effort := range claudeEfforts {
 		dest := r.FormValue(effort)
 		switch {
-		case perLevel && effort != "default" && strings.Contains(fmt.Sprint(u.validateTargetEffort(l, allKey, effort)), "не подтверждён каталогом"):
+		case perLevel && effort != "default" && strings.Contains(fmt.Sprint(u.validateTargetEffort(l, allKey, effort, r.Context())), "не подтверждён каталогом"):
 			lacking = append(lacking, effort)
 		case perLevel && effort != "default":
 			dest = all + effort
@@ -839,8 +850,8 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if route.Mode == "model" {
-			if err := u.validateTargetEffort(l, route.Model, route.Effort); err != nil {
-				u.renderSettingsResult(w, err, "")
+			if err := u.validateTargetEffort(l, route.Model, route.Effort, r.Context()); err != nil {
+				u.renderSettingsResult(w, err, "", r.Context())
 				return
 			}
 		}
@@ -858,15 +869,15 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	if len(lacking) > 0 {
 		message += fmt.Sprintf(". У %s нет effort %s — эти строки не изменены", allKey, strings.Join(lacking, ", "))
 	}
-	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), message)
+	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), message, r.Context())
 }
 
-func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {
+func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string, contexts ...context.Context) {
 	if api, ok := w.(*actionResponse); ok {
 		api.complete(err, message)
 		return
 	}
-	v := u.settingsView()
+	v := u.settingsView(contexts...)
 	if err != nil {
 		v.Err = err.Error()
 	} else {
@@ -881,10 +892,10 @@ func (u *uiServer) settingsProbe(w http.ResponseWriter, r *http.Request) {
 	c := u.cs.get()
 	p, ok := c.local.provider(strings.TrimSpace(r.FormValue("provider")))
 	if !ok {
-		u.render(w, "settings", u.settingsView())
+		u.render(w, "settings", u.settingsView(r.Context()))
 		return
 	}
-	u.render(w, "provider", u.providerRow(c, p, true, modelFilter{}))
+	u.render(w, "provider", u.providerRow(c, p, true, modelFilter{}, r.Context()))
 }
 
 // settingsProvider renders the pane for the provider chosen in the picker:
@@ -894,7 +905,7 @@ func (u *uiServer) settingsProvider(w http.ResponseWriter, r *http.Request) {
 	c := u.cs.get()
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
 	if p, ok := c.local.provider(name); ok {
-		u.render(w, "provider", u.providerRow(c, p, r.URL.Query().Get("filter") == "", filterFrom(r.URL.Query())))
+		u.render(w, "provider", u.providerRow(c, p, r.URL.Query().Get("filter") == "", filterFrom(r.URL.Query()), r.Context()))
 		return
 	}
 	u.render(w, "provider", providerRow{Fresh: true, P: provider{BaseURL: "http://127.0.0.1:1234/v1"}})
@@ -1036,7 +1047,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		api.complete(err, flash)
 		return
 	}
-	v := u.settingsView()
+	v := u.settingsView(r.Context())
 	if err != nil {
 		v.Err = err.Error()
 	} else {
@@ -1044,7 +1055,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		v.Flash = flash
 		log.Printf("ui: providers: %s", n.local.summary())
 		if p, ok := n.local.provider(name); ok {
-			row := u.providerRow(n, p, true, modelFilter{})
+			row := u.providerRow(n, p, true, modelFilter{}, r.Context())
 			v.Pick = &row
 		}
 	}
@@ -1071,7 +1082,7 @@ func (u *uiServer) settingsCodexImport(w http.ResponseWriter, r *http.Request) {
 		api.complete(err, "Вход Codex CLI обновлён")
 		return
 	}
-	v := u.settingsView()
+	v := u.settingsView(r.Context())
 	if err != nil {
 		v.Err = err.Error()
 	} else {
@@ -1155,7 +1166,7 @@ func (u *uiServer) settingsCodexStatus(w http.ResponseWriter, r *http.Request) {
 func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 	c := u.cs.get()
 	if r.FormValue("profile") != "" && r.FormValue("profile") != c.local.ActiveProfile {
-		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
+		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "", r.Context())
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
@@ -1257,7 +1268,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if value != poolRequestEffort {
-					if err = u.validateTargetEffort(l, key, value); err != nil {
+					if err = u.validateTargetEffort(l, key, value, r.Context()); err != nil {
 						break
 					}
 				}
@@ -1271,15 +1282,15 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("неизвестная операция")
 	}
 	if err == nil && (op == "add" || op == "effort") && r.FormValue("effort") != poolRequestEffort {
-		err = u.validateTargetEffort(l, key, r.FormValue("effort"))
+		err = u.validateTargetEffort(l, key, r.FormValue("effort"), r.Context())
 	}
 	if err == nil {
 		err = u.cs.applyLocal(l, true, r.FormValue("profile"))
 	}
-	u.renderSettingsResult(w, err, "Пул сохранён")
+	u.renderSettingsResult(w, err, "Пул сохранён", r.Context())
 }
 
-func (u *uiServer) validateTargetEffort(l localSetup, key, effort string) error {
+func (u *uiServer) validateTargetEffort(l localSetup, key, effort string, contexts ...context.Context) error {
 	if effort == "" {
 		return nil
 	}
@@ -1288,7 +1299,7 @@ func (u *uiServer) validateTargetEffort(l localSetup, key, effort string) error 
 			continue
 		}
 		p, _ := l.provider(model.Provider)
-		probe := u.probeProvider(p, false)
+		probe := u.probeProvider(p, false, contexts...)
 		if p.Type == "codex" && probe.OK && !slices.Contains(probe.Models, model.Model) {
 			return fmt.Errorf("%s отсутствует в текущем каталоге Codex", key)
 		}
@@ -1368,7 +1379,7 @@ func (u *uiServer) settingsPoolAdd(w http.ResponseWriter, r *http.Request) {
 	for _, m := range l.Models {
 		if m.Key() == key {
 			p, _ := l.provider(m.Provider)
-			for _, item := range u.probeProvider(p, false).Info {
+			for _, item := range u.probeProvider(p, false, r.Context()).Info {
 				info[p.Name+"/"+item.ID] = item
 			}
 		}
@@ -1377,8 +1388,12 @@ func (u *uiServer) settingsPoolAdd(w http.ResponseWriter, r *http.Request) {
 }
 
 // providerRow probes the provider and lists which of its models can still be added.
-func (u *uiServer) providerRow(c config, p provider, force bool, f modelFilter) providerRow {
-	row := providerRow{P: p, KeySet: p.APIKey != "", Probe: u.probeProvider(p, force), Filter: f}
+func (u *uiServer) providerRow(c config, p provider, force bool, f modelFilter, contexts ...context.Context) providerRow {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
+	row := providerRow{P: p, KeySet: p.APIKey != "", Probe: u.probeProvider(p, force, ctx), Filter: f}
 	for _, m := range c.local.Models {
 		if m.Provider == p.Name {
 			row.NModels++
@@ -1413,7 +1428,11 @@ func filterFrom(q url.Values) modelFilter {
 
 // probeProvider asks a provider for its model list, cached for a few seconds
 // per provider so the status strip polling does not hammer it.
-func (u *uiServer) probeProvider(p provider, force bool) probeResult {
+func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Context) probeResult {
+	ctx := context.Background()
+	if len(contexts) > 0 {
+		ctx = contexts[0]
+	}
 	u.probeMu.Lock()
 	defer u.probeMu.Unlock()
 	if u.probe == nil {
@@ -1425,10 +1444,19 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 	res := probeResult{At: time.Now(), Base: p.BaseURL, Key: p.APIKey, AuthID: p.AuthID}
 	defer func() { u.probe[p.Name] = res }()
 	endpoint := p.BaseURL + "/models"
+	if u.catalog != nil {
+		if err := u.catalog.ValidateProvider(p.Name, p.Type, p.BaseURL, p.AuthID); err != nil {
+			res.Msg = err.Error()
+			return res
+		}
+	}
 	if p.Type == "codex" {
 		endpoint = codexBaseURL + "/models?client_version=0.156.0"
+		if u.catalog != nil {
+			endpoint = u.catalog.CodexModelsURL()
+		}
 	}
-	req, err := http.NewRequest("GET", endpoint, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		res.Msg = err.Error()
 		return res
@@ -1446,9 +1474,16 @@ func (u *uiServer) probeProvider(p provider, force bool) probeResult {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
+	if u.catalog != nil {
+		client = u.catalog.Client(2 * time.Second)
+	}
 	if p.Type == "codex" {
-		client.Timeout = 5 * time.Second
-		client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		if u.catalog != nil {
+			client = u.catalog.CodexClient(5 * time.Second)
+		} else {
+			client.Timeout = 5 * time.Second
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		}
 		req.Header.Set("User-Agent", "claude-router")
 	}
 	resp, err := client.Do(req)
@@ -1699,14 +1734,14 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 		api.complete(err, "Каталог моделей обновлён")
 		return
 	}
-	v := u.settingsView()
+	v := u.settingsView(r.Context())
 	if err != nil {
 		v.Err = err.Error()
 	} else {
 		n := u.cs.get()
 		log.Printf("ui: local models: %s failover=%v", n.local.summary(), n.failover)
 		if p, ok := n.local.provider(pname); ok && op == "add" {
-			row := u.providerRow(n, p, false, modelFilter{})
+			row := u.providerRow(n, p, false, modelFilter{}, r.Context())
 			v.Pick = &row
 		}
 	}

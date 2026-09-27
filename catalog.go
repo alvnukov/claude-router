@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"localrouter/internal/catalogstartup"
 )
 
 const catalogRefreshInterval = time.Hour
@@ -80,14 +82,19 @@ func parseAnthropicCatalog(body []byte) ([]string, error) {
 	return out, nil
 }
 
-func fetchAnthropicCatalog(ctx context.Context) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", anthropicCatalogURL, nil)
+func fetchAnthropicCatalog(ctx context.Context, deps ...catalogstartup.Dependencies) ([]string, error) {
+	endpoint := anthropicCatalogURL
+	client := &http.Client{Timeout: 15 * time.Second}
+	if len(deps) > 0 {
+		endpoint = deps[0].OfficialURL()
+		client = deps[0].Client(15 * time.Second)
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "claude-router/1.0")
 	req.Header.Set("Accept", "text/html")
-	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -106,25 +113,12 @@ func fetchAnthropicCatalog(ctx context.Context) ([]string, error) {
 	return parseAnthropicCatalog(body)
 }
 
-func (u *uiServer) startCatalogUpdates(ctx context.Context) {
-	go func() {
-		// Populate immediately on startup, then check once per hour.
-		if err := u.refreshModels(ctx); err != nil {
-			log.Printf("model catalog refresh: %v", err)
-		}
-		ticker := time.NewTicker(catalogRefreshInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if err := u.refreshModels(ctx); err != nil {
-					log.Printf("model catalog refresh: %v", err)
-				}
-			}
-		}
-	}()
+func (u *uiServer) startCatalogUpdates(ctx context.Context) catalogstartup.Run {
+	var deps catalogstartup.Dependencies
+	if u.catalog != nil {
+		deps = *u.catalog
+	}
+	return deps.Start(ctx, catalogRefreshInterval, u.refreshModels)
 }
 
 // Network reads happen outside the config lock. Results are merged into the
@@ -137,12 +131,18 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	defer u.catalogMu.Unlock()
 	snapshot := u.cs.get().local
 	ids, fetchErr := u.fetchAnthropic(ctx)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	results := map[string]probeResult{}
 	for _, p := range snapshot.Providers {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		results[p.Name] = u.probeProvider(p, true)
+		results[p.Name] = u.probeProvider(p, true, ctx)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 	}
 	u.cs.mu.Lock()
 	defer u.cs.mu.Unlock()
@@ -181,6 +181,9 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	}
 	next.repairInactiveProfiles()
 	if err := next.validateProfiles(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if u.cs.provPath != "" {
@@ -313,5 +316,5 @@ func (u *uiServer) settingsRefreshModels(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	err := u.refreshModels(r.Context())
-	u.renderSettingsResult(w, err, "Проверка моделей завершена")
+	u.renderSettingsResult(w, err, "Проверка моделей завершена", r.Context())
 }
