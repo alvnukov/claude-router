@@ -18,6 +18,7 @@ const EXECUTED = [...COMMANDS.keys()];
 const DERIVED = [
   'privacy-lab', 'privacy-p1-a', 'privacy-p1-b',
   'privacy-p1-explicit-exception', 'oracle-sensitivity',
+  'regression-full-path',
 ];
 const CHECKS = new Map([
   ['privacy-lab', [
@@ -42,6 +43,35 @@ const CHECKS = new Map([
     ['internal/regression', 'TestRegressionConfigOracleRejectsCorruptedResult'],
     ['internal/regression', 'TestRegressionHistoryOracleRejectsExtraSimilarModel'],
     ['internal/regression', 'TestRegressionUIOracleRejectsForeignMutation'],
+  ]],
+  ['regression-full-path', [
+    ['internal/regression', 'TestRegressionRouteMatrix'],
+    ['internal/regression', 'TestRegressionEffortMappingAndAbsentMapping'],
+    ['internal/regression', 'TestRegressionCloudPassthroughAndDisabled'],
+    ['internal/regression', 'TestRegressionProfileSwitchAndRestart'],
+    ['internal/regression', 'TestRegressionPoolAttemptOrderAndAffinity'],
+    ['internal/regression', 'TestRegressionMessageShapes'],
+    ['internal/regression', 'TestRegressionLocalOpenAIWire'],
+    ['internal/regression', 'TestRegressionSSEEventsAndFinal'],
+    ['internal/regression', 'TestRegressionStreamFailurePhases'],
+    ['internal/regression', 'TestRegressionCancelNoRetry'],
+    ['internal/regression', 'TestRegressionConfigCrashSafeRestart'],
+    ['internal/regression', 'TestRegressionProfileCloneAndDeletionGuards'],
+    ['internal/regression', 'TestRegressionAccountIdentityAndNoCrossCall'],
+    ['internal/regression', 'TestRegressionInterceptionRoundTrip'],
+    ['internal/regression', 'TestRegressionInterceptionRejectsExternalConflict'],
+    ['internal/regression', 'TestRegressionCatalogRollback'],
+    ['internal/regression', 'TestRegressionHistoryDetailAndExactFilter'],
+    ['internal/regression', 'TestRegressionHistoryToolOnlyDetail'],
+    ['internal/regression', 'TestRegressionHistoryLiteralJSONText'],
+    ['internal/regression', 'TestRegressionUIDetailCapsLongResponse'],
+    ['internal/regression', 'TestRegressionUIHostOriginEventsAndCap'],
+    ['internal/regression', 'TestRegressionLimitsAccountFreshness'],
+    ['internal/regression', 'TestRegressionHealthAndCancel'],
+    ['internal/regression', 'TestRegressionAccountIdentityAndNoCrossCall/RR-ACC-01-02-03/auth-refresh'],
+    ['internal/regression', 'TestRegressionCatalogRollback/RR-CAT-01/refresh'],
+    ['internal/regression', 'TestRegressionLimitsAccountFreshness/RR-LIM-01/account-window'],
+    ['internal/regression', 'TestRegressionHealthAndCancel/RR-HEA-01/recovery'],
   ]],
 ]);
 const SHA = /^[0-9a-f]{40}$/;
@@ -126,7 +156,9 @@ function verifySteps(report) {
     } else {
       requireCondition(DERIVED.includes(step.id) &&
         step.exit_code === null && step.command === 'derived:go-test' &&
-        step.artifact === SUMMARY_NAME, 'failed-derived-gate');
+        step.artifact === SUMMARY_NAME &&
+        (step.id !== 'regression-full-path' || step.duration_ms === null),
+      'failed-derived-gate');
     }
   }
   for (const id of [...EXECUTED, ...DERIVED]) {
@@ -162,7 +194,7 @@ function verifyStepEvidence(evidence, report) {
 }
 
 function verifySummary(summary, commit) {
-  requireCondition(object(summary) && summary.schema_version === 1 &&
+  requireCondition(object(summary) && summary.schema_version === 2 &&
     summary.complete === true && summary.commit_sha === commit &&
     Array.isArray(summary.checks) && object(summary.verdicts), 'invalid-summary');
   const checks = new Map();
@@ -193,7 +225,7 @@ function verifySummary(summary, commit) {
 function verify() {
   const { report: file, base, commit } = args();
   const report = readJSON(file, 1024 * 1024);
-  requireCondition(object(report) && report.schema_version === 1 &&
+  requireCondition(object(report) && report.schema_version === 2 &&
     report.status === 'pass' && report.base_sha === base &&
     report.commit_sha === commit && SHA.test(report.commit_sha) &&
     object(report.platform) && version(report.platform.os) &&
