@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -201,6 +202,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	sort.Slice(out.Pools, func(i, j int) bool { return out.Pools[i].Name < out.Pools[j].Name })
 	sessions := map[string]*webui.Session{}
 	routeIndexes := map[string]map[[5]string]int{}
+	sessionBodies := map[string][][]byte{}
 	for _, rec := range records {
 		out.Summary.Total++
 		if !rec.Done() {
@@ -241,6 +243,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if !rec.Done() {
 			s.Routes[index].Pending++
 		}
+		sessionBodies[rec.Session] = append(sessionBodies[rec.Session], rec.ReqBody)
 		s.Requests++
 		if !rec.Done() {
 			s.Pending++
@@ -257,6 +260,28 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].LastAt.After(out.Sessions[j].LastAt) })
 	if len(out.Sessions) > 100 {
 		out.Sessions = out.Sessions[:100]
+	}
+	ids := make([]string, 0, len(out.Sessions))
+	for _, session := range out.Sessions {
+		ids = append(ids, session.ID)
+	}
+	root := ""
+	if u.claudeProxy != nil && u.claudeProxy.path != "" {
+		root = filepath.Join(filepath.Dir(u.claudeProxy.path), "projects")
+	}
+	names := u.sessionNames.snapshot(root, ids)
+	for i := range out.Sessions {
+		session := &out.Sessions[i]
+		identity := names[session.ID]
+		session.Title, session.Project, session.Branch = identity.Title, identity.Project, identity.Branch
+		if session.Title == "" && session.ID != "" {
+			bodies := sessionBodies[session.ID]
+			for j := len(bodies) - 1; j >= 0; j-- {
+				if session.Title = firstSessionPrompt(bodies[j]); session.Title != "" {
+					break
+				}
+			}
+		}
 	}
 	return out
 }

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import type { UIState, SessionRoute } from "./types";
+  import SessionIdentity from "./SessionIdentity.svelte";
+  import { sessionTitle } from "./session";
   import LimitMeter from "./LimitMeter.svelte";
   let { data }: { data: UIState } = $props();
   let host: HTMLDivElement;
@@ -94,8 +96,8 @@
           data-node={"session-" + i}
           href={"#/requests?session=" + encodeURIComponent(session.id)}
           ><div class="spread">
-            <strong>{session.id ? session.id.slice(0, 8) : "Без сессии"}</strong
-            ><span class="badge"
+            <SessionIdentity {session} />
+            <span class="badge"
               >{session.pending
                 ? "В полёте: " + session.pending
                 : "Завершено"}</span
@@ -122,7 +124,7 @@
               : "Усилие по умолчанию"}
           </p>
           <small>→ {route.model || "Назначение не записано"}</small>
-          <p>Сессия · {sessions[sessionIndex].id.slice(0, 8) || "Без сессии"} · {route.requests} запр.{route.pending ? " · В полёте: " + route.pending : ""}</p></a
+          <p>Сессия · {sessionTitle(sessions[sessionIndex])} · {route.requests} запр.{route.pending ? " · В полёте: " + route.pending : ""}</p></a
         >{/each}{#if !sessions.length}<a class="map-node" href="#/routes"
           ><strong>{data.families.length} семейств моделей</strong>
           <p>Настроить маршруты →</p></a

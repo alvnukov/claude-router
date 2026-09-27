@@ -47,6 +47,7 @@ type uiServer struct {
 	fetchAnthropic    func(context.Context) ([]string, error)
 	st                *history.Store
 	connectionMetrics connectionUsageCache
+	sessionNames      sessionNameCache
 	cs                *configStore
 	hl                *health
 	life              *lifecycle
