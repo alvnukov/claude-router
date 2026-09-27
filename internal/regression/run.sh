@@ -1,47 +1,59 @@
 #!/usr/bin/env bash
-# Regression entrypoint: bash internal/regression/run.sh from the router worktree.
-# Stage A is authoring only. Neither an environment flag nor a proxy proves
-# isolation of Go, Node, router and browser descendants.
+# Regression entrypoint for the trusted synthetic CI job. The image-owned
+# wrapper validates the baked source tree and event SHA before calling this
+# script; path and environment checks below do not attest its network boundary.
 set -euo pipefail
 
-printf '%s\n' 'status=blocked' \
-  'reason=no independently proven network-none and filesystem-write boundary for the whole process tree' \
-  'oracle_sensitivity_evidence=not-run' \
-  'product_evidence=not-run' \
-  'phase_B=requires container preflight and separate authorization'
+blocked() {
+  printf '%s\n' 'status=blocked' "reason=$1" \
+    'oracle_sensitivity_evidence=not-run' 'product_evidence=not-run'
+  exit 78
+}
 
-# Stage B must replace this guard with an independently attested container
-# adapter BEFORE any subprocess or write. It must verify the same image/source
-# SHA and all descendants: dynamic loopback only, no host network, real home,
-# secrets or privileged sockets; original source/dependencies read-only and
-# writes confined to fresh scratch/home/cache (use an isolated writable copy
-# or overlay for the UI dist and browser scripts). A caller-supplied variable,
-# proxy, or /proc inspection alone is not an authorization or attestation.
-# The testBinary/startRouter guard must be replaced separately at that gate.
-# No run.json is written in A: the CI validator treats absence as failure.
-exit 78
-
-# Stage B implementation sketch below the non-bypassable A guard. None of it
-# has been built, run, or validated. Keep raw logs in private scratch; publish
-# only the allowlisted summary after a complete -json stream on the SAME HEAD.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-scratch="${ROUTER_TEST_SCRATCH:?isolated scratch required}"
-modules="${ROUTER_TEST_MODULE_CACHE:?read-only offline module cache required}"
-[[ "$scratch" = /* && "$modules" = /* && "$scratch" != / && -d "$scratch" && ! -L "$scratch" ]] || exit 78
+source_dir="${ROUTER_TEST_SOURCE:-}"
+scratch="${ROUTER_TEST_SCRATCH:-}"
+modules="${ROUTER_TEST_MODULE_CACHE:-}"
+browsers="${PLAYWRIGHT_BROWSERS_PATH:-}"
+commit_sha="${ROUTER_TEST_EXPECT_SHA:-}"
+[[ "$root" == /workspace/source && "$source_dir" == "$root" &&
+   "$scratch" == /workspace/output && "$modules" == /* && "$modules" != / &&
+   "$browsers" == /* && "$browsers" != / && "$modules" != "$root" &&
+   "$browsers" != "$root" && "$modules" != "$scratch" &&
+   "$browsers" != "$scratch" && "$modules" != "$root"/* &&
+   "$browsers" != "$root"/* && "$modules" != "$scratch"/* &&
+   "$browsers" != "$scratch"/* && "$root" != "$modules"/* &&
+   "$scratch" != "$modules"/* && "$root" != "$browsers"/* &&
+   "$scratch" != "$browsers"/* && "$commit_sha" =~ ^[0-9a-f]{40}$ ]] ||
+  blocked 'trusted image source/output/dependency adapter is unavailable'
+[[ $EUID -ne 0 && -d "$scratch" && ! -L "$scratch" &&
+   "$(cd "$scratch" && pwd -P)" == "$scratch" &&
+   -d "$modules" && ! -L "$modules" && -d "$browsers" && ! -L "$browsers" &&
+   -d "$root/internal/ui/web/node_modules" &&
+   ! -e "$scratch/report" ]] || blocked 'fresh scratch or offline dependencies unavailable'
+command -v go >/dev/null && command -v node >/dev/null && command -v npm >/dev/null ||
+  blocked 'offline Go, Node and npm toolchains are required'
+
+# The wrapper owns the immutable source and read-only dependencies. The runner
+# owns every writable home/cache and keeps raw logs private in fresh scratch.
 umask 077
 report="$scratch/report"
-mkdir -- "$report" # Refuse to overwrite a previous run.
-mkdir -- "$report/private" "$scratch/home" "$scratch/gopath" "$scratch/gocache"
-
-# Only the independently isolated parent can reach this point. The child
-# environment carries no inherited credentials, router paths or proxy claims.
-clean_env=(env -i "PATH=$PATH" "HOME=$scratch/home" "TMPDIR=$scratch" \
-  "XDG_CONFIG_HOME=$scratch/home" "GOPATH=$scratch/gopath" \
-  "GOCACHE=$scratch/gocache" "GOMODCACHE=$modules" \
+mkdir -- "$report" "$report/private" "$scratch/home" "$scratch/home/router" \
+  "$scratch/home/claude" "$scratch/home/codex" "$scratch/gopath" \
+  "$scratch/gocache" "$scratch/tmp"
+clean_env=(env -i "PATH=$PATH" "HOME=$scratch/home" "TMPDIR=$scratch/tmp" \
+  "XDG_CONFIG_HOME=$scratch/home" "CLAUDE_CONFIG_DIR=$scratch/home/claude" \
+  "CODEX_HOME=$scratch/home/codex" "ROUTER_HOME=$scratch/home/router" \
+  "ROUTER_CODEX_AUTH_FILE=$scratch/home/codex/auth.json" \
+  "ROUTER_PROVIDERS_FILE=$scratch/home/router/providers.json" \
+  "ROUTER_ENV_FILE=$scratch/home/router/env" \
+  "ROUTER_STATE_FILE=$scratch/home/router/state.json" \
+  "ROUTER_UI_HISTORY_FILE=$scratch/home/router/history.jsonl" \
+  "ROUTER_ANTHROPIC_LIMITS_FILE=$scratch/home/router/limits.json" \
+  "GOPATH=$scratch/gopath" "GOCACHE=$scratch/gocache" "GOMODCACHE=$modules" \
   "ROUTER_TEST_SCRATCH=$scratch" "ROUTER_TEST_MODULE_CACHE=$modules" \
-  GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local \
-  NPM_CONFIG_OFFLINE=true PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$scratch/browsers}")
-commit_sha="$(cd "$root" && "${clean_env[@]}" git rev-parse HEAD)"
+  GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local NPM_CONFIG_OFFLINE=true \
+  "PLAYWRIGHT_BROWSERS_PATH=$browsers")
 go_version="$("${clean_env[@]}" go version)"
 export RR_REPORT="$report" RR_COMMIT_SHA="$commit_sha" RR_GO_VERSION="$go_version"
 
@@ -65,8 +77,20 @@ run_step go-build 'go build ./...' "$root" go build ./...
 run_step go-test 'go test -count=1 -json ./...' "$root" go test -count=1 -json ./...
 run_step go-race 'go test -count=1 -race ./...' "$root" env ROUTER_TEST_CHILD_RACE=1 go test -count=1 -race ./...
 run_step go-vet 'go vet ./...' "$root" go vet ./...
+# svelte-check may write working files, so run it from a writable web copy.
+# Browser/usage scripts resolve the repository root from their own location;
+# run them in the read-only source, where they write only to isolated TMPDIR.
 web="$root/internal/ui/web"
-run_step ui-check 'npm run check' "$web" npm run check
+web_work="$scratch/web"
+mkdir -- "$web_work"
+shopt -s dotglob nullglob
+for item in "$web"/*; do
+  [[ "${item##*/}" == node_modules ]] && continue
+  cp -R -- "$item" "$web_work/"
+done
+shopt -u dotglob nullglob
+ln -s -- "$web/node_modules" "$web_work/node_modules"
+run_step ui-check 'npm run check' "$web_work" npm run check
 run_step ui-browser 'npm run test:browser' "$web" npm run test:browser
 run_step ui-usage 'npm run test:usage' "$web" npm run test:usage
 

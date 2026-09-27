@@ -187,7 +187,7 @@ func TestRegressionOracleRejectsCorruptedObservations(t *testing.T) {
 }
 
 func TestRegressionOracleSSERejectsMissingTerminalAndWrongTool(t *testing.T) {
-	expected := []byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_fixture_1\",\"name\":\"fixture_lookup\",\"input\":{}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"n\\\":7}\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	expected := []byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_fixture_1\",\"name\":\"fixture_lookup\",\"input\":{}}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"n\\\":7}\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	if err := compareEvents(expected, expected); err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +196,9 @@ func TestRegressionOracleSSERejectsMissingTerminalAndWrongTool(t *testing.T) {
 		bytes.Replace(expected, []byte(`\"n\":7`), []byte(`\"n\":8`), 1),
 		bytes.Replace(expected, []byte("event: content_block_delta"), []byte("event: content_block_stop"), 1),
 	} {
+		if bytes.Equal(observed, expected) {
+			t.Fatal("corrupted SSE observation was not changed")
+		}
 		if err := compareEvents(observed, expected); err == nil {
 			t.Fatal("corrupted observed stream passed fixed semantic oracle")
 		}
