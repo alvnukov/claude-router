@@ -92,6 +92,7 @@ type persistedCatalog struct {
 		UpdatedAt time.Time `json:"updated_at"`
 		Error     string    `json:"error"`
 	} `json:"providers"`
+	CodexSeen map[string][]string `json:"codex_seen"`
 }
 
 func (s *testStand) catalogState(t *testing.T) persistedCatalog {
@@ -109,6 +110,26 @@ func (s *testStand) catalogState(t *testing.T) persistedCatalog {
 	return state.Catalog
 }
 
+type catalogProviderSpec struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	BaseURL string `json:"base_url"`
+	APIKey  string `json:"api_key"`
+	AuthID  string `json:"auth_id"`
+}
+
+func compareCatalogProviders(observed, expected []catalogProviderSpec) error {
+	if len(observed) != len(expected) {
+		return fmt.Errorf("catalog provider count: %d observed, %d expected", len(observed), len(expected))
+	}
+	for i, want := range expected {
+		if observed[i] != want {
+			return fmt.Errorf("catalog provider %d: observed %q, expected %q", i, observed[i].Name, want.Name)
+		}
+	}
+	return nil
+}
+
 func (s *testStand) expectedCatalogProbes(t *testing.T) []startupProbe {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join(s.home, "providers.json"))
@@ -116,17 +137,16 @@ func (s *testStand) expectedCatalogProbes(t *testing.T) []startupProbe {
 		t.Fatal(err)
 	}
 	var config struct {
-		Providers []struct {
-			Name    string `json:"name"`
-			Type    string `json:"type"`
-			BaseURL string `json:"base_url"`
-		} `json:"providers"`
+		Providers []catalogProviderSpec `json:"providers"`
 	}
 	if err := json.Unmarshal(body, &config); err != nil {
 		t.Fatal(err)
 	}
+	if err := compareCatalogProviders(config.Providers, s.plannedProviders); err != nil {
+		t.Fatalf("router mutated the immutable fixture provider list: %v", err)
+	}
 	want := []startupProbe{{Target: "official", Method: http.MethodGet, URI: "/overview"}}
-	for _, provider := range config.Providers {
+	for _, provider := range s.plannedProviders {
 		switch {
 		case provider.Name == "codex" && provider.Type == "codex" && provider.BaseURL == "https://chatgpt.com/backend-api/codex":
 			want = append(want, startupProbe{Target: "codex", Method: http.MethodGet, URI: "/models?client_version=0.156.0"})
@@ -164,11 +184,28 @@ func (s *testStand) awaitCatalog(t *testing.T, prior time.Time, before int, want
 				if len(catalog.Anthropic) != 1 || catalog.Anthropic[0] != "claude-opus-5-5" || catalog.AnthropicUpdated.IsZero() {
 					t.Fatal("synthetic official catalog was not parsed and persisted")
 				}
+				if len(catalog.Providers) != len(want)-1 {
+					t.Fatal("synthetic catalog contains an unlisted provider")
+				}
+				models := map[string]string{
+					"fixture-a": "fixture-a-model", "fixture-b": "fixture-b-model", "codex": "gpt-6-sol",
+				}
+				codexExpected := false
 				for _, probe := range want[1:] {
 					provider := catalog.Providers[probe.Target]
-					if provider.UpdatedAt.IsZero() || provider.Error != "" || len(provider.Models) != 1 {
+					if provider.UpdatedAt.IsZero() || provider.Error != "" || len(provider.Models) != 1 ||
+						provider.Models[0].ID != models[probe.Target] {
 						t.Fatalf("synthetic provider %q was not parsed and persisted", probe.Target)
 					}
+					codexExpected = codexExpected || probe.Target == "codex"
+				}
+				if codexExpected {
+					seen := catalog.CodexSeen["codex"]
+					if len(catalog.CodexSeen) != 1 || len(seen) != 1 || seen[0] != "gpt-6-sol" {
+						t.Fatal("synthetic Codex discovery was not persisted")
+					}
+				} else if len(catalog.CodexSeen) != 0 {
+					t.Fatal("unlisted Codex discovery was persisted")
 				}
 				s.expected = append(s.expected, want...)
 				return

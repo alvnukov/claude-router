@@ -236,18 +236,19 @@ type testFixture struct {
 }
 
 type testStand struct {
-	home        string
-	apiURL      string
-	uiURL       string
-	a, b, cloud *upstreamStub
-	order       *attemptLog
-	probes      *startupJournal
-	expected    []startupProbe
-	env         []string
-	cmd         *exec.Cmd
-	stderr      bytes.Buffer
-	waited      chan struct{}
-	exitErr     error
+	home             string
+	apiURL           string
+	uiURL            string
+	a, b, cloud      *upstreamStub
+	order            *attemptLog
+	probes           *startupJournal
+	expected         []startupProbe
+	plannedProviders []catalogProviderSpec
+	env              []string
+	cmd              *exec.Cmd
+	stderr           bytes.Buffer
+	waited           chan struct{}
+	exitErr          error
 }
 
 var binaryBuild struct {
@@ -325,7 +326,7 @@ func safeCatalogStartup(fixture catalogFixture) bool {
 func testBinary(t *testing.T) string {
 	t.Helper()
 	if !isolatedFullProcessTree() {
-		t.Fatal("blocked: no independently proven process-tree network/filesystem isolation")
+		t.Fatal("blocked: approved container source, output and offline cache preflight unavailable")
 	}
 	binaryBuild.Do(func() {
 		scratch := os.Getenv("ROUTER_TEST_SCRATCH")
@@ -445,7 +446,7 @@ func waitReady(t *testing.T, endpoint string, stand *testStand) {
 func startRouter(t *testing.T, fixture testFixture) *testStand {
 	t.Helper()
 	if !isolatedFullProcessTree() {
-		t.Skip("blocked: full-path tests require an independently proven isolated runner")
+		t.Skip("blocked: approved container source, output and offline cache preflight unavailable")
 	}
 	if os.Getenv("ROUTER_TEST_SCRATCH") == "" {
 		t.Fatal("blocked: isolated runner did not assign a temporary scratch directory")
@@ -504,7 +505,12 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 		}
 	}
 	var origins []string
+	var plannedProviders []catalogProviderSpec
 	for _, provider := range config["providers"].([]map[string]string) {
+		plannedProviders = append(plannedProviders, catalogProviderSpec{
+			Name: provider["name"], Type: provider["type"], BaseURL: provider["base_url"],
+			APIKey: provider["api_key"], AuthID: provider["auth_id"],
+		})
 		if provider["type"] == "codex" {
 			continue
 		}
@@ -520,7 +526,7 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 		t.Fatal("blocked: synthetic catalog manifest/auth fixture is not private and canonical")
 	}
 	stand := &testStand{home: home, apiURL: "http://" + apiAddr, uiURL: "http://" + uiAddr,
-		a: a, b: b, cloud: cloud, order: order, probes: probes}
+		a: a, b: b, cloud: cloud, order: order, probes: probes, plannedProviders: plannedProviders}
 	for _, endpoint := range []string{stand.apiURL, stand.uiURL, cloud.server.URL} {
 		if err := validateLoopback(endpoint); err != nil {
 			t.Fatal(err)

@@ -37,6 +37,27 @@ func TestRegressionStartupProbeOracleRejectsMissingAndUnlistedRequests(t *testin
 	}
 }
 
+func TestRegressionCatalogProviderOracleRejectsMutationAfterStartup(t *testing.T) {
+	want := []catalogProviderSpec{
+		{Name: "fixture-a", BaseURL: "http://127.0.0.1:19001/v1", APIKey: "fixture-local"},
+		{Name: "codex", Type: "codex", BaseURL: "https://chatgpt.com/backend-api/codex"},
+	}
+	if err := compareCatalogProviders(want, want); err != nil {
+		t.Fatal(err)
+	}
+	for _, changed := range [][]catalogProviderSpec{
+		want[:1],
+		{want[1], want[0]},
+		{want[0], {Name: "codex", Type: "codex", BaseURL: "https://example.invalid"}},
+		{{Name: "fixture-a", BaseURL: want[0].BaseURL, APIKey: "changed"}, want[1]},
+		{want[0], {Name: "codex", Type: "codex", BaseURL: want[1].BaseURL, AuthID: "changed"}},
+	} {
+		if err := compareCatalogProviders(changed, want); err == nil {
+			t.Fatal("mutated provider list passed the fixed startup oracle")
+		}
+	}
+}
+
 func TestRegressionCatalogProbeJournalDoesNotPolluteRouteAttempts(t *testing.T) {
 	stub := newUpstreamStub(t, []byte(`{"choices":[]}`))
 	stub.name, stub.probes = "fixture-a", new(startupJournal)
