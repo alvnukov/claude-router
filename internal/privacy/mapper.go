@@ -38,6 +38,9 @@ func (m *mapper) init() {
 			m.known.add(r.Pseudo, matchValue{real: r.Real, kind: r.Kind, foreign: s != m.view.session})
 		}
 	}
+	for _, r := range m.view.session.entries {
+		m.known.add(r.Pseudo, matchValue{real: r.Real, kind: r.Kind})
+	}
 }
 func (m *mapper) mapValue(real string, kind Kind) (string, error) {
 	key := strings.ToLower(real)
@@ -46,6 +49,7 @@ func (m *mapper) mapValue(real string, kind Kind) (string, error) {
 	}
 	var pseudo string
 	var err error
+	var explicit bool
 	switch kind {
 	case KindHost:
 		domain := domainOf(real, m.e.rules.Domains)
@@ -108,13 +112,15 @@ func (m *mapper) mapValue(real string, kind Kind) (string, error) {
 			for _, form := range e.Forms {
 				if n, ok := formPrefix(real, form); ok {
 					if e.Pseudonym != "" {
-						pseudo = caseLike(e.Pseudonym, real) + real[n:]
+						pseudo = e.Pseudonym + real[n:]
+						explicit = true
 					} else if strings.HasSuffix(form, "*") && len(real) > n {
 						basePseudo, err := m.mapValue(real[:n], kind)
 						if err != nil {
 							return "", err
 						}
 						pseudo = basePseudo + real[n:]
+						explicit = false
 					}
 				}
 			}
@@ -129,6 +135,9 @@ func (m *mapper) mapValue(real string, kind Kind) (string, error) {
 	for _, sd := range m.view.all {
 		for _, issued := range sd.entries {
 			if strings.EqualFold(issued.Pseudo, pseudo) {
+				if explicit && issued.Kind == kind && issued.Real == real && issued.Pseudo == pseudo && explicitPseudonym(m.e.rules, kind, real) == pseudo {
+					continue
+				}
 				return "", &RejectError{Reason: "pseudonym is already assigned"}
 			}
 		}
@@ -137,6 +146,9 @@ func (m *mapper) mapValue(real string, kind Kind) (string, error) {
 	record := mapRecord{Kind: kind, Real: real, Pseudo: pseudo, At: m.e.opt.Now()}
 	m.view.session.add(record)
 	m.known.add(pseudo, matchValue{real: real, kind: kind})
+	if explicit {
+		return pseudo, nil
+	}
 	return caseLike(pseudo, real), nil
 }
 func (m *mapper) plainSpans(text string, field fieldKind) []Span {
@@ -246,6 +258,30 @@ func formPrefix(real, form string) (int, bool) {
 		n += size
 	}
 	return n, strings.EqualFold(real[:n], base) && (n == len(real) || strings.HasSuffix(form, "*"))
+}
+
+// explicitPseudonym is the effective configured mapping, not just any
+// matching entry: later entries and stem expansions can replace it.
+func explicitPseudonym(rules *Rules, kind Kind, real string) string {
+	if rules == nil || kind == KindEmail || kind == KindPhone || (kind == KindHost && domainOf(real, rules.Domains) != "") {
+		return ""
+	}
+	var pseudo string
+	for _, entry := range rules.Entries {
+		if entry.Kind != kind {
+			continue
+		}
+		for _, form := range entry.Forms {
+			if n, ok := formPrefix(real, form); ok {
+				if entry.Pseudonym != "" {
+					pseudo = entry.Pseudonym + real[n:]
+				} else if strings.HasSuffix(form, "*") && len(real) > n {
+					pseudo = ""
+				}
+			}
+		}
+	}
+	return pseudo
 }
 func entryMatches(entry Entry, real string) bool {
 	for _, form := range entry.Forms {

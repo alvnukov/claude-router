@@ -192,6 +192,42 @@ func TestSessionOracleAutomaticPseudonymsA(t *testing.T) {
 			t.Fatal("expected synthetic session file missing", err)
 		}
 	}
+	t.Run("RejectForgedAutoDuplicate", func(t *testing.T) {
+		sessionOracleReplacePersonRecord(t, home, "rr-two", sessionOraclePerson, strings.TrimSuffix(personA, " keep-sentinel"))
+		if _, err := Open(home, rules, Options{Home: "/home/rr-synthetic", Hostname: "rr-host.invalid"}); err == nil {
+			t.Fatal("forged automatic pseudonym duplicate was accepted")
+		}
+	})
+}
+
+func sessionOracleReplacePersonRecord(t *testing.T, home, id, real, pseudo string) {
+	t.Helper()
+	path := filepath.Join(home, "privacy", "sessions", id+".jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal("read synthetic session record", err)
+	}
+	lines := bytes.Split(data, []byte{'\n'})
+	replaced := false
+	for i, line := range lines {
+		var record mapRecord
+		if json.Unmarshal(line, &record) != nil || record.Kind != KindPerson || record.Real != sessionOraclePerson {
+			continue
+		}
+		record.Real, record.Pseudo = real, pseudo
+		lines[i], err = json.Marshal(record)
+		if err != nil {
+			t.Fatal("encode synthetic session record", err)
+		}
+		replaced = true
+		break
+	}
+	if !replaced {
+		t.Fatal("synthetic person record missing")
+	}
+	if err := os.WriteFile(path, bytes.Join(lines, []byte{'\n'}), 0o600); err != nil {
+		t.Fatal("write synthetic session record", err)
+	}
 }
 
 // Foreign restoration (B) is checked separately from pseudonym unlinkability
@@ -355,30 +391,37 @@ func TestSessionOracleForeignRestorationB(t *testing.T) {
 
 func TestSessionOracleExplicitPseudonymException(t *testing.T) {
 	const explicit = "Вымышленный Маркер"
-	const rulesJSON = `{"entries":[{"kind":"person","forms":["Аврора Тестова"],"pseudonym":"Вымышленный Маркер"}]}`
+	const rulesJSON = `{"entries":[{"kind":"person","forms":["Аврора Тестова"],"pseudonym":"Вымышленный Маркер"}],"fields":[{"path":"content[*].input.owner","kind":"person"}]}`
 	home := t.TempDir()
 	rules := sessionOracleRules(t, rulesJSON)
 	a := sessionOracleEngine(t, home, rules)
 	b := sessionOracleEngine(t, home, rules)
 	first, reqA := sessionOracleMask(t, a, "rr-explicit-a", sessionOraclePerson+" keep-sentinel")
 	if first != explicit+" keep-sentinel" {
-		t.Fatal("configured pseudonym differs from independent explicit rule")
+		t.Error("configured pseudonym differs from independent explicit rule")
 	}
-	// If current Engine rejects the second session, this is a genuine future
-	// FAIL of the explicit-entry contract, not a reason to soften A or B.
 	second, reqB := sessionOracleMask(t, b, "rr-explicit-b", sessionOraclePerson+" keep-sentinel")
-	if second != first {
+	if second != first || second != explicit+" keep-sentinel" {
 		t.Fatal("same configured pseudonym did not remain intentionally linkable")
+	}
+	reopened := sessionOracleEngine(t, home, rules)
+	third, reqAgain := sessionOracleMask(t, reopened, "rr-explicit-b", sessionOraclePerson+" keep-sentinel")
+	if third != second {
+		t.Fatal("configured pseudonym changed after reopening and third request")
 	}
 	for _, tc := range []struct {
 		e   *Engine
 		req *Request
 	}{
-		{a, reqA}, {b, reqB},
+		{a, reqA}, {b, reqB}, {reopened, reqAgain},
 	} {
 		out, err := tc.e.UnmaskJSON(tc.req, sessionOracleResponse(explicit+" keep-sentinel"))
 		if err != nil || sessionOracleResponseText(t, out) != sessionOraclePerson+" keep-sentinel" {
 			t.Fatal("own explicit-entry restore failed", err)
+		}
+		typed, err := tc.e.UnmaskJSON(tc.req, sessionOracleTyped(explicit))
+		if err != nil || sessionOracleTypedOwner(t, typed) != sessionOraclePerson {
+			t.Fatal("own typed explicit-entry restore failed", err)
 		}
 	}
 	if sessionOracleUnlink(first, second) != "linkable" {
@@ -387,5 +430,17 @@ func TestSessionOracleExplicitPseudonymException(t *testing.T) {
 	// The exception must never be fed to A's automatic-person/IP assertion.
 	if sessionOracleUnlink(first, second) == "" {
 		t.Fatal("automatic oracle accidentally accepted an explicit collision")
+	}
+	for _, badRules := range []string{
+		`{}`,
+		`{"entries":[{"kind":"person","forms":["Борис Синтетик"],"pseudonym":"Вымышленный Маркер"}]}`,
+	} {
+		if _, err := Open(home, sessionOracleRules(t, badRules), Options{Home: "/home/rr-synthetic", Hostname: "rr-host.invalid"}); err == nil {
+			t.Fatal("explicit duplicate survived incompatible rules")
+		}
+	}
+	sessionOracleReplacePersonRecord(t, home, "rr-explicit-b", sessionOracleOther, explicit)
+	if _, err := Open(home, rules, Options{Home: "/home/rr-synthetic", Hostname: "rr-host.invalid"}); err == nil {
+		t.Fatal("mismatched real reused an explicit pseudonym")
 	}
 }

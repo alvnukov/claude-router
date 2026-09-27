@@ -58,6 +58,7 @@ var sessionIDRE = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
 type sessionStore struct {
 	dir    string
 	now    func() time.Time
+	rules  *Rules
 	shared *sharedSessions
 	newKey func() ([]byte, error)
 }
@@ -82,7 +83,7 @@ func (s *sessionStore) readAll() (map[string]*sessionData, error) {
 	if err != nil {
 		return nil, err
 	}
-	pseudos := make(map[string]string)
+	pseudos := make(map[string]mapRecord)
 	for _, f := range files {
 		if !strings.HasSuffix(f.Name(), ".jsonl") {
 			continue
@@ -112,10 +113,12 @@ func (s *sessionStore) readAll() (map[string]*sessionData, error) {
 		}
 		for _, r := range sd.entries {
 			p := strings.ToLower(r.Pseudo)
-			if _, ok := pseudos[p]; ok {
-				return nil, errors.New("privacy: duplicate pseudonym in session index")
+			if issued, ok := pseudos[p]; ok {
+				if issued.Kind != r.Kind || issued.Real != r.Real || issued.Pseudo != r.Pseudo || explicitPseudonym(s.rules, r.Kind, r.Real) != r.Pseudo {
+					return nil, errors.New("privacy: duplicate pseudonym in session index")
+				}
 			}
-			pseudos[p] = r.Real
+			pseudos[p] = r
 		}
 		all[id] = sd
 	}

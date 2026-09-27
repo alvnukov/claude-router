@@ -103,6 +103,7 @@ func Open(routerHome string, rules *Rules, opt Options) (*Engine, error) {
 		return nil, err
 	}
 	e := &Engine{rules: &r, opt: opt, detectors: newDetectors(&r), store: newSessionStore(routerHome, opt.Now), words: words}
+	e.store.rules = &r
 	if opt.newKey != nil {
 		e.store.newKey = opt.newKey
 	}
@@ -132,13 +133,7 @@ func Open(routerHome string, rules *Rules, opt Options) (*Engine, error) {
 	for _, sd := range all {
 		for _, entry := range sd.entries {
 			banned.reserved[strings.ToLower(entry.Real)] = true
-			sameConfigured := false
-			for _, configured := range r.Entries {
-				if configured.Kind == entry.Kind && strings.EqualFold(configured.Pseudonym, entry.Pseudo) && entryMatches(configured, entry.Real) {
-					sameConfigured = true
-				}
-			}
-			if !sameConfigured {
+			if explicitPseudonym(&r, entry.Kind, entry.Real) != entry.Pseudo {
 				banned.reserved[strings.ToLower(entry.Pseudo)] = true
 			}
 		}
@@ -222,6 +217,9 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 			for _, record := range sd.entries {
 				req.undo.add(record.Pseudo, matchValue{real: record.Real, kind: record.Kind, foreign: sd != view.session})
 			}
+		}
+		for _, record := range view.session.entries {
+			req.undo.add(record.Pseudo, matchValue{real: record.Real, kind: record.Kind})
 		}
 		for pseudo, real := range req.secrets {
 			req.undo.add(pseudo, matchValue{real: real, kind: KindSecret, secret: true})
