@@ -71,7 +71,10 @@ func privacyTraffic(next http.Handler, cs *configStore, hl *health) http.Handler
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.Method != http.MethodPost || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/messages/count_tokens") || r.URL.RawQuery != "" || r.URL.RawPath != "" {
+		// Claude Code's beta SDK uses the literal beta=true on both endpoints.
+		// Match the wire form exactly: extra, duplicate or encoded query data
+		// must not become an uninspected channel to the upstream.
+		if r.Method != http.MethodPost || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/messages/count_tokens") || (r.URL.RawQuery != "" && r.URL.RawQuery != "beta=true") || r.URL.RawPath != "" {
 			reject(400, "privacy: unsupported endpoint, method or query; request was not sent")
 			return
 		}
@@ -192,7 +195,7 @@ func privacyCloud(w *privacyBuffer, r *http.Request, cfg config, body []byte) er
 	endpoint := *cfg.upstream
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + r.URL.Path
 	endpoint.RawPath = ""
-	endpoint.RawQuery = ""
+	endpoint.RawQuery = r.URL.RawQuery // Validated by privacyTraffic: empty or literal beta=true.
 	endpoint.Fragment = ""
 	up, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
