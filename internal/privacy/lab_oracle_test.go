@@ -70,12 +70,16 @@ func labOracleJSONProtected(output string, forbidden ...string) string {
 	}
 	if system != "keep-sentinel" {
 		parts := strings.Fields(system)
-		if len(parts) != 4 || parts[0] != "keep-sentinel" || !strings.Contains(parts[2], "@") || parts[3] == "" {
+		if len(parts) != 5 || parts[0] != "keep-sentinel" || !strings.Contains(parts[3], "@") || parts[4] == "" {
 			return "missing-allowed-text"
 		}
-		ip, err := netip.ParseAddr(parts[1])
-		if err != nil || !netip.MustParsePrefix("100.64.0.0/10").Contains(ip) {
-			return "invalid-ip-range"
+		privateIP, err := netip.ParseAddr(parts[1])
+		if err != nil || !netip.MustParsePrefix("10.0.0.0/8").Contains(privateIP) {
+			return "invalid-private-ip-range"
+		}
+		publicIP, err := netip.ParseAddr(parts[2])
+		if err != nil || !netip.MustParsePrefix("100.64.0.0/10").Contains(publicIP) {
+			return "invalid-public-ip-range"
 		}
 	}
 	meta, ok := root["metadata"].(map[string]any)
@@ -319,19 +323,19 @@ func TestLabOracleInputRejection(t *testing.T) {
 }
 
 func TestLabOracleSupportedFields(t *testing.T) {
-	const source = `{"system":"keep-sentinel 10.24.8.12 ops@example.internal host.example.internal","model":"claude-synthetic","messages":[{"role":"user","content":[{"type":"text","text":"Привет \"мир\"\nkeep-sentinel"},{"type":"tool_use","id":"tool_1","name":"connect","input":{"password":"RR-LAB-SYN-7319","port":22}}]}],"metadata":{"user_id":"rr-lab-test","billing":"credits-7"}}`
-	rules := json.RawMessage(`{"domains":["example.internal"],"entries":[{"kind":"host","forms":["host.example.internal"]}],"fields":[{"path":"messages[*].content[*].input.password","kind":"secret"}]}`)
+	const source = `{"system":"keep-sentinel 10.24.8.12 198.51.100.23 ops@example.internal host.example.internal","model":"claude-synthetic","messages":[{"role":"user","content":[{"type":"text","text":"Привет \"мир\"\nkeep-sentinel"},{"type":"tool_use","id":"tool_1","name":"connect","input":{"password":"RR-LAB-SYN-7319","port":22}}]}],"metadata":{"user_id":"rr-lab-test","billing":"credits-7"}}`
+	rules := json.RawMessage(`{"networks":["198.51.100.0/24"],"domains":["example.internal"],"entries":[{"kind":"host","forms":["host.example.internal"]}],"fields":[{"path":"messages[*].content[*].input.password","kind":"secret"}]}`)
 	lab := NewLab(t.TempDir())
-	for _, canary := range []string{labOracleCanary, "10.24.8.12", "ops@example.internal", "host.example.internal"} {
+	for _, canary := range []string{labOracleCanary, "10.24.8.12", "198.51.100.23", "ops@example.internal", "host.example.internal"} {
 		if got := labOracleJSONProtected(source, canary); got != "leak" {
 			t.Fatalf("source positive control: %s", got)
 		}
 	}
 	result := labOraclePreview(t, lab, PreviewInput{Mode: "json", Input: source, Rules: rules, Enabled: true})
-	if !result.Roundtrip || result.Masked[KindIPv4] < 1 || result.Masked[KindEmail] < 1 || result.Masked[KindHost] < 1 || result.Masked[KindSecret] < 1 {
+	if !result.Roundtrip || result.Masked[KindIPv4] < 2 || result.Masked[KindEmail] < 1 || result.Masked[KindHost] < 1 || result.Masked[KindSecret] < 1 {
 		t.Fatal("supported field classes were not all transformed")
 	}
-	if got := labOracleJSONProtected(result.Output, labOracleCanary, "10.24.8.12", "ops@example.internal", "host.example.internal"); got != "" {
+	if got := labOracleJSONProtected(result.Output, labOracleCanary, "10.24.8.12", "198.51.100.23", "ops@example.internal", "host.example.internal"); got != "" {
 		t.Fatalf("protected supported fields: %s", got)
 	}
 	var root map[string]any
@@ -340,12 +344,16 @@ func TestLabOracleSupportedFields(t *testing.T) {
 	}
 	system := root["system"].(string)
 	parts := strings.Fields(system)
-	if len(parts) != 4 || parts[0] != "keep-sentinel" {
+	if len(parts) != 5 || parts[0] != "keep-sentinel" {
 		t.Fatal("supported fields changed safe text or count")
 	}
-	ip, err := netip.ParseAddr(parts[1])
-	if err != nil || !netip.MustParsePrefix("100.64.0.0/10").Contains(ip) || !strings.Contains(parts[2], "@") || parts[3] == "" {
-		t.Fatal("pseudonym outside stated IPv4 range or malformed supported field")
+	privateIP, err := netip.ParseAddr(parts[1])
+	if err != nil || !netip.MustParsePrefix("10.0.0.0/8").Contains(privateIP) {
+		t.Fatal("private pseudonym escaped its prefix")
+	}
+	publicIP, err := netip.ParseAddr(parts[2])
+	if err != nil || !netip.MustParsePrefix("100.64.0.0/10").Contains(publicIP) || !strings.Contains(parts[3], "@") || parts[4] == "" {
+		t.Fatal("public pseudonym outside range or malformed supported field")
 	}
 	for _, output := range []string{
 		strings.Replace(result.Output, `"model":"claude-synthetic"`, `"model":"changed"`, 1),
@@ -355,15 +363,18 @@ func TestLabOracleSupportedFields(t *testing.T) {
 		strings.Replace(result.Output, parts[1], "203.0.113.7", 1),
 		strings.Replace(result.Output, parts[1], "10.24.8.12", 1),
 		strings.Replace(result.Output, parts[1], string([]byte{92, 117, 48, 48, 51, 49, 48})+".24.8.12", 1),
+		strings.Replace(result.Output, parts[2], "203.0.113.7", 1),
+		strings.Replace(result.Output, parts[2], "198.51.100.23", 1),
+		strings.Replace(result.Output, parts[2], string([]byte{92, 117, 48, 48, 51, 49})+"98.51.100.23", 1),
 	} {
-		if output == result.Output || labOracleJSONProtected(output, labOracleCanary, "10.24.8.12", "ops@example.internal", "host.example.internal") == "" {
+		if output == result.Output || labOracleJSONProtected(output, labOracleCanary, "10.24.8.12", "198.51.100.23", "ops@example.internal", "host.example.internal") == "" {
 			t.Fatal("corrupted supported-field output passed unchanged observer")
 		}
 	}
 	blocks := root["messages"].([]any)[0].(map[string]any)["content"].([]any)
 	root["messages"].([]any)[0].(map[string]any)["content"] = blocks[:1]
 	missingTool, err := json.Marshal(root)
-	if err != nil || labOracleJSONProtected(string(missingTool), labOracleCanary, "10.24.8.12", "ops@example.internal", "host.example.internal") != "tool-structure" {
+	if err != nil || labOracleJSONProtected(string(missingTool), labOracleCanary, "10.24.8.12", "198.51.100.23", "ops@example.internal", "host.example.internal") != "tool-structure" {
 		t.Fatal("missing tool escaped unchanged observer", err)
 	}
 	back, err := lab.Restore(context.Background(), result.ID, result.Output)
