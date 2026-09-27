@@ -113,6 +113,16 @@ func labOracleJSONProtected(output string, forbidden ...string) string {
 	return ""
 }
 
+func labOracleForeignRestore(result PreviewResult, err error, foreign string) string {
+	if strings.Contains(result.Output, foreign) {
+		return "foreign-real"
+	}
+	if err != nil && result.Output != "" {
+		return "partial-output"
+	}
+	return ""
+}
+
 func labOraclePreview(t *testing.T, lab *Lab, in PreviewInput) PreviewResult {
 	t.Helper()
 	result, err := lab.Preview(context.Background(), in)
@@ -218,9 +228,16 @@ func TestLabOracleRestoreRejection(t *testing.T) {
 	if first.ID == second.ID {
 		t.Fatal("independent lab capabilities unexpectedly alias")
 	}
+	const foreignReal = "RR-LAB-OTHER-8821"
+	if reason := labOracleForeignRestore(PreviewResult{Output: foreignReal}, context.Canceled, foreignReal); reason != "foreign-real" {
+		t.Fatalf("error plus foreign partial output escaped observer: %s", reason)
+	}
+	if reason := labOracleForeignRestore(PreviewResult{Output: "keep-sentinel"}, context.Canceled, foreignReal); reason != "partial-output" {
+		t.Fatalf("error plus other partial output escaped observer: %s", reason)
+	}
 	foreign, err := lab.Restore(context.Background(), first.ID, second.Output)
-	if err == nil && strings.Contains(foreign.Output, "RR-LAB-OTHER-8821") {
-		t.Fatal("foreign handle restored the other preview")
+	if reason := labOracleForeignRestore(foreign, err, foreignReal); reason != "" {
+		t.Fatalf("foreign handle restore: %s", reason)
 	}
 	for _, tc := range []struct {
 		id, output, own string

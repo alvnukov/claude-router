@@ -213,6 +213,25 @@ func sessionOracleNoForeign(body []byte, foreign string) string {
 	return ""
 }
 
+func sessionOracleForeignText(body []byte, foreign, alias string) string {
+	if reason := sessionOracleNoForeign(body, foreign); reason != "" {
+		return reason
+	}
+	var response struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(body, &response) != nil || len(response.Content) != 1 || response.Content[0].Type != "text" {
+		return "missing-text-block"
+	}
+	if response.Content[0].Text != alias+" keep-sentinel" {
+		return "changed-foreign-alias"
+	}
+	return ""
+}
+
 func sessionOracleTyped(value string) []byte {
 	body, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "tool_use", "name": "owner", "input": map[string]any{"owner": value}}}})
 	return body
@@ -251,11 +270,17 @@ func TestSessionOracleForeignRestorationB(t *testing.T) {
 	if aliasA == aliasB {
 		t.Fatal("different owners received identical pseudonyms")
 	}
-	if got := sessionOracleNoForeign(sessionOracleResponse(sessionOracleOther), sessionOracleOther); got != "foreign-real" {
+	if got := sessionOracleForeignText(sessionOracleResponse(sessionOracleOther+" keep-sentinel"), sessionOracleOther, aliasB); got != "foreign-real" {
 		t.Fatal("raw foreign positive control went undetected")
 	}
-	if got := sessionOracleNoForeign(sessionOracleResponse(aliasB), sessionOracleOther); got != "" {
-		t.Fatal("foreign alias incorrectly treated as raw real")
+	if got := sessionOracleForeignText(sessionOracleResponse(aliasB+" keep-sentinel"), sessionOracleOther, aliasB); got != "" {
+		t.Fatal("intact foreign alias rejected by text observer")
+	}
+	if got := sessionOracleForeignText([]byte(`{"content":[]}`), sessionOracleOther, aliasB); got != "missing-text-block" {
+		t.Fatal("empty-content mutation escaped foreign text observer")
+	}
+	if got := sessionOracleForeignText(sessionOracleResponse("changed keep-sentinel"), sessionOracleOther, aliasB); got != "changed-foreign-alias" {
+		t.Fatal("changed foreign alias mutation escaped observer")
 	}
 	for _, tc := range []struct {
 		e       *Engine
@@ -276,8 +301,12 @@ func TestSessionOracleForeignRestorationB(t *testing.T) {
 		}
 		before := tc.req.Stats().Unexpected
 		out, err = tc.e.UnmaskJSON(tc.req, sessionOracleResponse(tc.alias+" keep-sentinel"))
-		if err != nil || sessionOracleNoForeign(out, tc.foreign) != "" {
-			t.Fatal("free-text foreign pseudonym restored foreign real", err)
+		reason := sessionOracleForeignText(out, tc.foreign, tc.alias)
+		if reason == "foreign-real" {
+			t.Fatal("foreign free-text response disclosed another owner's real value")
+		}
+		if err != nil || reason != "" {
+			t.Fatalf("foreign free-text output not preserved: %s", reason)
 		}
 		if tc.req == reqB && tc.req.Stats().Unexpected <= before {
 			t.Fatal("known foreign free-text alias was not flagged")
