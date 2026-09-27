@@ -176,7 +176,7 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 	u, h := testUI(t)
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return []string{"claude-opus-5-5"}, nil }
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/settings/refresh-models", nil))
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "http://localhost/settings/refresh-models", nil))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "Проверка моделей завершена") || len(u.cs.get().local.Catalog.Anthropic) != 1 {
 		t.Fatalf("refresh: %d", w.Code)
 	}

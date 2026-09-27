@@ -134,10 +134,11 @@ func TestSettingsUsesAnthropicPools(t *testing.T) {
 	if _, ok := u.cs.get().local.ModelPools["Сложные задачи"]; !ok {
 		t.Fatal("deleted a referenced pool")
 	}
-	// A normal navigation must render settings as a full-width page too.
+	// Ordinary navigation uses the new application; fragment callers above
+	// retain the legacy settings rendering contract.
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/settings", nil))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `class="settings-page"`) || !strings.Contains(w.Body.String(), `data-model="claude-opus-5"`) {
+	h.ServeHTTP(w, httptest.NewRequest("GET", "http://localhost/settings", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `<script type="module"`) || strings.Contains(w.Body.String(), `class="settings-page"`) {
 		t.Fatal("settings page not rendered")
 	}
 
@@ -179,6 +180,7 @@ func testUI(t *testing.T, sessions ...string) (*uiServer, http.Handler) {
 		}
 	}
 	u := newUIServer(st, cs, newHealth(""))
+	u.claudeProxy = &claudeProxy{path: filepath.Join(t.TempDir(), "settings.json")}
 	return u, u.handler()
 }
 
@@ -192,6 +194,7 @@ func get(t *testing.T, h http.Handler, method, target string, form url.Values) *
 		req = httptest.NewRequest(method, target, nil)
 	}
 	req.Header.Set("HX-Request", "true")
+	req.Host = "localhost"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 	if w.Code != 200 {

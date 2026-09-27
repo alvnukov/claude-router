@@ -126,7 +126,11 @@ func (r *routerServer) serve(api, ui net.Listener) error {
 	errors := make(chan error, 2)
 	go func() { errors <- r.apiHTTP.Serve(api) }()
 	if ui != nil {
-		r.uiHTTP = &http.Server{Handler: r.ui.handler()}
+		// UI event streams must close when shutdown cancels the background
+		// context; otherwise an open dashboard prevents a graceful stop.
+		r.uiHTTP = &http.Server{Handler: r.ui.handler(), BaseContext: func(net.Listener) context.Context {
+			return r.background
+		}}
 		go func() { errors <- r.uiHTTP.Serve(ui) }()
 	}
 	for i := 0; i < 1+boolInt(ui != nil); i++ {

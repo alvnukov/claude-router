@@ -1,4 +1,4 @@
-// Package history captures /v1/messages calls and keeps the newest of them in
+// Package history captures router API calls and keeps the newest of them in
 // a ring backed by history.jsonl.
 package history
 
@@ -16,22 +16,26 @@ import (
 	"time"
 )
 
-// A Record is one /v1/messages call as the router saw it: the Anthropic-shaped
-// request that came in, what was sent on (translated, for the local path), and
-// the Anthropic-shaped response that went back. Both paths answer in the
-// Anthropic wire format, so one parser covers cloud and local alike.
+// A Record is an incoming router API call. Model requests use Anthropic-shaped
+// bodies; unsupported paths retain bounded raw request/response content for
+// diagnostics. Only safe protocol headers are recorded.
 type Record struct {
-	ID      string
-	Seq     int64
-	Start   time.Time
-	End     time.Time
-	Path    string
-	Model   string
-	Route   string // "cloud" | "local"
-	Session string // Claude Code session id from metadata.user_id, "" when absent
-	Stream  bool
-	Headers map[string]string
-	ReqBody []byte
+	ID                 string
+	Seq                int64
+	Start              time.Time
+	End                time.Time
+	Path               string
+	Method             string `json:",omitempty"`
+	UnrecognizedReason string `json:",omitempty"`
+	FallbackPool       string `json:",omitempty"`
+	ReqTruncated       bool   `json:",omitempty"`
+	RequestNote        string `json:",omitempty"`
+	Model              string
+	Route              string // "cloud" | "local" | "disabled" | "passthrough"
+	Session            string // Claude Code session id from metadata.user_id, "" when absent
+	Stream             bool
+	Headers            map[string]string
+	ReqBody            []byte
 
 	// Local path only.
 	OpenAIBody []byte
@@ -272,11 +276,28 @@ func (r *Recorder) Flush() {
 func (r *Recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 // Finish attaches the response and the local trace to the record.
-func (s *Store) Finish(id string, rw *Recorder, tr *Trace) {
+func (s *Store) Finish(id string, rw *Recorder, tr *Trace, incoming ...*RequestCapture) {
 	ct := rw.Header().Get("Content-Type")
 	body := rw.buf.Bytes()
 	parsed := ParseResponse(ct, rw.Header().Get("Content-Encoding"), body, rw.truncated)
+	var requestBody []byte
+	var incomplete bool
+	var requestNote string
+	if len(incoming) != 0 {
+		requestBody, incomplete, requestNote = incoming[0].Snapshot()
+	}
 	s.update(id, func(r *Record) {
+		if len(incoming) != 0 {
+			r.ReqBody, r.ReqTruncated, r.RequestNote = requestBody, incomplete, requestNote
+			var probe struct {
+				Model  string `json:"model"`
+				Stream bool   `json:"stream"`
+			}
+			if json.Unmarshal(requestBody, &probe) == nil {
+				r.Model, r.Stream = probe.Model, probe.Stream
+			}
+			r.Session = SessionOf(requestBody)
+		}
 		r.End = time.Now()
 		r.Status = rw.status
 		r.RespCT = ct
@@ -299,7 +320,7 @@ func (s *Store) Finish(id string, rw *Recorder, tr *Trace) {
 
 func PickHeaders(h http.Header) map[string]string {
 	out := map[string]string{}
-	for _, k := range []string{"User-Agent", "Anthropic-Beta", "Anthropic-Version", "X-App", "Content-Length"} {
+	for _, k := range []string{"User-Agent", "Anthropic-Beta", "Anthropic-Version", "X-App", "Content-Type", "Content-Encoding", "Content-Length"} {
 		if v := h.Get(k); v != "" {
 			out[k] = v
 		}

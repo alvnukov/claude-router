@@ -403,8 +403,10 @@ func TestAnthropicLimitsSettingsBlock(t *testing.T) {
 		t.Fatal("no navigation link to the limits block")
 	}
 	full := httptest.NewRecorder()
-	h.ServeHTTP(full, httptest.NewRequest("GET", "/settings", nil))
-	if full.Code != http.StatusOK || !strings.Contains(full.Body.String(), `id="anthropic-limits"`) || strings.Contains(full.Body.String(), "<no value>") {
+	h.ServeHTTP(full, httptest.NewRequest("GET", "http://localhost/settings", nil))
+	// Ordinary navigation is the SPA; the legacy limits fragment assertions
+	// above remain, and the real JSON limits contract is checked separately.
+	if full.Code != http.StatusOK || !strings.Contains(full.Body.String(), `<script type="module"`) || strings.Contains(full.Body.String(), "<no value>") {
 		t.Fatalf("full settings page: %d", full.Code)
 	}
 
@@ -512,7 +514,7 @@ func TestAnthropicLimitsAPI(t *testing.T) {
 
 	for _, method := range []string{"POST", "PUT", "DELETE"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequest(method, "/api/limits", nil))
+		h.ServeHTTP(rec, httptest.NewRequest(method, "http://localhost/api/limits", nil))
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Fatalf("%s /api/limits: %d", method, rec.Code)
 		}

@@ -202,7 +202,7 @@ func TestStaleRoutingFormRejectedAfterActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := url.Values{"profile": {"default"}, "scope": {"family"}, "model": {"opus"}, "high": {"anthropic"}}
-	req := httptest.NewRequest("POST", "/settings/route", strings.NewReader(values.Encode()))
+	req := httptest.NewRequest("POST", "http://localhost/settings/route", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	u.handler().ServeHTTP(w, req)
@@ -230,7 +230,7 @@ func TestStalePoolSettingsFormRejectedAfterActivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := url.Values{"profile": {"default"}, "name": {"work"}, "first_byte": {"1"}, "probe_every": {"0"}, "max_input_chars": {"0"}}
-	req := httptest.NewRequest("POST", "/settings/pool-settings", strings.NewReader(values.Encode()))
+	req := httptest.NewRequest("POST", "http://localhost/settings/pool-settings", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	u.handler().ServeHTTP(w, req)

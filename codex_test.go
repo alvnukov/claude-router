@@ -321,6 +321,7 @@ func codexTestIssuer(t *testing.T) *httptest.Server {
 
 func postForm(h http.Handler, target string, form url.Values) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", target, strings.NewReader(form.Encode()))
+	req.Host = "localhost"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)

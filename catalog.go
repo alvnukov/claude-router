@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -253,11 +252,11 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 			if templateID == "" {
 				continue
 			}
-			if template.Effort != "" && !slices.Contains(m.Efforts, template.Effort) {
-				notes = append(notes, fmt.Sprintf("%s: %s не добавлена в пул — effort %s не подтверждён каталогом.", name, key, template.Effort))
+			if unsupported := template.unsupportedEffort(m.Efforts); unsupported != "" {
+				notes = append(notes, fmt.Sprintf("%s: %s не добавлена в пул — effort %s не подтверждён каталогом.", name, key, unsupported))
 				continue
 			}
-			l.ModelPools[name] = append(l.ModelPools[name], poolTarget{Model: key, Effort: template.Effort})
+			l.ModelPools[name] = append(l.ModelPools[name], poolTarget{Model: key, Effort: template.Effort, EffortMap: template.clone().EffortMap})
 		}
 		for profileName, profile := range original.Profiles {
 			if profileName == original.ActiveProfile {
@@ -290,11 +289,11 @@ func inheritCodexModels(l *localSetup, providerName string, models []catalogMode
 				if templateID == "" {
 					continue
 				}
-				if template.Effort != "" && !slices.Contains(m.Efforts, template.Effort) {
-					notes = append(notes, fmt.Sprintf("%s/%s: %s не добавлена в пул — effort %s не подтверждён каталогом.", profileName, poolName, key, template.Effort))
+				if unsupported := template.unsupportedEffort(m.Efforts); unsupported != "" {
+					notes = append(notes, fmt.Sprintf("%s/%s: %s не добавлена в пул — effort %s не подтверждён каталогом.", profileName, poolName, key, unsupported))
 					continue
 				}
-				current.ModelPools[poolName] = append(current.ModelPools[poolName], poolTarget{Model: key, Effort: template.Effort})
+				current.ModelPools[poolName] = append(current.ModelPools[poolName], poolTarget{Model: key, Effort: template.Effort, EffortMap: template.clone().EffortMap})
 			}
 			l.Profiles[profileName] = current
 		}

@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"localrouter/internal/cli"
@@ -22,6 +23,9 @@ import (
 
 // respCaptureLimit bounds how much of a response the UI keeps per request.
 const respCaptureLimit = 8 << 20
+
+// Unrecognized traffic can carry arbitrary uploads; keep only a bounded prefix.
+const debugCaptureLimit = 256 << 10
 
 type config struct {
 	listen        string
@@ -131,8 +135,8 @@ func migrateConfig(c config, path string) (config, error) {
 	return c, nil
 }
 
-// Only explicit routes can serve a model. Unknown and disabled models never
-// fall through to Anthropic or to another model's pool.
+// Explicit version/family rules take precedence over the optional default pool.
+// Disabled routes never fall through to another destination.
 func (c config) routeFor(model, effort string) modelRoute { return c.local.routeFor(model, effort) }
 
 func (c config) forModel(model, effort string) config {
@@ -166,9 +170,13 @@ func (c config) forModel(model, effort string) config {
 	}
 	next.local.Preferred = targets[0].Model
 	for _, target := range targets {
+		targetEffort := target.Effort
+		if route.Mode == "pool" {
+			targetEffort = target.requestEffort(effort)
+		}
 		for _, m := range c.local.Models {
 			if m.Key() == target.Model {
-				m.Efforts = map[string]string{effort: target.Effort}
+				m.Efforts = map[string]string{effort: targetEffort}
 				next.local.Models = append(next.local.Models, m)
 				break
 			}
@@ -179,7 +187,10 @@ func (c config) forModel(model, effort string) config {
 
 func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error) {
 	var probe anthropicRequest
-	if err := json.Unmarshal(body, &probe); err != nil || probe.Model == "" {
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return "", modelRoute{}, fmt.Errorf("не удалось разобрать JSON запроса: %w", err)
+	}
+	if strings.TrimSpace(probe.Model) == "" {
 		return "", modelRoute{}, fmt.Errorf("request must contain a model")
 	}
 	effort := probe.OutputConfig.Effort
@@ -198,6 +209,33 @@ func configuredRequestRoute(cfg config, body []byte) (string, modelRoute, error)
 
 func newMainHandler(cfg config, cs *configStore, st *history.Store, hl *health, u *uiServer) http.Handler {
 	return newRouterHandler(cfg, cs, st, hl, u, nil)
+}
+
+// annotateMessageRecord applies the same debug policy to messages and token counts.
+func annotateMessageRecord(rec *history.Record, setup localSetup, target modelRoute, routeErr, readErr error) {
+	if target.Mode == "pool" && setup.defaultPoolFor(rec.Model) == target.Pool {
+		rec.FallbackPool = target.Pool
+		rec.UnrecognizedReason = fmt.Sprintf("Для модели нет собственного маршрута; применён пул по умолчанию %q.", target.Pool)
+	}
+	if routeErr != nil {
+		rec.Route = "disabled"
+		rec.UnrecognizedReason = routeErr.Error()
+	}
+	if rec.Method != http.MethodPost {
+		endpoint := "API сообщений"
+		if rec.Path == "/v1/messages/count_tokens" {
+			endpoint = "подсчёта токенов"
+		}
+		rec.UnrecognizedReason = "Неожиданный HTTP-метод для " + endpoint + ": " + rec.Method
+	}
+	if readErr != nil {
+		rec.UnrecognizedReason = "Не удалось прочитать тело запроса"
+		rec.ReqTruncated = true
+		rec.RequestNote = "Тело получено не полностью: ошибка чтения."
+	}
+	if routeErr != nil || readErr != nil {
+		boundDebugRequest(rec)
+	}
 }
 
 func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health, u *uiServer, life *lifecycle) http.Handler {
@@ -233,10 +271,6 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 	mux.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.get()
 		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, "read body", http.StatusBadRequest)
-			return
-		}
 		var probe anthropicRequest
 		_ = json.Unmarshal(body, &probe) // for the log line; routing parses the body itself
 		_, target, routeErr := configuredRequestRoute(cfg, body)
@@ -250,8 +284,9 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 		}
 		log.Printf("req model=%q -> %s", probe.Model, route)
 
-		rec := &history.Record{Start: time.Now(), Path: r.URL.Path, Model: probe.Model,
+		rec := &history.Record{Start: time.Now(), Method: r.Method, Path: r.URL.EscapedPath(), Model: probe.Model,
 			Route: route, Session: history.SessionOf(body), Stream: probe.Stream, Headers: history.PickHeaders(r.Header), ReqBody: body}
+		annotateMessageRecord(rec, cfg.local, target, routeErr, err)
 		st.Add(rec)
 		rw := history.NewRecorder(w, respCaptureLimit)
 		var tr *history.Trace
@@ -259,6 +294,10 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 			tr = &history.Trace{}
 		}
 		defer st.Finish(rec.ID, rw, tr)
+		if err != nil {
+			http.Error(rw, "read body", http.StatusBadRequest)
+			return
+		}
 		if routeErr != nil {
 			writeAnthropicError(rw, http.StatusBadRequest, "invalid_request_error", routeErr.Error())
 			return
@@ -280,21 +319,34 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 
 	mux.HandleFunc("/v1/messages/count_tokens", func(w http.ResponseWriter, r *http.Request) {
 		cfg := cs.get()
-		body, _ := io.ReadAll(r.Body)
-		_, target, err := configuredRequestRoute(cfg, body)
+		body, readErr := io.ReadAll(r.Body)
+		model, target, err := configuredRequestRoute(cfg, body)
+		route := "local"
+		if target.Mode == "anthropic" {
+			route = "cloud"
+		}
+		rec := &history.Record{Start: time.Now(), Method: r.Method, Path: r.URL.EscapedPath(), Model: model, Route: route, ReqBody: body, Headers: history.PickHeaders(r.Header), Session: history.SessionOf(body)}
+		annotateMessageRecord(rec, cfg.local, target, err, readErr)
+		st.Add(rec)
+		rw := history.NewRecorder(w, respCaptureLimit)
+		defer st.Finish(rec.ID, rw, nil)
+		if readErr != nil {
+			http.Error(rw, "read body", http.StatusBadRequest)
+			return
+		}
 		if err != nil {
-			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			writeAnthropicError(rw, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
 		if target.Mode == "anthropic" {
-			pass(w, r, body)
+			pass(rw, r, body)
 			return
 		}
 
 		// The local endpoint has no token-count API. Claude Code uses this only
 		// for budget display, so a length-based estimate is honest enough.
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4}) // the client may be gone
+		rw.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(rw).Encode(map[string]int{"input_tokens": len(body) / 4}) // the client may be gone
 	})
 
 	// Everything else goes to Anthropic as is. One log line per request says
@@ -304,7 +356,18 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 		if len(path) > 256 {
 			path = path[:256] + "…"
 		}
-		rw := history.NewRecorder(w, 0)
+		rec := &history.Record{Start: start, Method: r.Method, Path: r.URL.EscapedPath(), Route: "passthrough", Headers: history.PickHeaders(r.Header), UnrecognizedReason: "Этот адрес не обрабатывается правилами роутера; запрос передан upstream без преобразования."}
+		st.Add(rec)
+		body := r.Body
+		if body == nil {
+			body = http.NoBody
+		}
+		capture := history.CaptureRequest(body, debugCaptureLimit, r.ContentLength)
+		if body != http.NoBody {
+			r.Body = capture
+		}
+		rw := history.NewRecorder(w, debugCaptureLimit)
+		defer st.Finish(rec.ID, rw, nil, capture)
 		pass(rw, r, nil)
 		status := rw.Status()
 		if status == 0 {
@@ -319,6 +382,16 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 	api.HandleFunc("/healthz", life.healthz)
 	api.Handle("/", life.guard(mux))
 	return api
+}
+
+func boundDebugRequest(rec *history.Record) {
+	if len(rec.ReqBody) > debugCaptureLimit {
+		rec.ReqBody = append([]byte(nil), rec.ReqBody[:debugCaptureLimit]...)
+		rec.ReqTruncated = true
+		if rec.RequestNote == "" {
+			rec.RequestNote = "Записано начало тела: достигнут лимит диагностического захвата."
+		}
+	}
 }
 
 func main() {

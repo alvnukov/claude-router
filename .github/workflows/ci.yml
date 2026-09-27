@@ -9,6 +9,42 @@ permissions:
   contents: read
 
 jobs:
+  ui:
+    name: UI build reproducibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: internal/ui/web/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: internal/ui/web
+      - run: npm run build
+        working-directory: internal/ui/web
+      - name: Verify committed assets and size budget
+        shell: bash
+        run: |
+          changes=$(git status --porcelain -- internal/ui/dist)
+          if [ -n "$changes" ]; then
+            printf '%s\n' "$changes"
+            exit 1
+          fi
+          node --input-type=module <<'JS'
+          import { readdirSync, statSync } from 'node:fs';
+          import { join } from 'node:path';
+          function size(dir) {
+            return readdirSync(dir).reduce((total, entry) => {
+              const path = join(dir, entry);
+              return total + (statSync(path).isDirectory() ? size(path) : statSync(path).size);
+            }, 0);
+          }
+          const bytes = size('internal/ui/dist');
+          console.log(`UI assets: ${bytes} bytes (budget 307200)`);
+          if (bytes > 307200) process.exit(1);
+          JS
+
   test:
     name: test (${{ matrix.os }})
     strategy:

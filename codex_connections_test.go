@@ -194,7 +194,7 @@ func TestCodexActionsRejectUnknownProvider(t *testing.T) {
 	_, h := codexUI(t)
 	for _, target := range []string{"/settings/codex/import", "/settings/codex/login", "/settings/codex/usage"} {
 		for _, name := range []string{"", "missing", "p"} {
-			req := httptest.NewRequest("POST", target, strings.NewReader(url.Values{"provider": {name}}.Encode()))
+			req := httptest.NewRequest("POST", "http://localhost"+target, strings.NewReader(url.Values{"provider": {name}}.Encode()))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)

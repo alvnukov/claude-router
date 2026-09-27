@@ -28,7 +28,7 @@
 <form hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="name" value="{{.Name}}"><button class="link err" name="op" value="delete" type="submit">Удалить пул</button></form></div>
 {{range .Keys}}<div class="pool-member"><code>{{.Key}}</code><form class="inline-form" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{$pool.Profile}}">
 <input type="hidden" name="name" value="{{$pool.Name}}"><input type="hidden" name="key" value="{{.Key}}">
-{{$member:=.}}<label>Effort <select name="effort" aria-label="Effort {{.Key}} в {{$pool.Name}}"><option value="" {{if eq .Effort ""}}selected{{end}}>По умолчанию модели</option>{{if .Unconfirmed}}<option value="{{.Effort}}" selected>{{.Effort}} — не подтверждён каталогом</option>{{end}}{{range .Options}}<option value="{{.}}" {{if eq . $member.Effort}}selected{{end}}>{{.}}</option>{{end}}</select></label>
+{{$member:=.}}<label>Effort <select name="effort" aria-label="Effort {{.Key}} в {{$pool.Name}}"><option value="" {{if eq .Effort ""}}selected{{end}}>По умолчанию модели</option><option value="request" {{if eq .Effort "request"}}selected{{end}}>Сохранять effort запроса</option>{{if .Unconfirmed}}<option value="{{.Effort}}" selected>{{.Effort}} — не подтверждён каталогом</option>{{end}}{{range .Options}}<option value="{{.}}" {{if eq . $member.Effort}}selected{{end}}>{{.}}</option>{{end}}</select></label>
 <button class="btn" name="op" value="effort" type="submit">Сохранить</button>
 {{if not .First}}<button class="btn" name="op" value="up" aria-label="Поднять {{.Key}}" type="submit">↑</button>{{end}}
 {{if not .Last}}<button class="btn" name="op" value="down" aria-label="Опустить {{.Key}}" type="submit">↓</button>{{end}}
@@ -180,7 +180,7 @@
 {{define "pool-add"}}
 <form class="inline-form pool-add" hx-post="/settings/pools" hx-target="#detail"><input type="hidden" name="profile" value="{{.Profile}}"><input type="hidden" name="op" value="add"><input type="hidden" name="name" value="{{.Name}}">
 {{$add:=.}}<select name="key" aria-label="Добавить модель в {{.Name}}" hx-get="/settings/pool-add" hx-trigger="change" hx-include="closest form" hx-target="closest form" hx-swap="outerHTML">{{range .Models}}<option value="{{.Key}}" {{if eq .Key $add.Key}}selected{{end}}>{{.Key}}</option>{{end}}</select>
-<label>Effort <select name="effort" aria-label="Effort новой модели в {{.Name}}"><option value="">По умолчанию модели</option>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label><button class="btn" type="submit">Добавить в пул</button></form>
+<label>Effort <select name="effort" aria-label="Effort новой модели в {{.Name}}"><option value="">По умолчанию модели</option><option value="request">Сохранять effort запроса</option>{{range .Options}}<option value="{{.}}">{{.}}</option>{{end}}</select></label><button class="btn" type="submit">Добавить в пул</button></form>
 {{end}}
 
 {{define "model-stats"}}

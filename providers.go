@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"localrouter/internal/platform"
@@ -19,11 +21,12 @@ import (
 // seconds like env.
 
 type provider struct {
-	Name    string `json:"name"`
-	Type    string `json:"type,omitempty"` // "" (OpenAI chat) or "codex" (ChatGPT subscription)
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"api_key,omitempty"`
-	AuthID  string `json:"auth_id,omitempty"` // Codex only: names this connection's credential file
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name,omitempty"` // UI label; Name and AuthID remain stable.
+	Type        string `json:"type,omitempty"`         // "" (OpenAI chat) or "codex" (ChatGPT subscription)
+	BaseURL     string `json:"base_url"`
+	APIKey      string `json:"api_key,omitempty"`
+	AuthID      string `json:"auth_id,omitempty"` // Codex only: names this connection's credential file
 }
 
 type localModel struct {
@@ -34,9 +37,48 @@ type localModel struct {
 
 func (m localModel) Key() string { return m.Provider + "/" + m.Model }
 
+// poolRequestEffort preserves the incoming effort, including its absence.
+// It is a pool policy, never a provider effort sent upstream.
+const poolRequestEffort = "request"
+
 type poolTarget struct {
-	Model  string `json:"model"`
-	Effort string `json:"effort,omitempty"`
+	Model     string            `json:"model"`
+	Effort    string            `json:"effort,omitempty"`
+	EffortMap map[string]string `json:"effort_map,omitempty"` // incoming pool effort -> model effort; absent keys use Effort
+}
+
+func (t poolTarget) clone() poolTarget {
+	t.EffortMap = maps.Clone(t.EffortMap)
+	return t
+}
+
+func (t poolTarget) requestEffort(source string) string {
+	effort, ok := t.EffortMap[source]
+	if !ok {
+		effort = t.Effort
+	}
+	if effort == poolRequestEffort {
+		if source == "default" {
+			return ""
+		}
+		return source
+	}
+	return effort
+}
+
+// Dynamic request effort cannot be checked until a request arrives; only
+// fixed choices constrain automatic inheritance by a newer catalog model.
+func (t poolTarget) unsupportedEffort(supported []string) string {
+	values := []string{t.Effort}
+	for _, source := range claudeEfforts {
+		values = append(values, t.EffortMap[source])
+	}
+	for _, effort := range values {
+		if effort != "" && effort != poolRequestEffort && !slices.Contains(supported, effort) {
+			return effort
+		}
+	}
+	return ""
 }
 
 type modelRoute struct {
@@ -49,6 +91,7 @@ type modelRoute struct {
 var anthropicModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"}
 
 type localSetup struct {
+	DefaultPool   string                           `json:"default_pool,omitempty"`
 	ActiveProfile string                           `json:"active_profile,omitempty"`
 	Profiles      map[string]routingProfile        `json:"profiles,omitempty"`
 	PoolSettings  map[string]poolSettings          `json:"pool_settings,omitempty"`
@@ -203,6 +246,11 @@ func (l *localSetup) validate() error {
 		}
 	}
 
+	if l.DefaultPool != "" {
+		if _, ok := l.ModelPools[l.DefaultPool]; !ok {
+			return fmt.Errorf("пул по умолчанию %q не найден", l.DefaultPool)
+		}
+	}
 	for name, settings := range l.PoolSettings {
 		if _, ok := l.ModelPools[name]; !ok {
 			return fmt.Errorf("настройки несуществующего пула %q", name)
@@ -220,8 +268,13 @@ func (l *localSetup) validate() error {
 			if !keys[target.Model] || seen[target.Model] {
 				return fmt.Errorf("пул %s: модель %q отсутствует или повторяется", name, target.Model)
 			}
-			if target.Effort != "" && !validProviderEffort(target.Effort) {
+			if target.Effort != "" && target.Effort != poolRequestEffort && !validProviderEffort(target.Effort) {
 				return fmt.Errorf("%s: неверный effort %q", target.Model, target.Effort)
+			}
+			for source, effort := range target.EffortMap {
+				if !validClaudeEffort(source) || (effort != "" && effort != poolRequestEffort && !validProviderEffort(effort)) {
+					return fmt.Errorf("%s: неверное соответствие effort %q → %q", target.Model, source, effort)
+				}
 			}
 			seen[target.Model] = true
 		}
@@ -414,6 +467,7 @@ func writeProviders(path string, l localSetup) error {
 			}
 		}
 		l.FamilyRoutes, l.Routes, l.ModelPools, l.PoolSettings = nil, nil, nil, nil
+		l.DefaultPool = ""
 		l.Profiles, l.ActiveProfile = nil, ""
 	}
 	if l.Profiles == nil && l.Routes == nil && l.ActiveProfile == "" {
@@ -485,8 +539,8 @@ func (l localSetup) clone() localSetup {
 	if l.Profiles != nil {
 		profiles := make(map[string]routingProfile, len(l.Profiles))
 		for name, p := range l.Profiles {
-			c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
-			profiles[name] = routingProfile{c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings}
+			c := localSetup{DefaultPool: p.DefaultPool, FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
+			profiles[name] = routingProfile{DefaultPool: c.DefaultPool, FamilyRoutes: c.FamilyRoutes, Routes: c.Routes, ModelPools: c.ModelPools, PoolSettings: c.PoolSettings}
 		}
 		l.Profiles = profiles
 	}
@@ -519,6 +573,9 @@ func (l localSetup) clone() localSetup {
 		pools := make(map[string][]poolTarget, len(l.ModelPools))
 		for name, targets := range l.ModelPools {
 			pools[name] = append([]poolTarget(nil), targets...)
+			for i, target := range targets {
+				pools[name][i] = target.clone()
+			}
 		}
 		l.ModelPools = pools
 	}
@@ -560,7 +617,19 @@ func (l localSetup) routeFor(model, effort string) modelRoute {
 	if route, ok := l.FamilyRoutes[claudeFamily(model)][effort]; ok {
 		return route
 	}
+	if pool := l.defaultPoolFor(model); pool != "" && validClaudeEffort(effort) {
+		return modelRoute{Mode: "pool", Pool: pool}
+	}
 	return modelRoute{Mode: "disabled"}
+}
+
+// A model with any explicit version/family rule keeps its unconfigured levels
+// disabled. The fallback serves only models without their own routing rules.
+func (l localSetup) defaultPoolFor(model string) string {
+	if model == "" || len(l.Routes[model]) != 0 || len(l.FamilyRoutes[claudeFamily(model)]) != 0 {
+		return ""
+	}
+	return l.DefaultPool
 }
 
 // Flatten only for validation/reference checks; preserve independent override maps.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -187,10 +188,30 @@ func TestRouterServerStandbyAndActivation(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("active UI status: %d", status)
 	}
+	// Keep the dashboard's event stream open while stopping the server. Its
+	// independent deadline must not be what makes graceful shutdown finish.
+	streamCtx, stopStream := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopStream()
+	streamReq, err := http.NewRequestWithContext(streamCtx, http.MethodGet, "http://"+cfg.uiListen+"/api/ui/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamClient := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+	stream, err := streamClient.Do(streamReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK || stream.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("UI event stream: %d %s", stream.StatusCode, stream.Header.Get("Content-Type"))
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if err := server.shutdown(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(stream.Body); err != nil {
+		t.Fatalf("UI event stream did not end cleanly: %v", err)
 	}
 	select {
 	case err := <-done:

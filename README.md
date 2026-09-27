@@ -1,7 +1,15 @@
 # claude-router
 
 Routes Claude Code requests to Anthropic, OpenAI-compatible providers, or a
-Codex subscription. Configure it at http://127.0.0.1:8788/settings.
+Codex subscription. Open the dashboard at http://127.0.0.1:8788/.
+
+The embedded UI has Overview, Requests, Routes and Connections screens, with
+light/dark themes. UI sources live in `internal/ui/web`; rebuild them with
+the Node version in `.node-version`, `npm ci --ignore-scripts` and
+`npm run build`. Generated `internal/ui/dist` assets are checked in, so an
+ordinary `go build` does not need Node. `npm run test:browser` checks an
+isolated router with a local upstream; `npm run test:browser -- --preview`
+starts a disposable test instance without changing the installed router.
 
 Функциональный обзор (на русском): [docs/features.md](docs/features.md).
 Target code layout: [docs/architecture.md](docs/architecture.md).
@@ -64,15 +72,21 @@ combination selects one of:
 An absent effort uses the separate `default` / **Не указан** row. There is no
 fallback from an unconfigured effort to another effort. New versions inherit
 their named family dynamically: `claude-opus-5-5` and future Opus versions
-use the Opus rules. Unconfigured families and empty pools reject requests.
+use the Opus rules. Empty pools reject requests. Each profile can select an
+optional **Пул по умолчанию** for models with no version or family rules.
+Without that setting, unconfigured models are rejected. Explicit disabled
+rules and missing levels of a configured model do not use the default pool.
 An explicit disabled version/effort overrides an enabled family. Backend
 model IDs do not bypass the routing table.
 
 A named pool contains multiple `provider/model` members. Each member has its
-own fixed target effort. For example, Opus/high can select a pool containing
+own target effort policy. For example, Opus/high can select a pool containing
 `codex/gpt-6-sol` with `xhigh` and another provider's model with `high`.
 Opus/low can select a different pool. Sonnet/high can reuse either pool.
-Leaving a member's effort empty lets that backend use its default. A direct
+Leaving a member's effort empty lets that backend use its default; `request`
+preserves the incoming effort. Optional `effort_map` overrides individual
+input levels before that main policy is applied. Pool cloning copies all
+members, mappings and settings independently. A direct
 model assignment uses the same effort choices without creating a one-member
 pool; choose a pool instead when failover is wanted. For example, a direct
 family route can be stored as `"high": {"mode": "model", "model":
@@ -138,11 +152,17 @@ members in **Пулы моделей** and assignments in **Маршруты**. 
 model or provider disables its direct assignments; renaming a provider
 updates their model keys.
 
-The dashboard offers three main sections: **Маршруты**, **Пулы**, and
-**Подключения**. Connections expose the provider model catalog, including
-effort choices when available. Removing a model also removes it from pools;
-an emptied pool remains disabled. A pool referenced by a route cannot be
+The dashboard offers **Обзор**, **Запросы**, **Маршруты** (including pools),
+and **Подключения**. Connections expose the provider model catalog, including
+effort choices when available. The UI rejects removal of a model or connection
+referenced in any profile. A pool used by a route or as the default cannot be
 deleted until the assignments are changed.
+
+The **Не распознано** request filter shows unknown paths, malformed requests,
+missing routes and default-pool use. Details include method, path, reason and
+raw bodies. Unknown-path request and response capture is limited to 256 KiB
+each; partial captures are labelled. Authorization headers and URL queries
+are excluded from capture, and displayed errors hide configured credentials.
 
 Settings apply to the next request. The router reloads `providers.json` and
 `env` within two seconds; invalid edits are ignored. Addresses and upstream

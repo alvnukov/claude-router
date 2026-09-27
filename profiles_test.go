@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -162,7 +163,7 @@ func TestProfileHTTPActivation(t *testing.T) {
 	}
 	u := newUIServer(history.New(10, ""), cs, h)
 	server := u.handler()
-	req := httptest.NewRequest("POST", "/api/profiles/clean/activate", strings.NewReader(""))
+	req := httptest.NewRequest("POST", "http://localhost/api/profiles/clean/activate", strings.NewReader(""))
 	w := httptest.NewRecorder()
 	server.ServeHTTP(w, req)
 	if w.Code != http.StatusOK || cs.get().local.ActiveProfile != "clean" {
@@ -347,7 +348,7 @@ func TestProfilesProviderRenameUpdatesInactiveRoutes(t *testing.T) {
 	}
 	u := newUIServer(history.New(10, ""), cs, h)
 	values := url.Values{"op": {"update"}, "orig": {"p"}, "name": {"renamed"}, "base_url": {"http://example.test/v1"}}
-	req := httptest.NewRequest("POST", "/settings/providers", strings.NewReader(values.Encode()))
+	req := httptest.NewRequest("POST", "http://localhost/settings/providers", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
 	u.handler().ServeHTTP(w, req)
@@ -417,7 +418,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	original := cs.get().local
-	if original.ModelPools["work"][0] != (poolTarget{Model: "p/a", Effort: "high"}) || original.PoolSettings["work"].FirstByteSec != 7 {
+	if !reflect.DeepEqual(original.ModelPools["work"][0], poolTarget{Model: "p/a", Effort: "high"}) || original.PoolSettings["work"].FirstByteSec != 7 {
 		t.Fatalf("copy changes leaked into default: %+v", original)
 	}
 	if err := cs.activateProfile("copy", h); err != nil {
@@ -427,7 +428,7 @@ func TestProfilesPoolMembersEffortsAndSettingsAreIndependent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.ModelPools["work"][0] != (poolTarget{Model: "p/b", Effort: "xhigh"}) || reloaded.PoolSettings["work"].ProbeSec != 4 {
+	if !reflect.DeepEqual(reloaded.ModelPools["work"][0], poolTarget{Model: "p/b", Effort: "xhigh"}) || reloaded.PoolSettings["work"].ProbeSec != 4 {
 		t.Fatalf("copy changes lost on disk: %+v", reloaded)
 	}
 }
@@ -490,7 +491,7 @@ func TestProfileUICloneAndEmpty(t *testing.T) {
 	u := newUIServer(history.New(10, ""), cs, h)
 	post := func(values url.Values) string {
 		t.Helper()
-		req := httptest.NewRequest("POST", "/settings/profiles", strings.NewReader(values.Encode()))
+		req := httptest.NewRequest("POST", "http://localhost/settings/profiles", strings.NewReader(values.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		w := httptest.NewRecorder()
 		u.handler().ServeHTTP(w, req)

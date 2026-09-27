@@ -11,6 +11,7 @@ import (
 // A profile owns routing decisions, never credentials or the global model catalog.
 // ActiveProfile is a pointer separate from the profile definitions in providers.json.
 type routingProfile struct {
+	DefaultPool  string                           `json:"default_pool,omitempty"`
 	FamilyRoutes map[string]map[string]modelRoute `json:"family_routes"`
 	Routes       map[string]map[string]modelRoute `json:"routes"`
 	ModelPools   map[string][]poolTarget          `json:"model_pools"`
@@ -19,11 +20,11 @@ type routingProfile struct {
 
 func (l localSetup) routing() routingProfile {
 	c := l.cloneRouting()
-	return routingProfile{FamilyRoutes: c.FamilyRoutes, Routes: c.Routes, ModelPools: c.ModelPools, PoolSettings: c.PoolSettings}
+	return routingProfile{DefaultPool: c.DefaultPool, FamilyRoutes: c.FamilyRoutes, Routes: c.Routes, ModelPools: c.ModelPools, PoolSettings: c.PoolSettings}
 }
 
 func (l localSetup) cloneRouting() localSetup {
-	c := localSetup{FamilyRoutes: l.FamilyRoutes, Routes: l.Routes, ModelPools: l.ModelPools, PoolSettings: l.PoolSettings}
+	c := localSetup{DefaultPool: l.DefaultPool, FamilyRoutes: l.FamilyRoutes, Routes: l.Routes, ModelPools: l.ModelPools, PoolSettings: l.PoolSettings}
 	return c.clone()
 }
 
@@ -32,7 +33,8 @@ func (l *localSetup) useProfile(name string) error {
 	if !ok {
 		return fmt.Errorf("профиль %q не найден", name)
 	}
-	c := localSetup{FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
+	c := localSetup{DefaultPool: p.DefaultPool, FamilyRoutes: p.FamilyRoutes, Routes: p.Routes, ModelPools: p.ModelPools, PoolSettings: p.PoolSettings}.clone()
+	l.DefaultPool = c.DefaultPool
 	l.FamilyRoutes, l.Routes, l.ModelPools, l.PoolSettings = c.FamilyRoutes, c.Routes, c.ModelPools, c.PoolSettings
 	l.ActiveProfile = name
 	return nil
@@ -98,7 +100,7 @@ func (l *localSetup) repairInactiveProfiles() {
 		if name == l.ActiveProfile {
 			continue
 		}
-		c := localSetup{FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.clone()
+		c := localSetup{DefaultPool: profile.DefaultPool, FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.clone()
 		for poolName, members := range c.ModelPools {
 			kept := make([]poolTarget, 0, len(members))
 			for _, member := range members {
@@ -124,7 +126,7 @@ func (l *localSetup) renameInactiveProvider(oldName, newName string) {
 		if name == l.ActiveProfile {
 			continue
 		}
-		c := localSetup{FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.clone()
+		c := localSetup{DefaultPool: profile.DefaultPool, FamilyRoutes: profile.FamilyRoutes, Routes: profile.Routes, ModelPools: profile.ModelPools, PoolSettings: profile.PoolSettings}.clone()
 		for poolName, members := range c.ModelPools {
 			for i := range members {
 				if strings.HasPrefix(members[i].Model, oldName+"/") {

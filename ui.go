@@ -23,6 +23,7 @@ import (
 
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
+	webui "localrouter/internal/ui"
 )
 
 //go:embed ui/*
@@ -109,16 +110,13 @@ func newUIServer(st *history.Store, cs *configStore, hl *health) *uiServer {
 func (u *uiServer) handler() http.Handler {
 	static, _ := fs.Sub(uiFS, "ui")
 	mux := http.NewServeMux()
+	webui.Mount(mux, uiBackend{u})
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(static))))
-	mux.HandleFunc("GET /{$}", u.index)
 	mux.HandleFunc("GET /status", u.status)
-	mux.HandleFunc("GET /requests", u.list)
 	mux.HandleFunc("POST /requests/clear", u.clear)
-	mux.HandleFunc("GET /requests/{id}", u.detail)
 	mux.HandleFunc("GET /requests/{id}/request.json", u.rawRequest)
 	mux.HandleFunc("GET /requests/{id}/sent.json", u.rawSent)
 	mux.HandleFunc("GET /requests/{id}/response.txt", u.rawResponse)
-	mux.HandleFunc("GET /settings", u.settings)
 	mux.HandleFunc("GET /api/limits", u.limitsAPI)
 	mux.HandleFunc("POST /api/profiles/{name}/activate", u.profileActivateAPI)
 	mux.HandleFunc("POST /settings/profiles", u.profileCreate)
@@ -139,22 +137,72 @@ func (u *uiServer) handler() http.Handler {
 	mux.HandleFunc("POST /settings/pools", u.settingsPools)
 	mux.HandleFunc("POST /settings/refresh-models", u.settingsRefreshModels)
 	mux.HandleFunc("GET /settings/pool-add", u.settingsPoolAdd)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return webui.Secure(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && u.life != nil && !u.life.writesSharedState() {
-			http.Error(w, "router is not active", http.StatusServiceUnavailable)
+			webui.Error(w, http.StatusServiceUnavailable, "router is not active")
 			return
 		}
 		if r.Method == http.MethodPost && !sameOriginPost(r) {
-			http.Error(w, "forbidden", http.StatusForbidden)
+			webui.Error(w, http.StatusForbidden, "forbidden")
 			return
 		}
+		// Legacy fragment callers retain their tested rendering contract. Browser
+		// navigation always receives the embedded application.
+		if r.Method == http.MethodGet && r.Header.Get("HX-Request") == "true" {
+			switch r.URL.Path {
+			case "/":
+				u.index(w, r)
+				return
+			case "/requests":
+				u.list(w, r)
+				return
+			case "/settings":
+				u.settings(w, r)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/requests/") && !strings.Contains(strings.TrimPrefix(r.URL.Path, "/requests/"), "/") {
+				r.SetPathValue("id", strings.TrimPrefix(r.URL.Path, "/requests/"))
+				u.detail(w, r)
+				return
+			}
+		}
 		mux.ServeHTTP(w, r)
-	})
+	}))
 }
 
 // render executes a template into a buffer first: a runtime template error
 // becomes a 500 with the message instead of a half-rendered page.
 func (u *uiServer) render(w http.ResponseWriter, name string, data any) {
+	if api, ok := w.(*actionResponse); ok {
+		var err error
+		message := "Изменения применены"
+		switch v := data.(type) {
+		case settingsView:
+			if v.Err != "" {
+				err = fmt.Errorf("%s", v.Err)
+			}
+			if v.Flash != "" {
+				message = v.Flash
+			}
+		case providerRow:
+			if !v.Probe.OK {
+				err = fmt.Errorf("%s", v.Probe.Msg)
+			}
+			message = "Подключение проверено"
+		case claudeProxyView:
+			if v.Error != "" {
+				err = fmt.Errorf("%s", v.Error)
+			}
+			message = v.Flash
+		case codexUsageView:
+			if v.Error != "" {
+				err = fmt.Errorf("%s", v.Error)
+			}
+			message = "Лимиты обновлены"
+		}
+		api.complete(err, message)
+		return
+	}
 	var buf bytes.Buffer
 	if err := u.tpl.ExecuteTemplate(&buf, name, data); err != nil {
 		log.Printf("ui template %s: %v", name, err)
@@ -580,7 +628,7 @@ func (u *uiServer) settingsView() settingsView {
 		present := map[string]bool{}
 		for i, target := range targets {
 			options := modelEffortOptions(c.local, target.Model, info)
-			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1, Stat: u.hl.snapshot(target.Model)})
+			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && target.Effort != poolRequestEffort && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1, Stat: u.hl.snapshot(target.Model)})
 			present[target.Model] = true
 		}
 		for _, m := range c.local.Models {
@@ -768,7 +816,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 		case all != "":
 			dest = all
 		}
-		if !familyScope && (dest == "inherit" || dest == "" && claudeFamily(model) != "") {
+		if dest == "inherit" || !familyScope && dest == "" && claudeFamily(model) != "" {
 			continue
 		}
 		route := modelRoute{Mode: dest}
@@ -810,6 +858,10 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string) {
+	if api, ok := w.(*actionResponse); ok {
+		api.complete(err, message)
+		return
+	}
 	v := u.settingsView()
 	if err != nil {
 		v.Err = err.Error()
@@ -860,7 +912,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("провайдер %q уже есть", name)
 			break
 		}
-		p := provider{Name: name, Type: r.FormValue("type"), BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")}
+		p := provider{Name: name, DisplayName: strings.TrimSpace(r.FormValue("display_name")), Type: r.FormValue("type"), BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")}
 		if p.Type == "codex" {
 			p.BaseURL, p.APIKey, p.AuthID = codexBaseURL, "", newCodexAuthID()
 		}
@@ -887,8 +939,13 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		p.Name = name
+		if r.Form.Has("display_name") {
+			p.DisplayName = strings.TrimSpace(r.FormValue("display_name"))
+		}
 		if p.Type != "codex" {
-			p.BaseURL = r.FormValue("base_url")
+			if r.Form.Has("base_url") {
+				p.BaseURL = r.FormValue("base_url")
+			}
 			switch {
 			case r.FormValue("clear_key") == "1":
 				p.APIKey = ""
@@ -971,6 +1028,10 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = u.cs.applyLocal(l, true)
 	}
+	if api, ok := w.(*actionResponse); ok {
+		api.complete(err, flash)
+		return
+	}
 	v := u.settingsView()
 	if err != nil {
 		v.Err = err.Error()
@@ -1001,6 +1062,10 @@ func (u *uiServer) settingsCodexImport(w http.ResponseWriter, r *http.Request) {
 		u.probeMu.Lock()
 		u.probe = nil
 		u.probeMu.Unlock()
+	}
+	if api, ok := w.(*actionResponse); ok {
+		api.complete(err, "Вход Codex CLI обновлён")
+		return
 	}
 	v := u.settingsView()
 	if err != nil {
@@ -1084,12 +1149,13 @@ func (u *uiServer) settingsCodexStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
-	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
+	c := u.cs.get()
+	if r.FormValue("profile") != "" && r.FormValue("profile") != c.local.ActiveProfile {
 		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "")
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	l := u.cs.get().local.clone()
+	l := c.local.clone()
 	if l.ModelPools == nil {
 		l.ModelPools = map[string][]poolTarget{}
 	}
@@ -1097,13 +1163,42 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 	pool, exists := l.ModelPools[name]
 	var err error
 	switch op {
+	case "default":
+		if _, supplied := r.Form["name"]; !supplied {
+			err = fmt.Errorf("укажите пул или отключите правило")
+		} else if name != "" && !exists {
+			err = fmt.Errorf("пул %q не найден", name)
+		} else {
+			l.DefaultPool = name
+		}
 	case "create":
 		if exists {
 			err = fmt.Errorf("пул %q уже существует", name)
 		} else {
 			l.ModelPools[name] = []poolTarget{}
 		}
+	case "clone":
+		source := r.FormValue("source")
+		members, found := l.ModelPools[source]
+		switch {
+		case exists:
+			err = fmt.Errorf("пул %q уже существует", name)
+		case !found:
+			err = fmt.Errorf("исходный пул %q не найден", source)
+		default:
+			l.ModelPools[name] = append([]poolTarget{}, members...)
+			for i, member := range members {
+				l.ModelPools[name][i] = member.clone()
+			}
+			if l.PoolSettings == nil {
+				l.PoolSettings = map[string]poolSettings{}
+			}
+			l.PoolSettings[name] = c.poolSettings(source)
+		}
 	case "delete":
+		if l.DefaultPool == name {
+			err = fmt.Errorf("пул %q используется по умолчанию; сначала выберите другой пул или отключите правило", name)
+		}
 		for _, efforts := range l.allRouteRules() {
 			for _, route := range efforts {
 				if route.Mode == "pool" && route.Pool == name {
@@ -1121,7 +1216,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		} else {
 			l.ModelPools[name] = append(pool, poolTarget{Model: key, Effort: r.FormValue("effort")})
 		}
-	case "remove", "up", "down", "effort":
+	case "remove", "up", "down", "effort", "mapping":
 		idx := -1
 		for i, target := range pool {
 			if target.Model == key {
@@ -1146,11 +1241,32 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 			}
 		case "effort":
 			pool[idx].Effort = r.FormValue("effort")
+		case "mapping":
+			mapping := map[string]string{}
+			for _, source := range claudeEfforts {
+				if _, ok := r.Form[source]; !ok {
+					err = fmt.Errorf("не указано соответствие для %s", source)
+					break
+				}
+				value := r.FormValue(source)
+				if value == "inherit" {
+					continue
+				}
+				if value != poolRequestEffort {
+					if err = u.validateTargetEffort(l, key, value); err != nil {
+						break
+					}
+				}
+				mapping[source] = value
+			}
+			if err == nil {
+				pool[idx].EffortMap = mapping
+			}
 		}
 	default:
 		err = fmt.Errorf("неизвестная операция")
 	}
-	if err == nil && (op == "add" || op == "effort") {
+	if err == nil && (op == "add" || op == "effort") && r.FormValue("effort") != poolRequestEffort {
 		err = u.validateTargetEffort(l, key, r.FormValue("effort"))
 	}
 	if err == nil {
@@ -1474,8 +1590,8 @@ func quickSummary(body []byte) (chars, msgs int, preview string) {
 		}
 	}
 	preview = strings.Join(strings.Fields(preview), " ")
-	if len(preview) > 140 {
-		preview = preview[:140] + "…"
+	if chars := []rune(preview); len(chars) > 140 {
+		preview = string(chars[:140]) + "…"
 	}
 	return len(body), len(req.Messages), preview
 }
@@ -1574,6 +1690,10 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil && local {
 		err = u.cs.applyLocal(l, true)
+	}
+	if api, ok := w.(*actionResponse); ok {
+		api.complete(err, "Каталог моделей обновлён")
+		return
 	}
 	v := u.settingsView()
 	if err != nil {
