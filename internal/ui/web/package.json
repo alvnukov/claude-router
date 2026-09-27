@@ -9,6 +9,7 @@
   "scripts": {
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "build": "npm run check && vite build",
+    "test:time": "node ../../../scripts/ui-time-check.mjs",
     "test:browser": "node ../../../scripts/ui-browser-check.mjs",
     "test:usage": "node ../../../scripts/ui-usage-check.mjs"
   },

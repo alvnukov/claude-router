@@ -284,6 +284,63 @@ func TestUIJSONCodexRetainsCurrentErrors(t *testing.T) {
 	}
 }
 
+func TestUIJSONCodexAvailableResets(t *testing.T) {
+	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
+	u, h := codexUI(t)
+	p, _ := u.cs.get().local.provider("work")
+	store, _ := codexStoreFor(p)
+	credential := usageCredential("work-account")
+	if err := store.save(credential); err != nil {
+		t.Fatal(err)
+	}
+	account := accountFromCredential(credential)
+	cache := u.usageCache(p)
+	for _, tc := range []struct {
+		name    string
+		known   bool
+		resets  int64
+		changed bool
+	}{
+		{"available", true, 2, false},
+		{"zero", true, 0, false},
+		{"unknown", false, 0, false},
+		{"different account", true, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache.key = account.key()
+			if tc.changed {
+				cache.key = "previous-account"
+			}
+			cache.view = codexUsageView{Connected: true, Account: account, ResetsKnown: tc.known, Resets: tc.resets}
+			var state struct {
+				Connections []struct {
+					Name        string `json:"name"`
+					ResetsKnown bool   `json:"resetsKnown"`
+					Resets      int64  `json:"resets"`
+				}
+			}
+			if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range state.Connections {
+				if c.Name != p.Name {
+					if c.ResetsKnown || c.Resets != 0 {
+						t.Fatalf("reset count leaked to %s", c.Name)
+					}
+					continue
+				}
+				wantKnown, wantResets := tc.known && !tc.changed, tc.resets
+				if tc.changed {
+					wantResets = 0
+				}
+				if c.ResetsKnown != wantKnown || c.Resets != wantResets {
+					t.Errorf("got known=%v resets=%d; want known=%v resets=%d", c.ResetsKnown, c.Resets, wantKnown, wantResets)
+				}
+			}
+		})
+	}
+}
+
 func TestUIJSONRouteProfileGuard(t *testing.T) {
 	u, h := testUI(t)
 	u.cs.c.local.ActiveProfile = "active"
