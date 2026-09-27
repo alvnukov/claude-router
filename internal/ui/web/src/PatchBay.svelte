@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import type { UIState, SessionRoute } from "./types";
+  import type { UIState } from "./types";
   import SessionIdentity from "./SessionIdentity.svelte";
-  import { sessionTitle } from "./session";
+  import { modelDestinations } from "./destinations";
   import LimitMeter from "./LimitMeter.svelte";
   let { data }: { data: UIState } = $props();
   let host: HTMLDivElement;
@@ -10,20 +10,9 @@
   let width = $state(1);
   let height = $state(1);
   const sessions = $derived(data.sessions.slice(0, 4));
-  const routes = $derived(sessions.flatMap((session, sessionIndex) =>
-    (session.routes?.length ? session.routes : [session]).map(route => ({ route, sessionIndex }))));
-  function connection(s: SessionRoute): string {
-    return (
-      s.connection ||
-      (s.model.includes("/")
-        ? s.model.split("/")[0]
-        : s.route === "cloud"
-          ? "anthropic"
-          : "")
-    );
-  }
-  function requested(s: SessionRoute): string {
-    return s.requestedModel || s.model || "Модель не определена";
+  const destinations = $derived(modelDestinations(sessions));
+  function connectionName(name: string): string {
+    return data.connections.find(c => c.name === name)?.displayName || name || "Подключение неизвестно";
   }
   function measure() {
     if (!host) return;
@@ -40,11 +29,11 @@
       ),
     );
     const next: { d: string; color: number }[] = [];
-    for (const [i, { route, sessionIndex }] of routes.entries()) {
-      const c = connection(route);
+    for (const [i, destination] of destinations.entries()) {
+      const c = destination.connection;
       const index = data.connections.findIndex((x) => x.name === c);
       for (const [from, to] of [
-        ["session-" + sessionIndex, "route-" + i],
+        ...destination.sessionIndices.map(sessionIndex => ["session-" + sessionIndex, "route-" + i]),
         ["route-" + i, "connection-" + c],
       ]) {
         const a = rects.get(from);
@@ -64,7 +53,7 @@
   }
   $effect(() => {
     data;
-    routes;
+    destinations;
     void tick().then(measure);
   });
   onMount(() => {
@@ -112,19 +101,15 @@
         </div>{/if}
     </div>
     <div class="map-column routes-column">
-      <h3>Маршруты запросов</h3>
-      {#each routes as { route, sessionIndex }, i}<a
+      <h3>Модели назначения</h3>
+      {#each destinations as destination, i}<a
           class="map-node route-node"
           data-node={"route-" + i}
           href="#/routes"
-          ><strong>{requested(route)}</strong>
-          <p>
-            {route.effort
-              ? "Усилие: " + route.effort
-              : "Усилие по умолчанию"}
-          </p>
-          <small>→ {route.model || "Назначение не записано"}</small>
-          <p>Сессия · {sessionTitle(sessions[sessionIndex])} · {route.requests} запр.{route.pending ? " · В полёте: " + route.pending : ""}</p></a
+          ><strong>{destination.model || "Назначение не записано"}</strong>
+          <p>{connectionName(destination.connection)}</p>
+          {#if destination.requestedModels.length}<small>Запрошено: {destination.requestedModels.join(", ")}</small>{/if}
+          <p>{destination.requests} запр. · Сессий: {destination.sessionIndices.length}{destination.pending ? " · В полёте: " + destination.pending : ""}</p></a
         >{/each}{#if !sessions.length}<a class="map-node" href="#/routes"
           ><strong>{data.families.length} семейств моделей</strong>
           <p>Настроить маршруты →</p></a
@@ -157,7 +142,7 @@
     </div>
   </div>
   <p class="map-caption">
-    Линии показывают все маршруты сессии из сохранённой истории.{data.sessions
+    Линии показывают, в какие модели обращались сессии. Одинаковые назначения объединены по модели и подключению.{data.sessions
       .length > 4
       ? " Показаны 4 последние сессии."
       : ""}
