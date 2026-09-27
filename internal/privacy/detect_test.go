@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -70,6 +71,32 @@ func TestCorpusSpans(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDictionaryUnicodeSimpleFold(t *testing.T) {
+	rules := &Rules{Entries: []Entry{
+		{Kind: KindPerson, Forms: []string{"Kelvin"}},
+		{Kind: KindOrg, Forms: []string{"Ромашка"}},
+		{Kind: KindProject, Forms: []string{"Sage"}},
+		{Kind: KindUnit, Forms: []string{"Caf*"}},
+	}}
+	text := "Kelvin РОМАШКА ſage Café"
+	var want []Span
+	for _, tc := range []struct {
+		value string
+		kind  Kind
+	}{
+		{"Kelvin", KindPerson},
+		{"РОМАШКА", KindOrg},
+		{"ſage", KindProject},
+		{"Café", KindUnit},
+	} {
+		start := strings.Index(text, tc.value)
+		want = append(want, Span{start, start + len(tc.value), tc.kind, tc.value})
+	}
+	if got := newDetectors(rules).dict.Detect(text); !reflect.DeepEqual(got, want) {
+		t.Fatalf("dictionary casefold or stem changed: got %+v, want %+v", got, want)
 	}
 }
 

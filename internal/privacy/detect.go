@@ -9,9 +9,10 @@ import (
 )
 
 type dictPattern struct {
-	re   *regexp.Regexp
-	kind Kind
-	stem bool
+	re     *regexp.Regexp
+	needle string
+	kind   Kind
+	stem   bool
 }
 type dictDetector struct{ patterns []dictPattern }
 type regexDetector struct {
@@ -33,11 +34,12 @@ func newDetectors(r *Rules) *detectors {
 	for _, e := range r.Entries {
 		for _, form := range e.Forms {
 			stem := strings.HasSuffix(form, "*")
-			pattern := regexp.QuoteMeta(strings.TrimSuffix(form, "*"))
+			literal := strings.TrimSuffix(form, "*")
+			pattern := regexp.QuoteMeta(literal)
 			if stem {
 				pattern += `[\pL\pM]*`
 			}
-			d.dict.patterns = append(d.dict.patterns, dictPattern{regexp.MustCompile("(?i)" + pattern), e.Kind, stem})
+			d.dict.patterns = append(d.dict.patterns, dictPattern{regexp.MustCompile("(?i)" + pattern), strings.Map(foldSimpleRune, literal), e.Kind, stem})
 		}
 	}
 	return d
@@ -61,9 +63,28 @@ func wordBoundary(text string, start, end int, host bool) bool {
 	}
 	return true
 }
+
+// Canonicalize each SimpleFold orbit so the prefilter cannot miss a regex
+// match even when case folding changes the UTF-8 byte width (K and K).
+func foldSimpleRune(r rune) rune {
+	minimum := r
+	for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+		if folded < minimum {
+			minimum = folded
+		}
+	}
+	return minimum
+}
 func (d dictDetector) Detect(text string) []Span {
+	if len(d.patterns) == 0 {
+		return nil
+	}
+	folded := strings.Map(foldSimpleRune, text)
 	var out []Span
 	for _, p := range d.patterns {
+		if !strings.Contains(folded, p.needle) {
+			continue
+		}
 		for _, v := range p.re.FindAllStringIndex(text, -1) {
 			if wordBoundary(text, v[0], v[1], p.kind == KindHost) || pathBoundary(text, v[0], v[1]) {
 				out = append(out, Span{v[0], v[1], p.kind, text[v[0]:v[1]]})
