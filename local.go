@@ -10,9 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"localrouter/internal/anthropicerror"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -82,7 +82,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	pickCfg.failover = true
 	cands := withoutSignedOut(hl.pick(pickCfg))
 	sessionKey := codexprovider.SessionKey(history.SessionOf(body))
-	if privateAttempt(r) != nil {
+	if privacy.FromRequest(r) != nil {
 		// Unprotected server-side state must never be selected by the same key.
 		sessionKey = ""
 	}
@@ -98,10 +98,10 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	var last attemptResult
 	for i, cand := range cands {
 		input := req
-		if p := privateAttempt(r); p != nil {
-			masked, maskErr := p.prepare(privacy.Target{Model: cand.Key, Pool: p.pool, Provider: cand.Provider.Name}, body)
+		if p := privacy.FromRequest(r); p != nil {
+			masked, maskErr := p.Prepare(privacy.Target{Model: cand.Key, Pool: p.Pool(), Provider: cand.Provider.Name, Translated: true, Protocol: cand.Provider.Type}, body)
 			if maskErr == nil {
-				maskErr = p.exchange.CheckControl(cand.Model)
+				maskErr = p.CheckControl(cand.Model)
 			}
 			if maskErr != nil {
 				writeAnthropicError(w, 400, "invalid_request_error", "privacy: request rejected")
@@ -118,7 +118,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			return
 		}
 		if cfg.maxInputChars > 0 {
-			if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after && privateAttempt(r) == nil {
+			if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after && privacy.FromRequest(r) == nil {
 				log.Printf("trimmed prompt %d -> %d chars (budget %d): %s", before, after, cfg.maxInputChars, strings.Join(notes, "; "))
 				if tr != nil {
 					tr.TrimBefore, tr.TrimAfter, tr.TrimNotes = before, after, notes
@@ -133,7 +133,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		var payload []byte
 		if cand.Provider.Type == "codex" {
 			codexInput := oreq
-			if privateAttempt(r) != nil {
+			if privacy.FromRequest(r) != nil {
 				codexInput, err = restoreCodexCalls(oreq, "", nil)
 				if err != nil {
 					writeAnthropicError(w, 400, "invalid_request_error", "privacy: include complete tool call history for Codex")
@@ -175,9 +175,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			responseBody = res.resp.Body
 		}
 
-		if res.err != nil && privateAttempt(r) != nil {
-			res.err = errors.New("upstream response failed")
-			res.detail = "upstream response failed"
+		if res.err != nil && privacy.FromRequest(r) != nil {
+			res.detail, res.err = privacy.ScrubLocalFailure(r, res.err, res.detail, res.status)
 		}
 		if tr != nil {
 			tr.Attempts = append(tr.Attempts, history.Attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
@@ -229,8 +228,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		res.cancel()
 		hl.release(cand.Key)
 		if werr != nil {
-			if privateAttempt(r) != nil {
-				werr = errors.New("upstream response failed")
+			if privacy.FromRequest(r) != nil {
+				_, werr = privacy.ScrubLocalFailure(r, werr, werr.Error(), res.status)
 			}
 			if tr != nil {
 				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
@@ -248,15 +247,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		hl.record(cand.Key, true, res.ttfb, "")
 		return
 	}
-	if last.status != 0 {
-		if last.retryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.FormatInt(int64((last.retryAfter+time.Second-1)/time.Second), 10))
-		}
-		writeAnthropicError(w, last.status, "api_error",
-			fmt.Sprintf("local endpoint returned %d: %s", last.status, last.detail))
-		return
-	}
-	writeAnthropicError(w, http.StatusBadGateway, "api_error", "local endpoint: "+last.errMsg())
+	anthropicerror.WriteHTTP(w, privacy.FailureForResponse(r, last.err, last.status))
 }
 
 type attemptResult struct {
@@ -323,7 +314,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	t0 := time.Now()
 	client := http.DefaultClient
-	if cand.Provider.Type == "codex" || privateAttempt(r) != nil {
+	if cand.Provider.Type == "codex" || privacy.FromRequest(r) != nil {
 		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	var resp *http.Response
@@ -334,7 +325,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	ttfb := time.Since(t0)
 	if err != nil {
-		if privateAttempt(r) != nil {
+		if privacy.FromRequest(r) != nil {
 			err = errors.New("upstream request failed")
 		}
 		cancel()
@@ -349,14 +340,15 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		}
 		return attemptResult{err: err, ttfb: ttfb, retryable: true}
 	}
-	if resp.StatusCode >= 400 || privateAttempt(r) != nil && resp.StatusCode >= 300 {
+	privacy.ObserveProviderHeaders(r)
+	if resp.StatusCode >= 400 || privacy.FromRequest(r) != nil && resp.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		cancel()
-		if privateAttempt(r) != nil {
+		if privacy.FromRequest(r) != nil {
 			detail = []byte("upstream request failed")
 		}
-		if cand.Provider.Type != "codex" && privateAttempt(r) == nil {
+		if cand.Provider.Type != "codex" && privacy.FromRequest(r) == nil {
 			log.Printf("local endpoint %d (%s): %s", resp.StatusCode, model, detail)
 		}
 		if cand.Provider.Type == "codex" {
@@ -383,8 +375,8 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	original := resp.Body
 	body := original
-	if privateAttempt(r) != nil {
-		body = &responseReader{Reader: &privacyResponseReader{source: original, remaining: privacy.TrafficOutputLimit}, close: original.Close}
+	if privacy.FromRequest(r) != nil {
+		body = &responseReader{Reader: privacy.NewResponseReader(original), close: original.Close}
 	}
 	if stream && cand.Provider.Type == "codex" {
 		body = codexChatStream(body)

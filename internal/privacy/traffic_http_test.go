@@ -62,7 +62,7 @@ func compatHTTPDeps(t *testing.T, rt *Runtime, upstream string, mode string, loc
 				// Provisional route-snapshot credential seam: no client credential
 				// may be promoted to the selected provider credential.
 				ProviderKey: compatProviderKey,
-				Pool: func(string) (string, string) { return "synthetic-profile", "synthetic-pool" },
+				Pool:        func(string) (string, string) { return "synthetic-profile", "synthetic-pool" },
 				Local: func(w http.ResponseWriter, _ *http.Request, _ []byte, _ string) {
 					localCalls.Add(1)
 					w.Header().Set("Content-Type", "application/json")
@@ -75,7 +75,7 @@ func compatHTTPDeps(t *testing.T, rt *Runtime, upstream string, mode string, loc
 		WriteError: func(w http.ResponseWriter, status int, kind, message string) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(status)
-			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"type": kind, "message": message}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": message}})
 		},
 	}
 }
@@ -147,7 +147,9 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 					t.Errorf("forbidden outbound header: %s", name)
 				}
 			}
-			var request struct{ System string `json:"system"` }
+			var request struct {
+				System string `json:"system"`
+			}
 			if err := json.Unmarshal(body, &request); err != nil || request.System == "" || request.System == compatCanary {
 				t.Error("missing masked request alias", err)
 				return
@@ -167,7 +169,7 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 				t.Errorf("validated answer missing %s", want)
 			}
 		}
-		if w.Header().Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "synthetic-provider-key") {
+		if w.Header.Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "synthetic-provider-key") {
 			t.Fatal("upstream header or credential released")
 		}
 		state, _ := json.Marshal(deps.Runtime.State())
@@ -230,8 +232,22 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 					t.Fatalf("direct %s route failed: %d", mode, w.Code)
 				}
 				deps.Resolve = func([]byte) (HTTPRoute, error) {
-					route := HTTPRoute{Mode: "openai", Model: compatModel, Local: func(w http.ResponseWriter, _ *http.Request, _ []byte, _ string) {
+					route := HTTPRoute{Mode: "openai", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
 						localCalls.Add(1)
+						attempt := FromRequest(r)
+						if attempt == nil {
+							t.Error("translated route lacks a request-scoped attempt")
+							return
+						}
+						if _, err := attempt.Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+							t.Error("controls-free translated candidate rejected:", err)
+							return
+						}
+						if err := attempt.CheckControl("synthetic-selected"); err != nil {
+							t.Error("controls-free candidate model rejected:", err)
+							return
+						}
+						w.Header().Set("Content-Type", "application/json")
 						_, _ = io.WriteString(w, `{"content":[]}`)
 					}}
 					return route, nil
@@ -252,6 +268,71 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 					}
 				}
 			})
+		}
+	})
+
+	t.Run("configured-local-route-kinds", func(t *testing.T) {
+		for _, kind := range []string{"model", "pool"} {
+			t.Run(kind, func(t *testing.T) {
+				var localCalls, legacyCalls atomic.Int32
+				deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", kind, &localCalls, &legacyCalls)
+				deps.Resolve = func([]byte) (HTTPRoute, error) {
+					return HTTPRoute{Mode: kind, Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+						localCalls.Add(1)
+						if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+							t.Error(err)
+							return
+						}
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, `{"content":[]}`)
+					}}, nil
+				}
+				plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+				result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+				if result.Code != http.StatusOK || localCalls.Load() != 1 || legacyCalls.Load() != 0 {
+					t.Fatalf("configured %s route lost: %d", kind, result.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("local-no-exchange-sse-terminal", func(t *testing.T) {
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		for _, mode := range []string{"detect", "bypass"} {
+			for _, tc := range []struct {
+				name, stream string
+				wantStatus   int
+			}{
+				{"truncated", strings.Split(compatSSE("safe"), "event: message_stop")[0], http.StatusBadGateway},
+				{"opaque", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n" +
+					"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"opaque-synthetic\"}}\n\n" +
+					"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
+					"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", http.StatusBadGateway},
+				{"terminal-suffix", compatSSE("safe") + "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"not-part-of-response\"}}\n\n", http.StatusOK},
+			} {
+				t.Run(mode+"/"+tc.name, func(t *testing.T) {
+					var localCalls, legacyCalls atomic.Int32
+					deps := compatHTTPDeps(t, clientCompatRuntime(t, mode), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+					deps.Resolve = func([]byte) (HTTPRoute, error) {
+						return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+							localCalls.Add(1)
+							if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+								t.Error(err)
+								return
+							}
+							w.Header().Set("Content-Type", "text/event-stream")
+							_, _ = io.WriteString(w, tc.stream)
+						}}, nil
+					}
+					result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+					if result.Code != tc.wantStatus || localCalls.Load() != 1 || strings.Contains(result.Body.String(), "not-part-of-response") || tc.wantStatus != http.StatusOK && strings.Contains(result.Body.String(), "event: content_block") {
+						t.Fatalf("unverified local SSE released: mode=%s case=%s status=%d body=%q", mode, tc.name, result.Code, result.Body.String())
+					}
+					if tc.wantStatus == http.StatusOK && !strings.HasSuffix(result.Body.String(), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n") {
+						t.Fatal("validated local SSE lost its logical terminal")
+					}
+				})
+			}
 		}
 	})
 
@@ -666,6 +747,204 @@ func TestProtectedHTTPLifecycle(t *testing.T) {
 		}
 	})
 
+	t.Run("local-provider-headers-start-idle-before-generated-output", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}))
+		defer up.Close()
+		clock := newCompatClock()
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), up.URL, "model", &localCalls, &legacyCalls)
+		deps.Clock = clock
+		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "model", Model: compatModel, Local: func(_ http.ResponseWriter, r *http.Request, body []byte, _ string) {
+				localCalls.Add(1)
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+					t.Error(err)
+					return
+				}
+				request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, up.URL, bytes.NewReader(body))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+				response, err := client.Do(request)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				ObserveProviderHeaders(r)
+				defer response.Body.Close()
+				<-r.Context().Done()
+			}}, nil
+		}
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		done, cancel := compatStartCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+		defer cancel()
+		clock.waitArm(t, deps.Limits.Idle)
+		clock.advance(deps.Limits.Idle + time.Millisecond)
+		if w := compatAwait(t, done); w.Code != http.StatusBadGateway || localCalls.Load() != 1 {
+			t.Fatalf("local provider stalled without bounded idle: %d", w.Code)
+		}
+	})
+
+	t.Run("generated-local-headers-cannot-restart-provider-idle", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		clock := newCompatClock()
+		providerHeaders, generate := make(chan struct{}), make(chan struct{})
+		generated := make(chan struct{})
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps.Clock = clock
+		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+				localCalls.Add(1)
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+					t.Error(err)
+					return
+				}
+				ObserveProviderHeaders(r)
+				close(providerHeaders)
+				select {
+				case <-generate:
+				case <-r.Context().Done():
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, "event: ping\ndata: {\"type\":\"ping\"}\n\n")
+				close(generated)
+				<-r.Context().Done()
+			}}, nil
+		}
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		done, cancel := compatStartCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+		defer cancel()
+		compatWaitSignal(t, providerHeaders)
+		clock.waitArm(t, deps.Limits.Idle)
+		clock.advance(90 * time.Millisecond)
+		close(generate)
+		compatWaitSignal(t, generated)
+		clock.advance(11 * time.Millisecond)
+		if w := compatAwait(t, done); w.Code != http.StatusBadGateway || localCalls.Load() != 1 {
+			t.Fatalf("generated headers prolonged provider idle: %d", w.Code)
+		}
+	})
+
+	t.Run("late-local-headers-after-timeout-do-not-panic", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		clock := newCompatClock()
+		panicked := make(chan bool, 1)
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps.Clock = clock
+		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+				localCalls.Add(1)
+				defer func() { panicked <- recover() != nil }()
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+					t.Error(err)
+					return
+				}
+				<-r.Context().Done()
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+			}}, nil
+		}
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		done, _ := compatStartCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+		clock.waitArm(t, deps.Limits.Headers)
+		clock.advance(deps.Limits.Headers + time.Millisecond)
+		if compatWaitSignal(t, panicked) {
+			t.Fatal("local headers after expiration panicked")
+		}
+		if w := compatAwait(t, done); w.Code != http.StatusBadGateway || localCalls.Load() != 1 {
+			t.Fatalf("late local headers escaped deadline: %d", w.Code)
+		}
+	})
+
+	t.Run("local-ping-after-anthropic-headers-does-not-extend-idle", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		clock := newCompatClock()
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps.Clock = clock
+		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+				localCalls.Add(1)
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+					t.Error(err)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n"+
+					"event: ping\ndata: {\"type\":\"ping\"}\n\n")
+				<-r.Context().Done()
+			}}, nil
+		}
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		done, _ := compatStartCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+		clock.waitArm(t, deps.Limits.Idle)
+		clock.advance(deps.Limits.Idle + time.Millisecond)
+		w := compatAwait(t, done)
+		if w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), "event: ping") || localCalls.Load() != 1 {
+			t.Fatalf("local non-useful frames extended idle or escaped: %d", w.Code)
+		}
+	})
+
+	t.Run("local-useful-anthropic-delta-rearms-idle", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		clock := newCompatClock()
+		continueDelta, continueTerminal := make(chan struct{}), make(chan struct{})
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps.Clock = clock
+		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+				localCalls.Add(1)
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+					t.Error(err)
+					return
+				}
+				w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n"+
+					"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+				select {
+				case <-continueDelta:
+				case <-r.Context().Done():
+					return
+				}
+				_, _ = io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"safe\"}}\n\n")
+				select {
+				case <-continueTerminal:
+				case <-r.Context().Done():
+					return
+				}
+				_, _ = io.WriteString(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"+
+					"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			}}, nil
+		}
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		done, _ := compatStartCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+		clock.waitArm(t, deps.Limits.Idle)
+		clock.advance(90 * time.Millisecond)
+		close(continueDelta)
+		clock.waitArm(t, deps.Limits.Idle)
+		clock.advance(90 * time.Millisecond)
+		close(continueTerminal)
+		if w := compatAwait(t, done); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "message_stop") || localCalls.Load() != 1 {
+			t.Fatalf("local useful delta did not keep a validated message alive: %d", w.Code)
+		}
+	})
+
 	t.Run("partial-tool-stall-releases-no-tool", func(t *testing.T) {
 		var localCalls, legacyCalls atomic.Int32
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -780,6 +1059,61 @@ func TestProtectedHTTPTerminalSegmentation(t *testing.T) {
 			}
 		})
 	}
+	t.Run("terminal-near-output-limit-ignores-same-read-suffix", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		alias := strings.Repeat("a", (TrafficOutputLimit-len(compatSSE(""))-200)/2)
+		prefix := compatSSE(alias)
+		suffix := strings.Repeat("X", TrafficOutputLimit-len(prefix)+1)
+		if len(prefix) > TrafficOutputLimit || len(prefix)+len(suffix) <= TrafficOutputLimit {
+			t.Fatal("test fixture does not straddle the output limit")
+		}
+		for _, parts := range [][]string{{prefix[:1], prefix[1:] + suffix}, {prefix[:1], prefix[1:], suffix}} {
+			body := &compatChunkBody{closed: make(chan struct{})}
+			for _, part := range parts {
+				body.parts = append(body.parts, []byte(part))
+			}
+			deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "anthropic", &localCalls, &legacyCalls)
+			deps.Client = &http.Client{Transport: compatRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body, Request: r}, nil
+			})}
+			w := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`))
+			if w.Code != http.StatusOK || w.Body.Len() != len(prefix) || !strings.HasSuffix(w.Body.String(), "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n") {
+				t.Fatalf("terminal near the bound depends on read segmentation: %d bytes=%d want=%d", w.Code, w.Body.Len(), len(prefix))
+			}
+		}
+	})
+	t.Run("local-terminal-near-output-limit-ignores-suffix", func(t *testing.T) {
+		alias := strings.Repeat("a", (TrafficOutputLimit-len(compatSSE(""))-200)/2)
+		prefix := compatSSE(alias)
+		suffix := strings.Repeat("X", TrafficOutputLimit-len(prefix)+1)
+		if len(prefix) > TrafficOutputLimit || len(prefix)+len(suffix) <= TrafficOutputLimit {
+			t.Fatal("test fixture does not straddle the output limit")
+		}
+		for _, parts := range [][]string{{prefix[:1], prefix[1:] + suffix}, {prefix[:1], prefix[1:], suffix}} {
+			var localCalls, legacyCalls atomic.Int32
+			deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+			deps.Resolve = func([]byte) (HTTPRoute, error) {
+				return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+					localCalls.Add(1)
+					if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
+						t.Error(err)
+						return
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					for _, part := range parts {
+						if _, err := io.WriteString(w, part); err != nil {
+							t.Errorf("valid terminal prefix rejected on local write: %v", err)
+							return
+						}
+					}
+				}}, nil
+			}
+			w := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`))
+			if w.Code != http.StatusOK || w.Body.Len() != len(prefix) || !bytes.HasSuffix(w.Body.Bytes(), []byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")) || localCalls.Load() != 1 {
+				t.Fatalf("local terminal near the bound depends on write segmentation: %d bytes=%d want=%d", w.Code, w.Body.Len(), len(prefix))
+			}
+		}
+	})
 }
 
 type compatProbeWriter struct {
@@ -820,6 +1154,8 @@ func TestProtectedHTTPClientIO(t *testing.T) {
 		defer up.Close()
 		rt := clientCompatRuntime(t, "mask")
 		deps := compatHTTPDeps(t, rt, up.URL, "anthropic", &localCalls, &legacyCalls)
+		clock := newCompatClock()
+		deps.Clock = clock
 		probe := &compatProbeWriter{entered: make(chan struct{}), exited: make(chan struct{})}
 		serverDone := make(chan struct{})
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -841,13 +1177,18 @@ func TestProtectedHTTPClientIO(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		compatWaitSignal(t, probe.entered)
+		select {
+		case <-probe.entered:
+		case <-time.After(20 * time.Second):
+			t.Fatal("validated response never reached client Write")
+		}
 		select {
 		case <-probe.exited:
 			t.Fatal("kernel accepted entire response; blocked Write not demonstrated")
 		case <-time.After(100 * time.Millisecond):
 		}
-		_ = conn.Close() // observed client cancel must interrupt the actual Write
+		clock.waitArm(t, deps.Limits.Total)
+		clock.advance(deps.Limits.Total + time.Millisecond) // total interrupts the actual Write
 		compatWaitSignal(t, probe.exited)
 		compatWaitSignal(t, serverDone)
 		if probe.status.Load() != http.StatusOK || rt.State().Active != 0 {
@@ -859,6 +1200,7 @@ func TestProtectedHTTPClientIO(t *testing.T) {
 		var localCalls, legacyCalls, dispatched atomic.Int32
 		entered := make(chan struct{}, 4)
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
 			dispatched.Add(1)
 			entered <- struct{}{}
 			<-r.Context().Done()
@@ -1022,26 +1364,26 @@ func TestProtectedHTTPCodex429Precommit(t *testing.T) {
 					rt = NewRuntime(t.TempDir())
 				}
 				deps := compatHTTPDeps(t, rt, "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
-				failure := func(r *http.Request) (error, int) {
+				failure := func(r *http.Request) (int, error) {
 					if tc.beforeHTTP {
-						return errors.New("raw-before-headers-" + compatCanary), 502
+						return 502, errors.New("raw-before-headers-" + compatCanary)
 					}
 					if tc.untyped {
-						return errors.New("raw-" + compatCanary), 429
+						return 429, errors.New("raw-" + compatCanary)
 					}
 					if tc.unknownHTTP {
-						return &codex.ProtocolError{Code: tc.code, Status: 429, RetryAfter: 7 * time.Second}, 429
+						return 429, &codex.ProtocolError{Code: tc.code, Status: 429, RetryAfter: 7 * time.Second}
 					}
 					err := compatCodexUpstreamError(r.Context(), tc.rawStatus, tc.code, tc.retry, tc.decoded)
 					if err == nil {
 						t.Error("synthetic Codex failure was accepted as success")
-						return errors.New("raw-" + compatCanary), 502
+						return 502, errors.New("raw-" + compatCanary)
 					}
 					status := tc.rawStatus
 					if tc.decoded || status == 503 {
 						status = 429 // the existing code table maps this outward status
 					}
-					return err, status
+					return status, err
 				}
 				preset := func(w http.ResponseWriter) {
 					w.Header().Set("Retry-After", "777")
@@ -1051,7 +1393,7 @@ func TestProtectedHTTPCodex429Precommit(t *testing.T) {
 				deps.Resolve = func([]byte) (HTTPRoute, error) {
 					return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
 						localCalls.Add(1)
-						err, status := failure(r)
+						status, err := failure(r)
 						_, _ = ScrubLocalFailure(r, err, "raw-"+compatCanary, status)
 						preset(w)
 						w.Header().Set("Set-Cookie", "raw-"+compatCanary)
@@ -1061,7 +1403,7 @@ func TestProtectedHTTPCodex429Precommit(t *testing.T) {
 				}
 				deps.Legacy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					legacyCalls.Add(1)
-					err, status := failure(r)
+					status, err := failure(r)
 					preset(w)
 					anthropicerror.WriteHTTP(w, FailureForResponse(r, err, status))
 				})
@@ -1107,14 +1449,22 @@ func TestProtectedHTTPCodex429LatestCandidateWins(t *testing.T) {
 	var localCalls, legacyCalls atomic.Int32
 	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
 	deps.Resolve = func([]byte) (HTTPRoute, error) {
-		return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
+		return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
 			localCalls.Add(1)
+			if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "codex", Translated: true, Protocol: "codex"}, body); err != nil {
+				t.Error("first candidate rejected:", err)
+				return
+			}
 			first := compatCodexUpstreamError(r.Context(), 429, "rate_limit_exceeded", []string{"7"}, false)
 			if first == nil {
 				t.Error("missing first candidate failure")
 				return
 			}
 			_, _ = ScrubLocalFailure(r, first, "raw-first-"+compatCanary, 429)
+			if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "codex", Translated: true, Protocol: "codex"}, body); err != nil {
+				t.Error("last candidate rejected:", err)
+				return
+			}
 			last := compatCodexUpstreamError(r.Context(), 429, "insufficient_quota", []string{"11"}, false)
 			if last == nil {
 				t.Error("missing second candidate failure")
@@ -1138,6 +1488,7 @@ func TestProtectedHTTPCodex429ValidationBeatsFailure(t *testing.T) {
 		{"incomplete-json", "application/json", `{"type":"message","content":[` + compatCanary},
 		{"incomplete-tool-sse", "text/event-stream", strings.Split(compatSSE("safe"), "event: message_stop")[0] +
 			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"partial-tool\",\"name\":\"run_synthetic\",\"input\":{}}\n\n"},
+		{"complete-after-failed-candidate", "text/event-stream", compatSSE("safe")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var localCalls, legacyCalls atomic.Int32
@@ -1145,6 +1496,10 @@ func TestProtectedHTTPCodex429ValidationBeatsFailure(t *testing.T) {
 			deps.Resolve = func([]byte) (HTTPRoute, error) {
 				return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
 					localCalls.Add(1)
+					if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "codex", Translated: true}, compatCodexPlainBody()); err != nil {
+						t.Error("candidate preparation failed:", err)
+						return
+					}
 					err := compatCodexUpstreamError(r.Context(), 429, "rate_limit_exceeded", []string{"7"}, false)
 					if err == nil {
 						t.Error("expected synthetic original HTTP 429")
@@ -1211,8 +1566,17 @@ func TestProtectedHTTPCodex429CommittedPartialWrite(t *testing.T) {
 	var localCalls, legacyCalls atomic.Int32
 	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
 	deps.Resolve = func([]byte) (HTTPRoute, error) {
-		return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, _ *http.Request, _ []byte, _ string) {
+		return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
 			localCalls.Add(1)
+			attempt := FromRequest(r)
+			if attempt == nil {
+				t.Error("missing protected candidate attempt")
+				return
+			}
+			if _, err := attempt.Prepare(Target{Model: compatModel, Provider: "codex", Translated: true}, body); err != nil {
+				t.Error("candidate prepare failed:", err)
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, compatSSE("safe"))

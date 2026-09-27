@@ -19,11 +19,12 @@ var errTraffic = errors.New("privacy: request rejected; check the profile and su
 var errRestore = errors.New("privacy: response rejected; copy exact pseudonyms from the current context and retry without changing or encoding them")
 
 type Runtime struct {
-	home     string
-	mu       sync.Mutex
-	revision string
-	policy   *Policy
-	stats    RuntimeState
+	home           string
+	mu             sync.Mutex
+	revision       string
+	policy         *Policy
+	clientControls clientControlTable
+	stats          RuntimeState
 }
 type RuntimeState struct {
 	Status    string       `json:"status"`
@@ -38,9 +39,10 @@ type RuntimeState struct {
 	Buffered  bool         `json:"buffered"`
 }
 type Policy struct {
-	config  *Profiles
-	engines map[string]*Engine
-	runtime *Runtime
+	config         *Profiles
+	engines        map[string]*Engine
+	clientControls clientControlTable
+	runtime        *Runtime
 }
 type Exchange struct {
 	restoreMu sync.Mutex
@@ -71,7 +73,7 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 		r.stats.Enabled = r.policy.Enabled()
 		return r.policy, nil
 	}
-	p := &Policy{config: snapshot.Config, engines: map[string]*Engine{}, runtime: r}
+	p := &Policy{config: snapshot.Config, engines: map[string]*Engine{}, clientControls: r.clientControls.clone(), runtime: r}
 	if p.Enabled() {
 		// Marker survives restart: deleting the policy is never an off switch.
 		if err := platform.WritePrivateAtomic(filepath.Join(r.home, "privacy-required"), []byte("privacy profiles required\n")); err != nil {
@@ -116,7 +118,20 @@ func (r *Runtime) State() RuntimeState {
 	return state
 }
 func (r *Runtime) Reject() { r.mu.Lock(); r.stats.Rejected++; r.mu.Unlock() }
+func hasClientControls(body []byte) bool {
+	n, err := scanJSON(body)
+	if err != nil || n.kind != '{' {
+		return false
+	}
+	thinking := n.get("thinking")
+	return n.get("context_management") != nil || thinking != nil && thinking.str("type") == "enabled"
+}
+
 func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) {
+	controls := hasClientControls(body)
+	if target.Translated && controls {
+		return nil, nil, errTraffic
+	}
 	resolution := p.config.Resolve(target)
 	if !resolution.Enabled {
 		p.runtime.mu.Lock()
@@ -126,6 +141,9 @@ func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) 
 	}
 	e := p.engines[resolution.Profile]
 	if e == nil || len(body) > TrafficInputLimit {
+		return nil, nil, errTraffic
+	}
+	if resolution.Mode != ModeDetect && controls && !p.clientControls.allows(target, body) {
 		return nil, nil, errTraffic
 	}
 	if resolution.Mode == ModeDetect {

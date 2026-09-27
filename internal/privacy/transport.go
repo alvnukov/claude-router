@@ -3,6 +3,7 @@ package privacy
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -26,15 +27,46 @@ func hasOnly(n *jsonNode, keys string) bool {
 	}
 	return true
 }
+func clientControlsShape(n *jsonNode, body []byte) bool {
+	thinking, context := n.get("thinking"), n.get("context_management")
+	if thinking == nil {
+		return context == nil
+	}
+	if thinking.kind != '{' {
+		return false
+	}
+	if thinking.str("type") == "disabled" {
+		return context == nil && hasOnly(thinking, "type")
+	}
+	if thinking.str("type") != "enabled" || !hasOnly(thinking, "type budget_tokens display") || thinking.str("display") != "omitted" {
+		return false
+	}
+	budget, max := thinking.get("budget_tokens"), n.get("max_tokens")
+	if budget == nil || max == nil {
+		return false
+	}
+	budgetTokens, budgetErr := strconv.ParseInt(string(body[budget.start:budget.end]), 10, 64)
+	maxTokens, maxErr := strconv.ParseInt(string(body[max.start:max.end]), 10, 64)
+	if budgetErr != nil || maxErr != nil || budgetTokens <= 0 || maxTokens <= budgetTokens {
+		return false
+	}
+	if !hasOnly(context, "edits") {
+		return false
+	}
+	edits := context.get("edits")
+	return edits != nil && edits.kind == '[' && len(edits.items) == 1 &&
+		hasOnly(edits.items[0], "type keep") && edits.items[0].str("type") == "clear_thinking_20251015" && edits.items[0].str("keep") == "all"
+}
+
 func (e *Engine) checkTransport(body []byte) error {
 	n, err := scanJSON(body)
 	if !utf8.Valid(body) || err != nil || n.kind != '{' {
 		return errTraffic
 	}
-	if !hasOnly(n, "model system messages tools tool_choice max_tokens stream temperature top_p top_k stop_sequences metadata thinking output_config service_tier") {
+	if !hasOnly(n, "model system messages tools tool_choice max_tokens stream temperature top_p top_k stop_sequences metadata thinking context_management output_config service_tier") {
 		return errTraffic
 	}
-	if thinking := n.get("thinking"); thinking != nil && thinking.str("type") != "disabled" {
+	if !clientControlsShape(n, body) {
 		return errTraffic
 	}
 	if !transportShape(n, false) {
@@ -132,7 +164,7 @@ func (x *Exchange) checkTrafficSSE(body []byte) error {
 	if !bytes.HasSuffix(normalized, []byte("\n\n")) {
 		return errRestore
 	}
-	stopped := false
+	started, stopped := false, false
 	open := map[string]string{}
 	seen := map[string]bool{}
 	for _, frame := range bytes.Split(normalized, []byte("\n\n")) {
@@ -164,7 +196,7 @@ func (x *Exchange) checkTrafficSSE(body []byte) error {
 		if event == "" {
 			event = n.str("type")
 		}
-		if event != n.str("type") || stopped {
+		if event != n.str("type") || stopped || x == nil && !started && event != "message_start" && event != "ping" {
 			return errRestore
 		}
 		index := n.get("index")
@@ -187,18 +219,19 @@ func (x *Exchange) checkTrafficSSE(body []byte) error {
 			}
 		case "message_start":
 			message := n.get("message")
-			if message == nil {
+			if started || message == nil || !hasOnly(message, "id type role model content stop_reason stop_sequence usage") || !transportShape(message, true) {
 				return errRestore
 			}
 			if content := message.get("content"); content != nil && (content.kind != '[' || len(content.items) > 0) {
 				return errRestore
 			}
-			if x.checkResponse(data[message.start:message.end]) != nil {
+			if x != nil && x.checkResponse(data[message.start:message.end]) != nil {
 				return errRestore
 			}
+			started = true
 		case "message_delta":
 			delta := n.get("delta")
-			if delta == nil || !hasOnly(delta, "stop_reason stop_sequence") || x.checkOpaque(n) != nil {
+			if delta == nil || !hasOnly(delta, "stop_reason stop_sequence") || x != nil && x.checkOpaque(n) != nil {
 				return errRestore
 			}
 		case "content_block_start":
@@ -209,8 +242,16 @@ func (x *Exchange) checkTrafficSSE(body []byte) error {
 			if block == nil || (block.str("type") != "text" && block.str("type") != "tool_use") {
 				return errRestore
 			}
-			if err := x.checkResponse(append(append([]byte(`{"content":[`), data[block.start:block.end]...), ']', '}')); err != nil {
-				return errRestore
+			blockResponse := append(append([]byte(`{"content":[`), data[block.start:block.end]...), ']', '}')
+			if x != nil {
+				if x.checkResponse(blockResponse) != nil {
+					return errRestore
+				}
+			} else {
+				wrapper, err := scanJSON(blockResponse)
+				if err != nil || !transportShape(wrapper, true) {
+					return errRestore
+				}
 			}
 			open[key] = block.str("type")
 			seen[key] = true
@@ -260,7 +301,7 @@ func ValidateObject(body []byte) error {
 }
 func transportShape(n *jsonNode, response bool) bool {
 	if !response {
-		for key, allowed := range map[string]string{"output_config": "effort", "tool_choice": "type name disable_parallel_tool_use", "thinking": "type"} {
+		for key, allowed := range map[string]string{"output_config": "effort", "tool_choice": "type name disable_parallel_tool_use", "thinking": "type budget_tokens display", "context_management": "edits"} {
 			if v := n.get(key); v != nil && (v.kind != '{' || !hasOnly(v, allowed)) {
 				return false
 			}

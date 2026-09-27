@@ -48,7 +48,10 @@ func TestTransportClientControls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine := testEngine(t, rules)
+	engine, err := Open(t.TempDir(), rules, Options{Home: "/home/testlogin", Hostname: "test-host.local"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Run("direct-shape", func(t *testing.T) {
 		// First compiling RED on @45aae67 when run alone: checkTransport
 		// rejects context_management and enabled thinking before any masking.

@@ -58,18 +58,19 @@ func TestPrivacyTrafficClaudeBetaQuery(t *testing.T) {
 					}
 					body := trafficBody
 					if mode == "detect" {
-						// These controls were observed in the installed Claude Code's
-						// first request. Detect must preserve them; mask support is
-						// a separate, currently unsupported transport contract.
+						// Translated controls remain unsupported even in detect mode;
+						// direct lacks an independently configured provider key.
 						body = strings.TrimSuffix(body, "}") + `,"thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`
 					}
 					response := trafficCall(h, path+"?beta=true", body)
-					wantCalls := int32(1)
-					if local && strings.HasSuffix(path, "count_tokens") {
-						wantCalls = 0
+					wantStatus, wantCalls := http.StatusBadRequest, int32(0)
+					if !local && path == "/v1/messages" {
+						wantStatus = http.StatusServiceUnavailable
+					} else if local && mode == "mask" && path == "/v1/messages" {
+						wantStatus, wantCalls = http.StatusOK, 1
 					}
-					if response.Code != 200 || calls.Load() != wantCalls {
-						t.Fatalf("status=%d calls=%d, want 200/%d; response=%s", response.Code, calls.Load(), wantCalls, response.Body)
+					if response.Code != wantStatus || calls.Load() != wantCalls {
+						t.Fatalf("status=%d calls=%d, want %d/%d; response=%s", response.Code, calls.Load(), wantStatus, wantCalls, response.Body)
 					}
 					if len(history.List()) != 0 {
 						t.Fatal("privacy request recorded in history")

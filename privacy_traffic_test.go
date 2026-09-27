@@ -48,13 +48,36 @@ func writeTrafficConfig(t *testing.T, home, rules string) {
 	}
 }
 func trafficCall(h http.Handler, path, body string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest("POST", path, strings.NewReader(body))
+	server := httptest.NewServer(h)
+	defer server.Close()
+	w := httptest.NewRecorder() // result container; the handler sees a real HTTP writer
+	r, err := http.NewRequest(http.MethodPost, server.URL+path, strings.NewReader(body))
+	if err != nil {
+		w.Code = 599
+		w.Body.WriteString(err.Error())
+		return w
+	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("X-Leak", trafficCanary)
 	r.Header.Set("Cookie", trafficCanary)
 	r.Header.Set("User-Agent", trafficCanary)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
+	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
+	resp, err := client.Do(r)
+	if err != nil {
+		w.Code = 599
+		w.Body.WriteString(err.Error())
+		return w
+	}
+	defer resp.Body.Close()
+	for name, values := range resp.Header {
+		w.Header()[name] = append([]string(nil), values...)
+	}
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w.Body, resp.Body); err != nil {
+		w.Code = 599
+		w.Body.WriteString(err.Error())
+	}
 	return w
 }
 
@@ -90,7 +113,11 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 			defer up.Close()
 			h, st, home := trafficFixture(t, up, local)
 			w := trafficCall(h, "/v1/messages", trafficBody)
-			if w.Code != 200 || !strings.Contains(w.Body.String(), trafficCanary) || seen.Load() != 1 {
+			if !local {
+				if w.Code != http.StatusServiceUnavailable || seen.Load() != 0 || strings.Contains(w.Body.String(), trafficCanary) {
+					t.Fatalf("unconfigured direct credential reached upstream: code=%d calls=%d", w.Code, seen.Load())
+				}
+			} else if w.Code != 200 || !strings.Contains(w.Body.String(), trafficCanary) || seen.Load() != 1 {
 				t.Fatalf("code=%d response=%s calls=%d", w.Code, w.Body.String(), seen.Load())
 			}
 			if len(st.List()) != 0 {
@@ -142,7 +169,11 @@ func TestPrivacyTrafficDetectOnlyPreservesOriginalData(t *testing.T) {
 					Text string `json:"text"`
 				} `json:"content"`
 			}
-			if json.Unmarshal(w.Body.Bytes(), &response) != nil || w.Code != 200 || len(response.Content) != 1 || response.Content[0].Text != responseText || calls.Load() != 1 {
+			if !local {
+				if w.Code != http.StatusServiceUnavailable || calls.Load() != 0 || strings.Contains(w.Body.String(), trafficCanary) {
+					t.Fatalf("direct detect bypassed provider-key gate: status=%d calls=%d", w.Code, calls.Load())
+				}
+			} else if json.Unmarshal(w.Body.Bytes(), &response) != nil || w.Code != 200 || len(response.Content) != 1 || response.Content[0].Text != responseText || calls.Load() != 1 {
 				t.Fatalf("detect output altered: status=%d body=%s", w.Code, w.Body)
 			}
 			if len(history.List()) != 0 {
@@ -207,15 +238,15 @@ func TestPrivacyTrafficCountTokensAndErrors(t *testing.T) {
 		}
 	}))
 	defer up.Close()
-	h, _, _ := trafficFixture(t, up, false)
-	if w := trafficCall(h, "/v1/messages/count_tokens", trafficBody); w.Code != 200 || !strings.Contains(w.Body.String(), "12") {
-		t.Fatalf("count: %d %s", w.Code, w.Body.String())
+	h, _, _ := trafficFixture(t, up, true)
+	if w := trafficCall(h, "/v1/messages/count_tokens", trafficBody); w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "12") {
+		t.Fatalf("unsupported protected count: %d %s", w.Code, w.Body.String())
 	}
-	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code < 400 || strings.Contains(w.Body.String(), trafficCanary) {
-		t.Fatal("unsafe upstream error")
+	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), trafficCanary) {
+		t.Fatal("unsafe local upstream error")
 	}
-	if count.Load() != 2 {
-		t.Fatal("wrong send count")
+	if count.Load() != 1 {
+		t.Fatal("unsupported count reached provider or local error was not sent")
 	}
 }
 func TestPrivacyTrafficRejectsMalformedToolWithoutRepair(t *testing.T) {
@@ -281,17 +312,16 @@ func TestPrivacyTrafficSSEAtomic(t *testing.T) {
 				_ = json.Unmarshal(b, &req)
 				text := req.Messages[0].Content
 				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = io.WriteString(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
 				for _, part := range []string{text[:len(text)/2], text[len(text)/2:]} {
-					d, _ := json.Marshal(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": part}})
-					_, _ = io.WriteString(w, "event: content_block_delta\ndata: "+string(d)+"\n\n")
+					d, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": part}}}})
+					_, _ = io.WriteString(w, "data: "+string(d)+"\n\n")
 				}
 				if !truncate {
-					_, _ = io.WriteString(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+					_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 				}
 			}))
 			defer up.Close()
-			h, _, _ := trafficFixture(t, up, false)
+			h, _, _ := trafficFixture(t, up, true)
 			w := trafficCall(h, "/v1/messages", strings.Replace(trafficBody, `"max_tokens":100`, `"max_tokens":100,"stream":true`, 1))
 			if truncate {
 				if w.Code < 400 || strings.Contains(w.Body.String(), trafficCanary) || strings.Contains(w.Body.String(), "content_block_start") {
@@ -385,6 +415,7 @@ func TestPrivacyTrafficCapacityAndCancellation(t *testing.T) {
 	entered := make(chan struct{}, 4)
 	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
 		entered <- struct{}{}
 		select {
 		case <-release:
@@ -395,16 +426,26 @@ func TestPrivacyTrafficCapacityAndCancellation(t *testing.T) {
 	}))
 	defer up.Close()
 	defer close(release)
-	h, _, _ := trafficFixture(t, up, false)
+	h, _, _ := trafficFixture(t, up, true)
+	server := httptest.NewServer(h)
+	defer server.Close()
+	client := &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan struct{}, 4)
 	for range 4 {
 		go func() {
-			r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(trafficBody)).WithContext(ctx)
+			defer func() { done <- struct{}{} }()
+			r, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/messages", strings.NewReader(trafficBody))
+			if err != nil {
+				return
+			}
 			r.Header.Set("Content-Type", "application/json")
-			h.ServeHTTP(httptest.NewRecorder(), r)
-			done <- struct{}{}
+			resp, err := client.Do(r)
+			if err == nil {
+				_ = resp.Body.Close()
+			}
 		}()
 	}
 	for range 4 {

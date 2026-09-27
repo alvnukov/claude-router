@@ -20,7 +20,7 @@ import (
 // the provider owns all native events, continuation and opaque context replay.
 func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, streaming bool, sessionKey string, stores ...*history.Store) attemptResult {
 	start := time.Now()
-	protected := privateAttempt(r) != nil
+	protected := privacy.FromRequest(r) != nil
 	if protected {
 		// Native replay has no privacy-policy provenance yet. Keep it entirely
 		// outside the protected path, including otherwise matching old prefixes.
@@ -87,8 +87,9 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 		}
 		response, err := store.doWithReauth(client, request)
 		if err == nil && protected {
+			privacy.ObserveProviderHeaders(r)
 			original := response.Body
-			response.Body = &responseReader{Reader: &privacyResponseReader{source: original, remaining: privacy.TrafficOutputLimit}, close: original.Close}
+			response.Body = &responseReader{Reader: privacy.NewResponseReader(original), close: original.Close}
 		}
 		return response, err
 	}

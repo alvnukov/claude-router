@@ -382,7 +382,7 @@ func TestCodexSignedOutMemberFailsOver(t *testing.T) {
 		codexStatusByAccount(t, map[string]int{})
 		cfg, hl := codexPoolOf("work/gpt", "codex/gpt"), newHealth("")
 		w, _ := runLocalSession(t, cfg, hl, "s1")
-		if w.Code == 200 || !strings.Contains(w.Body.String(), "войдите") {
+		if w.Code != http.StatusBadGateway || w.Body.String() != "{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"The upstream service failed.\"}}\n" {
 			t.Fatalf("all signed out: %d %s", w.Code, w.Body.String())
 		}
 	})

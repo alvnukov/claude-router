@@ -46,9 +46,12 @@ type Binding struct {
 	Profile string `json:"profile"`
 }
 type Target struct {
-	Model    string `json:"model"`
-	Pool     string `json:"pool"`
-	Provider string `json:"provider"`
+	Model      string   `json:"model"`
+	Pool       string   `json:"pool"`
+	Provider   string   `json:"provider"`
+	Betas      []string `json:"-"`
+	Translated bool     `json:"-"`
+	Protocol   string   `json:"-"`
 }
 type Resolution struct {
 	Profile string     `json:"profile"`
