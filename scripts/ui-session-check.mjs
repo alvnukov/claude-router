@@ -9,7 +9,7 @@ const require = createRequire(new URL('../internal/ui/web/package.json', import.
 const { chromium, webkit, expect } = require('@playwright/test');
 const sessionRoute = (requestedModel, model, connection, effort = '') => ({requestedModel, model, connection, effort, route: connection === 'anthropic' ? 'cloud' : 'local', requests: 1, pending: 0});
 const routes = [sessionRoute('claude-opus-5', 'p/main', 'p', 'high'), sessionRoute('claude-sonnet-5', 'claude-sonnet-5', 'anthropic'), sessionRoute('claude-haiku-5', 'retired/small', 'retired')];
-const session = id => ({id, ...routes[0], preview: 'Session ' + id, requests: 3, lastAt: new Date().toISOString(), error: '', routes});
+const session = id => ({id, ...routes[0], preview: 'Session ' + id, requests: 3, lastAt: new Date().toISOString(), error: '', routes: routes.map(route => ({...route}))});
 const fixture = () => ({now: new Date().toISOString(), started: new Date().toISOString(), lifecycle: 'active', activeProfile: 'default', defaultPool: '',
   profiles: [], models: [], families: [], routes: [], pools: [], efforts: [], reloadErrors: [],
   connections: ['p', 'anthropic'].map(name => ({name, displayName: name, limits: [], models: []})),
@@ -102,7 +102,33 @@ export async function runSessionChecks(browser, base) {
     await expect(page.locator('.filters select').nth(2)).toHaveValue('session-a');
     assert.match(await page.locator('.filters select').nth(2).evaluate(el => el.selectedOptions[0].textContent), /Разобрать кеш/);
   });
-  await check('every recorded route has its own node and wire', async (page, state) => {
+  await check('destinations merge sessions and efforts without inventing a served model', async (page, state) => {
+    state.connections.push({name: 'q', displayName: 'Second connection', models: [], limits: []});
+    state.sessions[0].routes.push(
+      {...sessionRoute('claude-sonnet-5', 'p/main', 'p', 'low'), requests: 4, pending: 1},
+      sessionRoute('claude-sonnet-5', 'q/main', 'q', 'high'),
+      sessionRoute('claude-fable-5-1', 'claude-fable-5-1', '', 'high'),
+    );
+    await page.goto(base);
+    await expect(page.locator('.route-node')).toHaveCount(5);
+    const main = page.locator('.route-node').filter({has: page.getByText('p', {exact: true})});
+    await expect(main.locator('strong')).toHaveText('main');
+    await expect(main).toContainText('6 запр.');
+    await expect(main).toContainText('Сессий: 2');
+    await expect(main).toContainText('В полёте: 1');
+    await expect(main).toContainText('claude-opus-5');
+    await expect(main).toContainText('claude-sonnet-5');
+    await expect(page.locator('.route-node strong').filter({hasText: /^main$/})).toHaveCount(2);
+    await expect(page.locator('.route-node strong').filter({hasText: 'Назначение не записано'})).toHaveCount(1);
+    await expect(page.locator('.route-node strong').filter({hasText: 'claude-fable-5-1'})).toHaveCount(0);
+    // Five edges from session A, three from B, three to known connections.
+    await expect(page.locator('.patch-wires path')).toHaveCount(11);
+    await page.screenshot({path: '/tmp/router-destinations-desktop.png', fullPage: true});
+    await page.setViewportSize({width: 390, height: 844});
+    await expect(page.locator('.route-node')).toHaveCount(5);
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'destinations overflow on mobile');
+  });
+  await check('distinct destinations retain their nodes and wires', async (page, state) => {
     state.sessions = [state.sessions[0]];
     await page.goto(base);
     await expect(page.locator('.route-node')).toHaveCount(3);
