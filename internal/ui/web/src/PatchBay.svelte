@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import type { UIState, Session } from "./types";
+  import type { UIState, SessionRoute } from "./types";
   import LimitMeter from "./LimitMeter.svelte";
   let { data }: { data: UIState } = $props();
   let host: HTMLDivElement;
@@ -8,7 +8,9 @@
   let width = $state(1);
   let height = $state(1);
   const sessions = $derived(data.sessions.slice(0, 4));
-  function connection(s: Session): string {
+  const routes = $derived(sessions.flatMap((session, sessionIndex) =>
+    (session.routes?.length ? session.routes : [session]).map(route => ({ route, sessionIndex }))));
+  function connection(s: SessionRoute): string {
     return (
       s.connection ||
       (s.model.includes("/")
@@ -18,7 +20,7 @@
           : "")
     );
   }
-  function requested(s: Session): string {
+  function requested(s: SessionRoute): string {
     return s.requestedModel || s.model || "Модель не определена";
   }
   function measure() {
@@ -36,12 +38,11 @@
       ),
     );
     const next: { d: string; color: number }[] = [];
-    for (const [i, s] of sessions.entries()) {
-      const c = connection(s);
+    for (const [i, { route, sessionIndex }] of routes.entries()) {
+      const c = connection(route);
       const index = data.connections.findIndex((x) => x.name === c);
-      if (index < 0) continue;
       for (const [from, to] of [
-        ["session-" + i, "route-" + i],
+        ["session-" + sessionIndex, "route-" + i],
         ["route-" + i, "connection-" + c],
       ]) {
         const a = rects.get(from);
@@ -53,7 +54,7 @@
           y2 = b.top + b.height / 2 - box.top;
         next.push({
           d: `M${x1} ${y1} C${x1 + (x2 - x1) / 2} ${y1},${x1 + (x2 - x1) / 2} ${y2},${x2} ${y2}`,
-          color: index % 5,
+          color: Math.max(0, index) % 5,
         });
       }
     }
@@ -61,7 +62,7 @@
   }
   $effect(() => {
     data;
-    sessions;
+    routes;
     void tick().then(measure);
   });
   onMount(() => {
@@ -109,18 +110,19 @@
         </div>{/if}
     </div>
     <div class="map-column routes-column">
-      <h3>Маршрут запроса</h3>
-      {#each sessions as session, i}<a
+      <h3>Маршруты запросов</h3>
+      {#each routes as { route, sessionIndex }, i}<a
           class="map-node route-node"
           data-node={"route-" + i}
           href="#/routes"
-          ><strong>{requested(session)}</strong>
+          ><strong>{requested(route)}</strong>
           <p>
-            {session.effort
-              ? "Усилие: " + session.effort
+            {route.effort
+              ? "Усилие: " + route.effort
               : "Усилие по умолчанию"}
           </p>
-          <small>→ {session.model || "Назначение не записано"}</small></a
+          <small>→ {route.model || "Назначение не записано"}</small>
+          <p>Сессия · {sessions[sessionIndex].id.slice(0, 8) || "Без сессии"} · {route.requests} запр.{route.pending ? " · В полёте: " + route.pending : ""}</p></a
         >{/each}{#if !sessions.length}<a class="map-node" href="#/routes"
           ><strong>{data.families.length} семейств моделей</strong>
           <p>Настроить маршруты →</p></a
@@ -153,7 +155,7 @@
     </div>
   </div>
   <p class="map-caption">
-    Линии показывают фактический путь последнего запроса сессии.{data.sessions
+    Линии показывают все маршруты сессии из сохранённой истории.{data.sessions
       .length > 4
       ? " Показаны 4 последние сессии."
       : ""}
