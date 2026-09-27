@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,11 +35,13 @@ type syntheticManifest struct {
 }
 
 type syntheticTransport struct {
-	base       *http.Transport
-	official   string
-	codex      *url.URL
-	codexToken string
-	providers  map[string]bool
+	base            *http.Transport
+	official        string
+	codex           *url.URL
+	codexToken      string
+	providerOrigins map[string]bool
+	mu              sync.RWMutex
+	models          map[string]bool
 }
 
 // ForProcess is a separate test binary source. No production build reads the
@@ -84,7 +87,7 @@ func ForProcess(_, _ string) (Dependencies, error) {
 		officialURL: manifest.OfficialURL,
 		codexURL:    pinnedCodexModelsURL,
 		transport:   transport,
-		guard:       syntheticTransport{base: transport, official: manifest.OfficialURL, codex: codex, codexToken: codexToken, providers: providers},
+		guard:       &syntheticTransport{base: transport, official: manifest.OfficialURL, codex: codex, codexToken: codexToken, providerOrigins: providers, models: make(map[string]bool)},
 	}, nil
 }
 
@@ -155,13 +158,24 @@ func (d Dependencies) ValidateProvider(name, kind, baseURL string, authID ...str
 		return nil // Codex uses the validated override, not the configured BaseURL.
 	}
 	u, err := loopbackURL(baseURL)
-	if err != nil || u.RawQuery != "" || !d.guard.(syntheticTransport).providers[u.Scheme+"://"+u.Host] {
+	if err != nil || u.RawQuery != "" {
 		return errors.New("synthetic provider URL is not on an approved loopback origin")
 	}
+	g := d.guard.(*syntheticTransport)
+	if !g.providerOrigins[u.Scheme+"://"+u.Host] {
+		return errors.New("synthetic provider URL is not on an approved loopback origin")
+	}
+	endpoint := baseURL + "/models"
+	if _, err := loopbackURL(endpoint); err != nil {
+		return errors.New("synthetic provider models URL is not canonical")
+	}
+	g.mu.Lock()
+	g.models[endpoint] = true
+	g.mu.Unlock()
 	return nil
 }
 
-func (g syntheticTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (g *syntheticTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req == nil || req.URL == nil || req.Host != req.URL.Host || req.Method != http.MethodGet {
 		return nil, errors.New("synthetic catalog target denied")
 	}
@@ -175,13 +189,16 @@ func (g syntheticTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		redirected.Host = endpoint.Host
 		return g.base.RoundTrip(redirected)
 	}
-	u, err := loopbackURL(req.URL.String())
-	if err != nil {
+	if _, err := loopbackURL(req.URL.String()); err != nil {
 		return nil, errors.New("synthetic catalog target denied")
 	}
-	origin := u.Scheme + "://" + u.Host
-	if req.URL.String() != g.official && !(g.providers[origin] && u.RawQuery == "" && strings.HasSuffix(u.Path, "/models")) {
-		return nil, errors.New("synthetic catalog target not approved")
+	if req.URL.String() != g.official {
+		g.mu.RLock()
+		allowed := g.models[req.URL.String()]
+		g.mu.RUnlock()
+		if !allowed {
+			return nil, errors.New("synthetic catalog target not approved")
+		}
 	}
 	return g.base.RoundTrip(req)
 }

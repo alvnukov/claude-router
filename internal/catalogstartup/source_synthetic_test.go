@@ -134,7 +134,7 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 			t.Fatalf("request = %q, want %q", got, want)
 		}
 	}
-	for _, target := range []string{"https://example.com/models", "http://127.0.0.2:19876/models", server.URL + "/unexpected", server.URL + "/models?client_version=0.156.0", deps.CodexModelsURL(), "https://chatgpt.com/backend-api/codex/usage"} {
+	for _, target := range []string{"https://example.com/models", "http://127.0.0.2:19876/models", server.URL + "/unexpected", server.URL + "/private/models", server.URL + "/models?client_version=0.156.0", deps.CodexModelsURL(), "https://chatgpt.com/backend-api/codex/usage"} {
 		resp, err := client.Get(target)
 		if resp != nil {
 			resp.Body.Close()

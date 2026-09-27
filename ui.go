@@ -114,6 +114,7 @@ func newUIServer(st *history.Store, cs *configStore, hl *health, catalog ...*cat
 	if len(catalog) > 0 && catalog[0] != nil {
 		u.catalog = catalog[0]
 		u.fetchAnthropic = func(ctx context.Context) ([]string, error) { return fetchAnthropicCatalog(ctx, *catalog[0]) }
+		u.codexUsage.client = catalog[0].SyntheticAuthClient(10 * time.Second)
 	}
 	return u
 }

@@ -71,7 +71,9 @@ func (r *routerServer) startBackground() {
 		r.cs.watch(r.background, 2*time.Second, r.life)
 		startChecker(r.background, r.cs, r.health, r.life)
 		r.catalogRun = r.ui.startCatalogUpdates(r.background)
-		r.ui.startCodexUsageUpdates(r.background)
+		if r.ui.catalog == nil || !r.ui.catalog.IsSynthetic() {
+			r.ui.startCodexUsageUpdates(r.background)
+		}
 	})
 }
 

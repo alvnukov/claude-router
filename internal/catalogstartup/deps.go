@@ -28,6 +28,7 @@ func Production(officialURL, codexBaseURL string) Dependencies {
 
 func (d Dependencies) OfficialURL() string    { return d.officialURL }
 func (d Dependencies) CodexModelsURL() string { return d.codexURL }
+func (d Dependencies) IsSynthetic() bool      { return d.guard != nil }
 
 func (d Dependencies) Client(timeout time.Duration) *http.Client {
 	client := &http.Client{Timeout: timeout, Transport: d.transport}

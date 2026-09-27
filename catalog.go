@@ -183,6 +183,8 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	if err := next.validateProfiles(); err != nil {
 		return err
 	}
+	// Admit persistence only while active. Once admitted, shutdown joins the
+	// writer; a concurrent cancellation cannot roll back a started file write.
 	if err := ctx.Err(); err != nil {
 		return err
 	}

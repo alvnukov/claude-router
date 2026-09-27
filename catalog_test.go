@@ -198,6 +198,49 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer deps.Close()
+		if deps.SyntheticAuthClient(time.Second) != nil {
+			t.Run("synthetic startup does not fetch unrelated Codex usage", func(t *testing.T) {
+				server := newRouterServer(config{local: localSetup{Providers: []provider{codex}}}, newLifecycle(false), filepath.Join(t.TempDir(), "state.json"), &deps)
+				server.cs.provPath = ""
+				t.Run("manual Codex usage remains isolated", func(t *testing.T) {
+					client := server.ui.codexUsage.client
+					if client == nil {
+						t.Fatal("synthetic UI usage client is not guarded")
+					}
+					resp, err := client.Get(codexUsageURL)
+					if resp != nil {
+						resp.Body.Close()
+					}
+					if err == nil {
+						t.Fatal("synthetic manual usage reached the network")
+					}
+				})
+				server.ui.fetchAnthropic = func(ctx context.Context) ([]string, error) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				usageRequests := make(chan struct{}, 1)
+				server.ui.codexUsage.client = &http.Client{Transport: usageTransport(func(*http.Request) (*http.Response, error) {
+					usageRequests <- struct{}{}
+					return nil, errors.New("unexpected usage request")
+				})}
+				server.startBackground()
+				defer func() {
+					server.cancel()
+					wait, cancel := context.WithTimeout(context.Background(), time.Second)
+					defer cancel()
+					var d catalogstartup.Dependencies
+					if err := d.Wait(wait, server.catalogRun.Done); err != nil {
+						t.Error(err)
+					}
+				}()
+				select {
+				case <-usageRequests:
+					t.Fatal("synthetic startup initiated an unrelated Codex usage request")
+				case <-time.After(150 * time.Millisecond):
+				}
+			})
+		}
 		u.catalog = &deps
 		u.fetchAnthropic = func(ctx context.Context) ([]string, error) { return fetchAnthropicCatalog(ctx, deps) }
 		if err := u.refreshModels(context.Background()); err != nil {
@@ -312,6 +355,69 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		data, err := os.ReadFile(u.cs.provPath)
 		if err != nil || string(data) != "unchanged" {
 			t.Errorf("late official providers.json write: %q, %v", data, err)
+		}
+	})
+
+	t.Run("cancel after probes before persistence boundary", func(t *testing.T) {
+		u, _ := testUI(t)
+		path := filepath.Join(t.TempDir(), "providers.json")
+		if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		u.cs.provPath = path
+		probed := make(chan struct{})
+		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(probed)
+			_, _ = w.Write([]byte(`{"data":[{"id":"m1"}]}`))
+		}))
+		defer fixture.Close()
+		u.cs.c.local.Providers[0].BaseURL = fixture.URL
+		fetching, release := make(chan struct{}), make(chan struct{})
+		u.fetchAnthropic = func(context.Context) ([]string, error) {
+			close(fetching)
+			<-release
+			return []string{"claude-opus-5-5"}, nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		finished := make(chan error, 1)
+		go func() { finished <- u.refreshModels(ctx) }()
+		select {
+		case <-fetching:
+		case <-time.After(time.Second):
+			t.Fatal("catalog fetch did not start")
+		}
+		u.cs.mu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				u.cs.mu.Unlock()
+			}
+		}()
+		close(release)
+		select {
+		case <-probed:
+		case <-time.After(time.Second):
+			t.Fatal("provider probe did not reach fixture")
+		}
+		// probeMu unlocks only after the response was parsed. Holding cs.mu
+		// keeps the persistence admission check beyond this cancellation.
+		u.probeMu.Lock()
+		u.probeMu.Unlock()
+		cancel()
+		u.cs.mu.Unlock()
+		locked = false
+		select {
+		case err := <-finished:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("refresh after cancellation: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("canceled refresh did not return")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != "original" {
+			t.Errorf("canceled refresh wrote providers.json: %q, %v", data, err)
 		}
 	})
 
@@ -483,6 +589,42 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 		case <-done:
 		case <-time.After(time.Second):
 			t.Error("settings probe did not return after cancellation")
+		}
+	})
+	t.Run("cancel profile response probe", func(t *testing.T) {
+		entered, aborted := make(chan struct{}), make(chan struct{})
+		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(entered)
+			<-r.Context().Done()
+			close(aborted)
+		}))
+		defer fixture.Close()
+		u, handler := testUI(t)
+		u.cs.c.local.Providers[0].BaseURL = fixture.URL
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		req := httptest.NewRequest(http.MethodPost, "http://localhost/settings/profiles/activate", strings.NewReader("name=missing")).WithContext(ctx)
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		done := make(chan struct{})
+		go func() {
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+			close(done)
+		}()
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("profile response did not probe provider")
+		}
+		cancel()
+		select {
+		case <-aborted:
+		case <-time.After(time.Second):
+			t.Error("profile response probe ignored cancellation")
+		}
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("profile response did not return after cancellation")
 		}
 	})
 }

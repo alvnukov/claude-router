@@ -18,16 +18,16 @@ func (u *uiServer) profileActivateAPI(w http.ResponseWriter, r *http.Request) {
 
 func (u *uiServer) profileActivate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		u.renderSettingsResult(w, err, "")
+		u.renderSettingsResult(w, err, "", r.Context())
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	u.renderSettingsResult(w, u.cs.activateProfile(name, u.hl), "Профиль активирован: "+name)
+	u.renderSettingsResult(w, u.cs.activateProfile(name, u.hl), "Профиль активирован: "+name, r.Context())
 }
 
 func (u *uiServer) profileCreate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		u.renderSettingsResult(w, err, "")
+		u.renderSettingsResult(w, err, "", r.Context())
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -36,14 +36,14 @@ func (u *uiServer) profileCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown mode", http.StatusBadRequest)
 		return
 	}
-	u.renderSettingsResult(w, u.cs.createProfile(name, clone), "Профиль создан: "+name)
+	u.renderSettingsResult(w, u.cs.createProfile(name, clone), "Профиль создан: "+name, r.Context())
 }
 
 func (u *uiServer) profileDelete(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		u.renderSettingsResult(w, err, "")
+		u.renderSettingsResult(w, err, "", r.Context())
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
-	u.renderSettingsResult(w, u.cs.deleteProfile(name), "Профиль удалён: "+name)
+	u.renderSettingsResult(w, u.cs.deleteProfile(name), "Профиль удалён: "+name, r.Context())
 }
