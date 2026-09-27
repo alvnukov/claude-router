@@ -16,10 +16,10 @@ import (
 )
 
 type HTTPRoute struct {
-	Mode, Model, ProviderKey string
-	Upstream                 *url.URL
-	Pool                     func(string) (string, string)
-	Local                    func(http.ResponseWriter, *http.Request, []byte, string)
+	Mode, Model string
+	Upstream    *url.URL
+	Pool        func(string) (string, string)
+	Local       func(http.ResponseWriter, *http.Request, []byte, string)
 }
 
 type HTTPDeps struct {
@@ -301,7 +301,7 @@ func serveProtectedLocal(w http.ResponseWriter, r *http.Request, body []byte, ro
 
 func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, route HTTPRoute, policy *Policy, deps HTTPDeps, limits LifecycleLimits, controller *http.ResponseController, reject func(int, string, string)) {
 	badInput := func() { reject(400, "invalid_request_error", "privacy: unsupported client controls") }
-	if route.Upstream == nil || route.ProviderKey == "" || (route.Upstream.Scheme != "https" && route.Upstream.Scheme != "http") || route.Upstream.User != nil {
+	if route.Upstream == nil || (route.Upstream.Scheme != "https" && route.Upstream.Scheme != "http") || route.Upstream.Host == "" || route.Upstream.User != nil || route.Upstream.Opaque != "" {
 		reject(503, "api_error", "privacy: upstream not configured for protected transport")
 		return
 	}
@@ -311,7 +311,18 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 			return
 		}
 	}
-	if r.Header.Get("Authorization") != "" && r.Header.Get("X-Api-Key") != "" {
+	apiKeys, authorizations := r.Header.Values("X-Api-Key"), r.Header.Values("Authorization")
+	if len(apiKeys)+len(authorizations) != 1 {
+		badInput()
+		return
+	}
+	authName, authValue := "X-Api-Key", ""
+	if len(apiKeys) == 1 {
+		authValue = apiKeys[0]
+	} else {
+		authName, authValue = "Authorization", authorizations[0]
+	}
+	if authValue == "" || strings.TrimSpace(authValue) != authValue || strings.ContainsAny(authValue, "\r\n") {
 		badInput()
 		return
 	}
@@ -332,7 +343,12 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	if len(beta) == 1 {
 		betas = beta
 	}
-	exchange, wire, err := policy.Prepare(Target{Model: route.Model, Provider: "anthropic", Betas: betas}, body)
+	target := Target{Model: route.Model, Provider: "anthropic", Betas: betas}
+	if hasClientControls(body) && !policy.clientControls.allows(target, body) {
+		badInput()
+		return
+	}
+	exchange, wire, err := policy.Prepare(target, body)
 	if err != nil {
 		badInput()
 		return
@@ -364,7 +380,7 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	up.Header.Set("Content-Type", "application/json")
 	up.Header.Set("Accept-Encoding", "identity")
 	up.Header.Set("User-Agent", "localrouter")
-	up.Header.Set("X-Api-Key", route.ProviderKey)
+	up.Header.Set(authName, authValue)
 	up.Header.Set("Anthropic-Version", versionValue)
 	if len(beta) == 1 {
 		up.Header.Set("Anthropic-Beta", beta[0])

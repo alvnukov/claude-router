@@ -24,8 +24,6 @@ import (
 	"localrouter/internal/providers/codex"
 )
 
-const compatProviderKey = "synthetic-provider-key"
-
 func compatHTTPBody() []byte { return clientCompatBody() }
 
 func compatSSE(alias string) string {
@@ -59,10 +57,7 @@ func compatHTTPDeps(t *testing.T, rt *Runtime, upstream string, mode string, loc
 		Resolve: func([]byte) (HTTPRoute, error) {
 			return HTTPRoute{
 				Mode: mode, Model: compatModel, Upstream: endpoint,
-				// Provisional route-snapshot credential seam: no client credential
-				// may be promoted to the selected provider credential.
-				ProviderKey: compatProviderKey,
-				Pool:        func(string) (string, string) { return "synthetic-profile", "synthetic-pool" },
+				Pool: func(string) (string, string) { return "synthetic-profile", "synthetic-pool" },
 				Local: func(w http.ResponseWriter, _ *http.Request, _ []byte, _ string) {
 					localCalls.Add(1)
 					w.Header().Set("Content-Type", "application/json")
@@ -139,7 +134,7 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 					t.Errorf("control/tool structure lost: %s", want)
 				}
 			}
-			if r.Header.Get("X-Api-Key") != compatProviderKey || r.Header.Get("Anthropic-Version") != "2023-06-01" || r.Header.Get("Anthropic-Beta") != compatBeta {
+			if r.Header.Get("X-Api-Key") != "client-only-synthetic-key" || r.Header.Get("Anthropic-Version") != "2023-06-01" || r.Header.Get("Anthropic-Beta") != compatBeta {
 				t.Error("selected credential/version/beta missing")
 			}
 			for _, name := range []string{"Cookie", "X-Forwarded-For", "Authorization"} {
@@ -169,12 +164,88 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 				t.Errorf("validated answer missing %s", want)
 			}
 		}
-		if w.Header.Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "synthetic-provider-key") {
+		if w.Header.Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "client-only-synthetic-key") {
 			t.Fatal("upstream header or credential released")
 		}
 		state, _ := json.Marshal(deps.Runtime.State())
 		if bytes.Contains(state, []byte(compatCanary)) || bytes.Contains(state, []byte("synthetic-session-only")) || bytes.Contains(state, []byte("synthetic-profile")) {
 			t.Fatal("private body/session/profile retained in aggregate state")
+		}
+	})
+
+	t.Run("controls-free-direct-preserves-selected-client-auth", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			auth  http.Header
+			key   string
+			value string
+		}{
+			{"api-key", http.Header{"Cookie": {"synthetic-cookie"}, "X-Forwarded-For": {"synthetic-client"}}, "X-Api-Key", "client-only-synthetic-key"},
+			{"authorization", http.Header{"X-Api-Key": nil, "Authorization": {"Bearer client-only-synthetic-key"}, "X-Client-Id": {"synthetic-client"}}, "Authorization", "Bearer client-only-synthetic-key"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var localCalls, legacyCalls atomic.Int32
+				seen := make(chan http.Header, 1)
+				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = io.Copy(io.Discard, r.Body)
+					seen <- r.Header.Clone()
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{"content":[]}`)
+				}))
+				defer up.Close()
+				endpoint, err := url.Parse(up.URL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rt := clientCompatRuntime(t, "mask")
+				rt.clientControls = newClientControlTable(nil)
+				deps := compatHTTPDeps(t, rt, up.URL, "anthropic", &localCalls, &legacyCalls)
+				deps.Resolve = func([]byte) (HTTPRoute, error) {
+					return HTTPRoute{Mode: "anthropic", Model: compatModel, Upstream: endpoint}, nil
+				}
+				plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+				result := compatHTTPCallWithHeaders(t, NewProtectedHTTP(deps), "/v1/messages", plain, tc.auth)
+				if result.Code != http.StatusOK || localCalls.Load() != 0 || legacyCalls.Load() != 0 {
+					t.Fatalf("controls-free direct route without a router-held key: %d", result.Code)
+				}
+				headers := compatWaitSignal(t, seen)
+				if headers.Get(tc.key) != tc.value || headers.Get("Cookie") != "" || headers.Get("X-Forwarded-For") != "" || headers.Get("X-Client-Id") != "" {
+					t.Fatal("selected direct credential missing or identifying header forwarded")
+				}
+				other := "Authorization"
+				if tc.key == "Authorization" {
+					other = "X-Api-Key"
+				}
+				if headers.Get(other) != "" {
+					t.Fatal("unexpected second direct auth field forwarded")
+				}
+			})
+		}
+	})
+
+	t.Run("direct-redirect-does-not-send-credential-to-second-origin", func(t *testing.T) {
+		var first, second atomic.Int32
+		other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			second.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"content":[]}`)
+		}))
+		defer other.Close()
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			first.Add(1)
+			if r.Header.Get("X-Api-Key") != "client-only-synthetic-key" {
+				t.Error("selected origin did not receive the chosen credential")
+			}
+			w.Header().Set("Location", other.URL+"/v1/messages")
+			w.WriteHeader(http.StatusTemporaryRedirect)
+		}))
+		defer up.Close()
+		var localCalls, legacyCalls atomic.Int32
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "anthropic", &localCalls, &legacyCalls)
+		plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
+		result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+		if result.Code != http.StatusBadGateway || first.Load() != 1 || second.Load() != 0 || localCalls.Load() != 0 || legacyCalls.Load() != 0 || strings.Contains(result.Body.String(), "client-only-synthetic-key") {
+			t.Fatalf("direct redirect escaped configured origin: status=%d first=%d second=%d", result.Code, first.Load(), second.Load())
 		}
 	})
 
@@ -366,11 +437,14 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 		h := NewProtectedHTTP(deps)
 		for _, extra := range []http.Header{
 			{"Authorization": {"Bearer client-only-synthetic-key"}},
+			{"X-Api-Key": {"first", "second"}},
+			{"X-Api-Key": {" "}},
+			{"X-Api-Key": nil},
 			{"Anthropic-Required-Unknown": {"must-forward-" + compatCanary}},
 		} {
 			w := compatHTTPCallWithHeaders(t, h, "/v1/messages?beta=true", compatHTTPBody(), extra)
-			if w.Code < 400 || upstreamCalls.Load() != 0 {
-				t.Fatal("mixed/unknown mandatory client headers sent upstream")
+			if w.Code != http.StatusBadRequest || upstreamCalls.Load() != 0 {
+				t.Fatal("mixed, malformed, or unknown client headers sent upstream")
 			}
 		}
 		for _, path := range []string{"/v1/messages?beta=true&extra=1", "/v1/messages?beta=%74rue", "/v1/messages/"} {
@@ -501,6 +575,7 @@ func compatStartCall(t *testing.T, handler http.Handler, path string, body []byt
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Anthropic-Beta", compatBeta)
+	r.Header.Set("X-Api-Key", "client-only-synthetic-key")
 	ch := make(chan compatAsyncResult, 1)
 	go func() {
 		client := server.Client()
@@ -1173,7 +1248,7 @@ func TestProtectedHTTPClientIO(t *testing.T) {
 			_ = tcp.SetReadBuffer(1024)
 		}
 		request := compatHTTPBody()
-		_, err = fmt.Fprintf(conn, "POST /v1/messages?beta=true HTTP/1.1\r\nHost: synthetic.test\r\nContent-Type: application/json\r\nAnthropic-Beta: %s\r\nContent-Length: %d\r\n\r\n%s", compatBeta, len(request), request)
+		_, err = fmt.Fprintf(conn, "POST /v1/messages?beta=true HTTP/1.1\r\nHost: synthetic.test\r\nContent-Type: application/json\r\nX-Api-Key: client-only-synthetic-key\r\nAnthropic-Beta: %s\r\nContent-Length: %d\r\n\r\n%s", compatBeta, len(request), request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1249,9 +1324,115 @@ func TestProtectedHTTPClientIO(t *testing.T) {
 		r := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", bytes.NewReader(compatHTTPBody()))
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Anthropic-Beta", compatBeta)
+		r.Header.Set("X-Api-Key", "client-only-synthetic-key")
 		NewProtectedHTTP(deps).ServeHTTP(w, r)
 		if w.Code != http.StatusOK || w.Body.Len() != 1 || strings.Contains(w.Body.String(), `"error"`) || strings.Contains(w.Body.String(), "event: error") {
 			t.Fatal("partial committed SSE write changed status or appended error")
+		}
+	})
+
+	t.Run("http2-early-peer-disconnect-releases-slot", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		dispatched, upstreamDone, serverDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		proto := make(chan int, 1)
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			close(dispatched)
+			<-r.Context().Done()
+			close(upstreamDone)
+		}))
+		defer up.Close()
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "anthropic", &localCalls, &legacyCalls)
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(serverDone)
+			proto <- r.ProtoMajor
+			NewProtectedHTTP(deps).ServeHTTP(w, r)
+		}))
+		server.EnableHTTP2 = true
+		server.StartTLS()
+		defer server.Close()
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/messages?beta=true", bytes.NewReader(compatHTTPBody()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Anthropic-Version", "2023-06-01")
+		req.Header.Set("Anthropic-Beta", compatBeta)
+		req.Header.Set("X-Api-Key", "client-only-synthetic-key")
+		clientDone := make(chan error, 1)
+		go func() {
+			resp, err := server.Client().Do(req)
+			if resp != nil {
+				_ = resp.Body.Close()
+			}
+			clientDone <- err
+		}()
+		if got := compatWaitSignal(t, proto); got != 2 {
+			t.Fatalf("expected HTTP/2 provider dispatch, got HTTP/%d", got)
+		}
+		compatWaitSignal(t, dispatched)
+		cancel()
+		deadline := time.NewTimer(deps.Limits.Cleanup)
+		defer deadline.Stop()
+		for _, done := range []<-chan struct{}{serverDone, upstreamDone} {
+			select {
+			case <-done:
+			case <-deadline.C:
+				t.Fatal("HTTP/2 early disconnect retained protected work beyond cleanup deadline")
+			}
+		}
+		select {
+		case <-clientDone:
+		case <-deadline.C:
+			t.Fatal("HTTP/2 client did not terminate after cancel")
+		}
+		if deps.Runtime.State().Active != 0 || localCalls.Load() != 0 || legacyCalls.Load() != 0 {
+			t.Fatal("HTTP/2 disconnect retained Exchange or crossed into local/legacy route")
+		}
+	})
+
+	t.Run("http1-tcp-peer-close-releases-slot", func(t *testing.T) {
+		var localCalls, legacyCalls atomic.Int32
+		dispatched, upstreamDone, serverDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			close(dispatched)
+			<-r.Context().Done()
+			close(upstreamDone)
+		}))
+		defer up.Close()
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "anthropic", &localCalls, &legacyCalls)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer close(serverDone)
+			NewProtectedHTTP(deps).ServeHTTP(w, r)
+		}))
+		defer server.Close()
+		conn, err := net.Dial("tcp", server.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		body := compatHTTPBody()
+		if _, err := fmt.Fprintf(conn, "POST /v1/messages?beta=true HTTP/1.1\r\nHost: synthetic.test\r\nContent-Type: application/json\r\nX-Api-Key: client-only-synthetic-key\r\nAnthropic-Version: 2023-06-01\r\nAnthropic-Beta: %s\r\nContent-Length: %d\r\n\r\n%s", compatBeta, len(body), body); err != nil {
+			t.Fatal(err)
+		}
+		compatWaitSignal(t, dispatched)
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.NewTimer(deps.Limits.Cleanup)
+		defer deadline.Stop()
+		for _, done := range []<-chan struct{}{serverDone, upstreamDone} {
+			select {
+			case <-done:
+			case <-deadline.C:
+				t.Fatal("HTTP/1.1 early disconnect retained protected work beyond cleanup deadline")
+			}
+		}
+		if deps.Runtime.State().Active != 0 || localCalls.Load() != 0 || legacyCalls.Load() != 0 {
+			t.Fatal("HTTP/1.1 disconnect retained Exchange or crossed into local/legacy route")
 		}
 	})
 }
@@ -1275,7 +1456,7 @@ func compatCodexPlainBody() []byte {
 	return []byte(`{"model":"synthetic-supported","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hello SyntheticPrivateName"}]}`)
 }
 
-func compatCodexUpstreamError(ctx context.Context, rawStatus int, code string, retry []string, decoded bool) error {
+func compatCodexUpstreamError(ctx context.Context, rawStatus int, code string, retry []string, decoded bool, override ...string) error {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		for _, value := range retry {
@@ -1289,6 +1470,10 @@ func compatCodexUpstreamError(ctx context.Context, rawStatus int, code string, r
 		w.Header().Set("X-Upstream-Error", "raw-"+compatCanary)
 		w.Header().Set("Set-Cookie", "raw-"+compatCanary)
 		w.WriteHeader(rawStatus)
+		if len(override) > 0 {
+			_, _ = io.WriteString(w, override[0])
+			return
+		}
 		_, _ = fmt.Fprintf(w, `{"error":{"code":%q,"message":"raw-%s"}}`, code, compatCanary)
 	}))
 	defer up.Close()
@@ -1338,9 +1523,14 @@ func TestProtectedHTTPCodex429Precommit(t *testing.T) {
 		unknownHTTP bool
 		beforeHTTP  bool
 		decoded     bool
+		incomplete  bool
+		rawBody     string
 		wantHeader  string
 	}{
 		{name: "original429-transient", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"7"}, wantHeader: "7"},
+		{name: "original429-empty-body", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"7"}, incomplete: true},
+		{name: "original429-malformed-body", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"7"}, incomplete: true, rawBody: "not-json"},
+		{name: "original429-truncated-body", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"7"}, incomplete: true, rawBody: `{"error":{"code":"rate_limit_exceeded"`},
 		{name: "original429-25h-not-clamped", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"90000"}},
 		{name: "original429-no-header", rawStatus: 429, code: "rate_limit_exceeded"},
 		{name: "original429-overflow-header", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"9223372036854775808"}},
@@ -1374,7 +1564,12 @@ func TestProtectedHTTPCodex429Precommit(t *testing.T) {
 					if tc.unknownHTTP {
 						return 429, &codex.ProtocolError{Code: tc.code, Status: 429, RetryAfter: 7 * time.Second}
 					}
-					err := compatCodexUpstreamError(r.Context(), tc.rawStatus, tc.code, tc.retry, tc.decoded)
+					var err error
+					if tc.incomplete {
+						err = compatCodexUpstreamError(r.Context(), tc.rawStatus, tc.code, tc.retry, tc.decoded, tc.rawBody)
+					} else {
+						err = compatCodexUpstreamError(r.Context(), tc.rawStatus, tc.code, tc.retry, tc.decoded)
+					}
 					if err == nil {
 						t.Error("synthetic Codex failure was accepted as success")
 						return 502, errors.New("raw-" + compatCanary)
@@ -1411,9 +1606,9 @@ func TestProtectedHTTPCodex429Precommit(t *testing.T) {
 				wantStatus, wantType := http.StatusTooManyRequests, "rate_limit_error"
 				if tc.beforeHTTP {
 					wantStatus, wantType = http.StatusBadGateway, "api_error"
-				} else if mode == "mask" && (tc.rawStatus != 429 || tc.unknownHTTP || tc.untyped || tc.decoded) {
+				} else if mode == "mask" && (tc.rawStatus != 429 || tc.unknownHTTP || tc.untyped || tc.decoded || tc.incomplete) {
 					wantStatus, wantType = http.StatusBadGateway, "api_error"
-				} else if mode == "off" && (tc.rawStatus != 429 || tc.unknownHTTP || tc.untyped || tc.decoded) {
+				} else if mode == "off" && (tc.rawStatus != 429 || tc.unknownHTTP || tc.untyped || tc.decoded || tc.incomplete) {
 					wantType = "api_error"
 				}
 				message := compatCodexEnvelope(t, result, wantStatus, wantType)

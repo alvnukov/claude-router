@@ -58,6 +58,7 @@ func trafficCall(h http.Handler, path, body string) *httptest.ResponseRecorder {
 		return w
 	}
 	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Api-Key", "synthetic-client-key")
 	r.Header.Set("X-Leak", trafficCanary)
 	r.Header.Set("Cookie", trafficCanary)
 	r.Header.Set("User-Agent", trafficCanary)
@@ -113,11 +114,7 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 			defer up.Close()
 			h, st, home := trafficFixture(t, up, local)
 			w := trafficCall(h, "/v1/messages", trafficBody)
-			if !local {
-				if w.Code != http.StatusServiceUnavailable || seen.Load() != 0 || strings.Contains(w.Body.String(), trafficCanary) {
-					t.Fatalf("unconfigured direct credential reached upstream: code=%d calls=%d", w.Code, seen.Load())
-				}
-			} else if w.Code != 200 || !strings.Contains(w.Body.String(), trafficCanary) || seen.Load() != 1 {
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), trafficCanary) || seen.Load() != 1 {
 				t.Fatalf("code=%d response=%s calls=%d", w.Code, w.Body.String(), seen.Load())
 			}
 			if len(st.List()) != 0 {
@@ -169,11 +166,7 @@ func TestPrivacyTrafficDetectOnlyPreservesOriginalData(t *testing.T) {
 					Text string `json:"text"`
 				} `json:"content"`
 			}
-			if !local {
-				if w.Code != http.StatusServiceUnavailable || calls.Load() != 0 || strings.Contains(w.Body.String(), trafficCanary) {
-					t.Fatalf("direct detect bypassed provider-key gate: status=%d calls=%d", w.Code, calls.Load())
-				}
-			} else if json.Unmarshal(w.Body.Bytes(), &response) != nil || w.Code != 200 || len(response.Content) != 1 || response.Content[0].Text != responseText || calls.Load() != 1 {
+			if json.Unmarshal(w.Body.Bytes(), &response) != nil || w.Code != 200 || len(response.Content) != 1 || response.Content[0].Text != responseText || calls.Load() != 1 {
 				t.Fatalf("detect output altered: status=%d body=%s", w.Code, w.Body)
 			}
 			if len(history.List()) != 0 {
