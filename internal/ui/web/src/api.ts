@@ -3,7 +3,6 @@ export const notice = writable<{ message: string; error: boolean } | null>(
   null,
 );
 export const revision = writable(0);
-export const loginURL = writable("");
 export async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(url, {
     signal,
@@ -20,7 +19,7 @@ export async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
 export async function act(
   action: string,
   fields: Record<string, string>,
-): Promise<void> {
+): Promise<{ message?: string; url?: string }> {
   const response = await fetch("/api/ui/actions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -34,12 +33,8 @@ export async function act(
         "Изменения не применены. Проверьте настройки и попробуйте ещё раз.",
     );
   notice.set({ message: data.message || "Изменения сохранены", error: false });
-  if (data.url) {
-    const url = new URL(data.url, location.origin);
-    if (url.protocol === "https:" || url.origin === location.origin)
-      loginURL.set(url.href);
-  }
   revision.update((v) => v + 1);
+  return data;
 }
 export function fail(error: unknown): void {
   notice.set({

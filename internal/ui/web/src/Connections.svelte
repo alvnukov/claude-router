@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { UIState } from "./types";
   import ActionForm from "./ActionForm.svelte";
+  import CodexLogin from "./CodexLogin.svelte";
   import LimitMeter from "./LimitMeter.svelte";
-  import { time, loginURL } from "./api";
+  import { time } from "./api";
   let { data }: { data: UIState } = $props();
   let adding = $state(false);
   let addType = $state("codex");
@@ -47,16 +48,6 @@
     ></ActionForm
   >
 </section>
-{#if $loginURL}<div class="alert">
-    <strong>Вход готов к продолжению.</strong>
-    <a
-      class="button primary"
-      href={$loginURL}
-      target="_blank"
-      rel="noopener noreferrer">Продолжить вход в Codex ↗</a
-    ><button class="text-button" onclick={() => loginURL.set("")}>Скрыть</button
-    >
-  </div>{/if}
 {#if adding}<section class="panel add-connection">
     <h2>Новое подключение</h2>
     <p class="help">
@@ -111,7 +102,7 @@
   >
 </div>
 <div class="cards connections">
-  {#each data.connections as connection, i}<article
+  {#each data.connections as connection, i (connection.name)}<article
       class="card connection-card"
       data-color={i % 5}
     >
@@ -148,15 +139,8 @@
           {connection.refreshing ? "Обновляем лимиты…" : "Лимиты не получены"}
         </p>{/if}
       {#if connection.type === "codex"}<div class="actions">
+          <CodexLogin {connection} />
           <ActionForm
-            action="codex.login"
-            fields={{ provider: connection.name }}
-            ><button type="submit" class="primary"
-              >{connection.connected
-                ? "Обновить вход"
-                : "Войти в Codex"}</button
-            ></ActionForm
-          ><ActionForm
             action="codex.import"
             fields={{ provider: connection.name }}
             ><button type="submit">Импортировать вход Codex CLI</button

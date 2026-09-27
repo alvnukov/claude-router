@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { runReviewRegressions } from './ui-review-regressions.mjs';
+import { runCodexLoginChecks } from './ui-codex-login-check.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'internal/ui/web/package.json'));
@@ -137,6 +138,7 @@ try {
   else {
     browser=await (isWebkit?webkit:chromium).launch({headless:true});
     await runReviewRegressions(browser, base);
+    await runCodexLoginChecks(browser, base);
     const page=await browser.newPage({viewport:{width:1440,height:1000},locale:'ru-RU',colorScheme:'light'});
     async function capture(path){
       await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement) document.activeElement.blur(); window.scrollTo(0,0);});

@@ -41,7 +41,7 @@ Verified on macOS, Node 26.7.0:
 - `go vet ./...` and `golangci-lint run ./...`: pass, zero lint issues.
 - `npm ci --ignore-scripts && npm run build`: zero Svelte/TypeScript errors
   and warnings. The fresh install/build reproduces every asset byte for byte;
-  the asset set is 134004 bytes, below the 307200-byte budget.
+  the asset set is 135222 bytes, below the 307200-byte budget.
 - `npm run test:browser` and `npm run test:browser -- --webkit`: both pass.
   Scenarios cover real local/cloud proxy requests, request search/detail,
   account creation, independent credential identity, display-name rename,
@@ -152,3 +152,19 @@ and one duplication concern, now corrected and independently rechecked:
 before the fixes and pass afterwards. The browser scenarios live in
 `scripts/ui-review-regressions.mjs` and run in both Chromium and WebKit as part
 of the isolated harness. Full Go tests, focused race tests and lint pass.
+
+## Codex login visibility fix
+
+The login action formerly stored its URL in a banner above the connections;
+clicking a lower account did not open a page or show an in-view continuation.
+A dedicated per-connection login button now opens the authorization tab during
+user activation, clears its opener, and navigates after the JSON action returns.
+A blocked/closed popup gets a visible dialog with an explicit link. API errors
+close the placeholder tab and appear in that dialog. The existing OAuth flow
+and credential storage are unchanged.
+
+The original offscreen-action reproduction failed before the fix. Chromium and
+WebKit now pass `scripts/ui-codex-login-check.mjs`: second-account targeting,
+automatic navigation, blocked-popup fallback, failed action cleanup and unsafe
+URL rejection. Authorization pages are intercepted in tests; no live account
+login is performed by the harness.
