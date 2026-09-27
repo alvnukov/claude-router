@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -116,7 +117,7 @@ func TestCodexRestoresParallelToolResults(t *testing.T) {
 func TestCodexOrphanedResultIsStoppedBeforeUpstream(t *testing.T) {
 	oldAuth, oldTransport := codexAuth, http.DefaultTransport
 	defer func() { codexAuth = oldAuth; http.DefaultTransport = oldTransport }()
-	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("account")}
+	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "auth.json"), loaded: true, credential: usageCredential("account")}
 	upstreamCalls := 0
 	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
 		upstreamCalls++
@@ -163,7 +164,7 @@ func TestCodexRestoredCallStreamsWithoutAnotherError(t *testing.T) {
 	}
 	oldAuth, oldTransport := codexAuth, http.DefaultTransport
 	defer func() { codexAuth = oldAuth; http.DefaultTransport = oldTransport }()
-	codexAuth = &codexAuthStore{loaded: true, credential: usageCredential("account")}
+	codexAuth = &codexAuthStore{path: filepath.Join(t.TempDir(), "auth.json"), loaded: true, credential: usageCredential("account")}
 	upstreamCalls := 0
 	http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
 		upstreamCalls++
@@ -176,7 +177,7 @@ func TestCodexRestoredCallStreamsWithoutAnotherError(t *testing.T) {
 		}
 		stream := strings.Join([]string{
 			`data: {"type":"response.output_text.delta","delta":"done"}`,
-			`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":1}}}`,
+			`data: {"type":"response.completed","response":{"id":"resp_test","status":"completed","usage":{"input_tokens":10,"output_tokens":1}}}`,
 		}, "\n\n")
 		return usageResponse(200, stream), nil
 	})

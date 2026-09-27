@@ -115,7 +115,7 @@ func checkModels(c config, hl *health) {
 				Messages:  []openaiMsg{{Role: "user", Content: "ping"}},
 				MaxTokens: 1,
 			})
-			res := tryModel(r, c, cand, payload, false)
+			res := tryModel(r, c, cand, payload, false, "")
 			if res.err != nil {
 				log.Printf("check %s: %v", cand.Key, res.err)
 				hl.recordProbe(cand.Key, false, 0, "проверка: "+res.err.Error())

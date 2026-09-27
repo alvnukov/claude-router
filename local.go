@@ -12,11 +12,14 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"localrouter/internal/history"
+	"localrouter/internal/providers"
+	codexprovider "localrouter/internal/providers/codex"
 )
 
 func newID(prefix string) string {
@@ -70,19 +73,6 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		return
 	}
 
-	// Claude Code cannot size its context per model, so the prompt it builds can
-	// overrun the local endpoint. Fit it here rather than refusing it: see
-	// fitToBudget for why refusing leaves the session with no way out.
-	if cfg.maxInputChars > 0 {
-		if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after {
-			log.Printf("trimmed prompt %d -> %d chars (budget %d): %s",
-				before, after, cfg.maxInputChars, strings.Join(notes, "; "))
-			if tr != nil {
-				tr.TrimBefore, tr.TrimAfter, tr.TrimNotes = before, after, notes
-			}
-		}
-	}
-
 	// Try the candidates in order. A model that fails before it has produced a
 	// response is skipped for the next one; once bytes have gone to the client
 	// the response belongs to that model, and a later failure only counts
@@ -90,6 +80,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	pickCfg := cfg
 	pickCfg.failover = true
 	cands := withoutSignedOut(hl.pick(pickCfg))
+	sessionKey := codexprovider.SessionKey(history.SessionOf(body))
 	scope := affinityKey(cfg, body, req)
 	cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
 	if !cfg.failover && len(cands) > 1 {
@@ -101,7 +92,24 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	}
 	var last attemptResult
 	for i, cand := range cands {
-		oreq.Model = cand.Model
+		oreq, err = toOpenAIWithToolImages(req, cand.Model, cand.Provider.Type == "codex")
+		if err != nil {
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		// Claude Code cannot size its context per model, so the prompt it builds can
+		// overrun the local endpoint. Fit it here rather than refusing it: see
+		// fitToBudget for why refusing leaves the session with no way out.
+		if cfg.maxInputChars > 0 {
+			if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after {
+				log.Printf("trimmed prompt %d -> %d chars (budget %d): %s",
+					before, after, cfg.maxInputChars, strings.Join(notes, "; "))
+				if tr != nil {
+					tr.TrimBefore, tr.TrimAfter, tr.TrimNotes = before, after, notes
+				}
+			}
+		}
+
 		sourceEffort := req.OutputConfig.Effort
 		if sourceEffort == "" {
 			sourceEffort = "default"
@@ -122,6 +130,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 				writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", cerr.Error())
 				return
 			}
+			creq.PromptCacheKey = sessionKey
 			payload, err = json.Marshal(creq)
 		} else {
 			payload, err = json.Marshal(oreq)
@@ -134,20 +143,14 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			tr.OpenAIBody = payload
 		}
 		hl.acquire(cand.Key)
-		res := tryModel(r, cfg, cand, payload, oreq.Stream)
+		var res attemptResult
+		if cand.Provider.Type == "codex" {
+			res = tryCodexModel(r, cfg, cand, payload, oreq.Stream, sessionKey, hist...)
+		} else {
+			res = tryModel(r, cfg, cand, payload, oreq.Stream, sessionKey)
+		}
 		var responseBody io.Reader
-		if res.err == nil && cand.Provider.Type == "codex" && !oreq.Stream {
-			var result codexResult
-			result, err = readCodexEvents(res.resp.Body)
-			res.resp.Body.Close()
-			res.cancel()
-			if err != nil {
-				res.err, res.retryable = err, true
-				// A read cut short by the client (Esc) is not the model's fault.
-				res.clientGone = r.Context().Err() != nil
-			}
-			responseBody = bytes.NewReader(codexAsChatResponse(result))
-		} else if res.err == nil {
+		if res.err == nil {
 			responseBody = res.resp.Body
 		}
 
@@ -173,10 +176,29 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			tr.Served = cand.Key
 		}
 		var werr error
+		var usageKnown *bool
+		if cand.Provider.Type != "codex" {
+			usageKnown = new(bool)
+			if tr != nil {
+				tr.UsageKnown = usageKnown
+			}
+		}
 		if oreq.Stream {
-			werr = streamResponse(w, responseBody, req.Model)
+			werr = streamResponsePolicy(w, responseBody, req.Model, cand.Provider.Type == "codex", usageKnown)
 		} else {
-			werr = blockingResponse(w, responseBody, req.Model)
+			werr = blockingResponsePolicy(w, responseBody, req.Model, cand.Provider.Type == "codex", usageKnown)
+		}
+		if res.native != nil {
+			if werr != nil {
+				_ = res.native.Close()
+			}
+			result, nativeErr := res.native.Result()
+			if werr == nil {
+				werr = nativeErr
+			}
+			if werr == nil && tr != nil {
+				tr.ProviderState, werr = codexprovider.Capture(res.replayScope, payload, result)
+			}
 		}
 		res.resp.Body.Close()
 		res.cancel()
@@ -199,6 +221,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		return
 	}
 	if last.status != 0 {
+		if last.retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.FormatInt(int64((last.retryAfter+time.Second-1)/time.Second), 10))
+		}
 		writeAnthropicError(w, last.status, "api_error",
 			fmt.Sprintf("local endpoint returned %d: %s", last.status, last.detail))
 		return
@@ -207,14 +232,17 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 }
 
 type attemptResult struct {
-	resp       *http.Response
-	cancel     context.CancelFunc
-	ttfb       time.Duration
-	err        error
-	status     int
-	detail     string
-	retryable  bool
-	clientGone bool
+	retryAfter  time.Duration
+	native      *codexprovider.Stream
+	replayScope string
+	resp        *http.Response
+	cancel      context.CancelFunc
+	ttfb        time.Duration
+	err         error
+	status      int
+	detail      string
+	retryable   bool
+	clientGone  bool
 }
 
 func (a attemptResult) errMsg() string {
@@ -226,7 +254,7 @@ func (a attemptResult) errMsg() string {
 
 // tryModel waits for the first usable response event (not just headers), at most
 // cfg.firstByte. On success the caller owns resp.Body and must call cancel.
-func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, stream bool) attemptResult {
+func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, stream bool, sessionKey string) attemptResult {
 	model := cand.Key
 	ctx, cancel := context.WithCancel(r.Context())
 	endpoint := cand.Provider.BaseURL + "/chat/completions"
@@ -241,6 +269,9 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	up.Header.Set("Content-Type", "application/json")
 	var store *codexAuthStore
 	if cand.Provider.Type == "codex" {
+		if sessionKey != "" {
+			up.Header.Set("session-id", sessionKey)
+		}
 		if store, err = codexStoreFor(cand.Provider); err != nil {
 			cancel()
 			return attemptResult{err: err}
@@ -389,17 +420,22 @@ type openaiResponse struct {
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
+	Usage json.RawMessage `json:"usage"`
 }
 
 func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error {
+	return blockingResponsePolicy(w, body, model, false)
+}
+
+func blockingResponsePolicy(w http.ResponseWriter, body io.Reader, model string, allowEmpty bool, usageKnown ...*bool) error {
 	var or openaiResponse
 	if err := json.NewDecoder(body).Decode(&or); err != nil {
 		writeAnthropicError(w, http.StatusBadGateway, "api_error", "decode local response: "+err.Error())
 		return fmt.Errorf("decode local response: %w", err)
+	}
+	usage, known := observedChatUsage(or.Usage)
+	if len(usageKnown) != 0 && usageKnown[0] != nil {
+		*usageKnown[0] = known
 	}
 	if len(or.Choices) == 0 {
 		writeAnthropicError(w, http.StatusBadGateway, "api_error", "local endpoint returned no choices")
@@ -430,7 +466,7 @@ func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error
 	// Апстримная reasoning-модель умеет отвечать целиком внутри reasoning_content,
 	// оставляя content и tool_calls пустыми. Клиент Anthropic считает сообщение без
 	// блоков отсутствием ответа, поэтому показываем рассуждение вместо пустоты.
-	if len(blocks) == 0 {
+	if len(blocks) == 0 && !allowEmpty {
 		text := ch.Message.ReasoningContent
 		if text == "" {
 			text = fmt.Sprintf("(локальная модель не вернула содержимого; finish_reason=%q)", ch.FinishReason)
@@ -440,7 +476,7 @@ func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error
 
 	w.Header().Set("Content-Type", "application/json")
 	// A failed write means the client is gone; there is no one to tell.
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	return json.NewEncoder(w).Encode(map[string]any{
 		"id":            newID("msg_"),
 		"type":          "message",
 		"role":          "assistant",
@@ -448,28 +484,48 @@ func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error
 		"content":       blocks,
 		"stop_reason":   stopReason(ch.FinishReason),
 		"stop_sequence": nil,
-		"usage": map[string]int{
-			"input_tokens":  or.Usage.PromptTokens,
-			"output_tokens": or.Usage.CompletionTokens,
-		},
+		"usage":         usage.Anthropic(),
 	})
-	return nil
+}
+
+// Client responses may contain synthetic zeroes for compatibility. Only two
+// explicit upstream token counters make those zeroes a measured value.
+func observedChatUsage(raw json.RawMessage) (providers.ChatUsage, bool) {
+	var presence struct {
+		PromptTokens     *int `json:"prompt_tokens"`
+		CompletionTokens *int `json:"completion_tokens"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &presence) != nil || presence.PromptTokens == nil || presence.CompletionTokens == nil {
+		return providers.ChatUsage{}, false
+	}
+	var usage providers.ChatUsage
+	if json.Unmarshal(raw, &usage) != nil {
+		return providers.ChatUsage{}, false
+	}
+	return usage, true
 }
 
 // ---- streaming ----
 
 type sseWriter struct {
-	w http.ResponseWriter
-	f http.Flusher
+	w   http.ResponseWriter
+	f   http.Flusher
+	err error
 }
 
-func (s sseWriter) event(name string, payload any) {
-	data, err := json.Marshal(payload)
-	if err != nil {
+func (s *sseWriter) event(name string, payload any) {
+	if s.err != nil {
 		return
 	}
-	fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", name, data)
-	s.f.Flush()
+	data, err := json.Marshal(payload)
+	if err != nil {
+		s.err = err
+		return
+	}
+	_, s.err = fmt.Fprintf(s.w, "event: %s\ndata: %s\n\n", name, data)
+	if s.err == nil {
+		s.f.Flush()
+	}
 }
 
 type openaiChunk struct {
@@ -481,16 +537,17 @@ type openaiChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
+	Usage json.RawMessage `json:"usage"`
 }
 
 // streamResponse rewrites an OpenAI delta stream as Anthropic SSE. Anthropic
 // keeps at most one content block open at a time, so switching from text to a
 // tool call - or between tool calls - closes the previous block first.
 func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
+	return streamResponsePolicy(w, body, model, false)
+}
+
+func streamResponsePolicy(w http.ResponseWriter, body io.Reader, model string, allowEmpty bool, usageKnown ...*bool) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming unsupported")
@@ -502,7 +559,8 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	w.WriteHeader(http.StatusOK)
 	s := sseWriter{w: w, f: flusher}
 
-	inTokens, outTokens := 0, 0
+	var usage providers.ChatUsage
+	known := false
 	finish := "stop"
 	completed := false
 
@@ -515,6 +573,9 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 			"usage":         map[string]int{"input_tokens": 0, "output_tokens": 0},
 		},
 	})
+	if s.err != nil {
+		return s.err
+	}
 
 	nextIndex := 0
 	thinkingOpen := false
@@ -556,9 +617,8 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 			continue
 		}
-		if chunk.Usage != nil {
-			inTokens = chunk.Usage.PromptTokens
-			outTokens = chunk.Usage.CompletionTokens
+		if len(chunk.Usage) != 0 {
+			usage, known = observedChatUsage(chunk.Usage)
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -629,6 +689,12 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 				})
 			}
 		}
+		if s.err != nil {
+			return s.err
+		}
+	}
+	if s.err != nil {
+		return s.err
 	}
 	readErr := scanner.Err()
 	if readErr != nil {
@@ -639,9 +705,12 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	if !completed {
 		return io.ErrUnexpectedEOF
 	}
+	if len(usageKnown) != 0 && usageKnown[0] != nil {
+		*usageKnown[0] = known
+	}
 
 	// An empty completion still needs a content block for the client.
-	if nextIndex == 0 {
+	if nextIndex == 0 && !allowEmpty {
 		text := fmt.Sprintf("(модель не вернула содержимого; finish_reason=%q)", finish)
 		openIndex = 0
 		textOpen = true
@@ -661,8 +730,8 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 		"delta": map[string]any{
 			"stop_reason": stopReason(finish), "stop_sequence": nil,
 		},
-		"usage": map[string]int{"input_tokens": inTokens, "output_tokens": outTokens},
+		"usage": usage.Anthropic(),
 	})
 	s.event("message_stop", map[string]any{"type": "message_stop"})
-	return nil
+	return s.err
 }

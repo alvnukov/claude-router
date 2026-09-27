@@ -33,19 +33,20 @@ var uiFS embed.FS
 // (loopback by default) so nothing about it touches the API path, and it has
 // no auth: everything it shows is the traffic of the user running it.
 type uiServer struct {
-	codexUsage     codexUsageCache // template: per-connection caches copy its client
-	usageMu        sync.Mutex
-	codexUsages    map[string]*codexUsageCache // by name + "\x00" + auth id
-	limits         *limits.Store
-	claudeProxy    *claudeProxy
-	catalogMu      sync.Mutex
-	fetchAnthropic func(context.Context) ([]string, error)
-	st             *history.Store
-	cs             *configStore
-	hl             *health
-	life           *lifecycle
-	tpl            *template.Template
-	started        time.Time
+	codexUsage        codexUsageCache // template: per-connection caches copy its client
+	usageMu           sync.Mutex
+	codexUsages       map[string]*codexUsageCache // by name + "\x00" + auth id
+	limits            *limits.Store
+	claudeProxy       *claudeProxy
+	catalogMu         sync.Mutex
+	fetchAnthropic    func(context.Context) ([]string, error)
+	st                *history.Store
+	connectionMetrics connectionUsageCache
+	cs                *configStore
+	hl                *health
+	life              *lifecycle
+	tpl               *template.Template
+	started           time.Time
 
 	probeMu     sync.Mutex
 	probe       map[string]probeResult // by provider name

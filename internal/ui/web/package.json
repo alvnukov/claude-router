@@ -9,7 +9,8 @@
   "scripts": {
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "build": "npm run check && vite build",
-    "test:browser": "node ../../../scripts/ui-browser-check.mjs"
+    "test:browser": "node ../../../scripts/ui-browser-check.mjs",
+    "test:usage": "node ../../../scripts/ui-usage-check.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

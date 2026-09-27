@@ -3,6 +3,7 @@
   import ActionForm from "./ActionForm.svelte";
   import CodexLogin from "./CodexLogin.svelte";
   import LimitMeter from "./LimitMeter.svelte";
+  import ConnectionUsage from "./ConnectionUsage.svelte";
   import { time } from "./api";
   let { data }: { data: UIState } = $props();
   let adding = $state(false);
@@ -151,6 +152,7 @@
             ><button type="submit">Обновить лимиты</button></ActionForm
           >
         </div>{/if}
+      <ConnectionUsage usage={connection.usage} />
       {#if connection.type !== "anthropic"}<div class="section-head">
           <h3>
             Модели <span class="muted"

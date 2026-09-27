@@ -1,0 +1,222 @@
+{
+  "version": 1,
+  "repository": "https://github.com/openai/codex",
+  "revision": "985cf47a4eb6084b2ff6b30ebdb1216acda85bb4",
+  "reviewed_on": "2026-09-27",
+  "contracts": [
+    {
+      "id": "responses-request-schema",
+      "path": "codex-rs/codex-api/src/common.rs",
+      "kind": "file",
+      "sha256": "1b01d4b2d7784c67e302b38d5b44aaa5ff733d8b575fb776cc4e2902ccb3a14c"
+    },
+    {
+      "id": "responses-sse-decoder",
+      "path": "codex-rs/codex-api/src/sse/responses.rs",
+      "kind": "prefix",
+      "end": "mod tests {",
+      "sha256": "92d2626721e2d251b27cc11939644c6a0004067cda326117298f6c29c889e669"
+    },
+    {
+      "id": "responses-terminal-errors",
+      "path": "codex-rs/codex-api/src/sse/responses_error.rs",
+      "kind": "prefix",
+      "end": "#[cfg(test)]",
+      "sha256": "ba7fcd40f6cc4f9e47cd5c742be7c67a9c1dabf633b58f0f72e75e74c24e87fe"
+    },
+    {
+      "id": "responses-api-errors",
+      "path": "codex-rs/codex-api/src/error.rs",
+      "kind": "file",
+      "sha256": "5310170efae486ec2b89feda3896f141ea6d34dabf18d55486c3b709e51ead95"
+    },
+    {
+      "id": "responses-http-transport",
+      "path": "codex-rs/codex-api/src/endpoint/responses.rs",
+      "kind": "file",
+      "sha256": "4f2fff3da4ca3ca9fcfa40ada8e98a0229af296094e03febb4d823f32ef932c8"
+    },
+    {
+      "id": "responses-session-headers",
+      "path": "codex-rs/codex-api/src/requests/headers.rs",
+      "kind": "file",
+      "sha256": "98c9579a8f17327fda1792ffbf22e8d09241fdc79620c37b699d94cd9637cd47"
+    },
+    {
+      "id": "ResponseInputItem",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ResponseInputItem {",
+      "sha256": "99b813c002d8885c13c5634243d04779c2be41a4a996a4c9e0a4be6d2fde6acb"
+    },
+    {
+      "id": "ResponseItem",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ResponseItem {",
+      "sha256": "307877da8fd83982584fde64e262660ba8e0934c4b6333d52d01ea7d2eb393e8"
+    },
+    {
+      "id": "ContentItem",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ContentItem {",
+      "sha256": "f36e821af57e944b8695a41135feb0a9816eb4eecd4d36db488160b2c29afd53"
+    },
+    {
+      "id": "ImageReference",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ImageReference {",
+      "sha256": "64390a99919589f7266af8fbf7bc310328749e041b7b6a7d602c52c142ebbcb8"
+    },
+    {
+      "id": "ImageDetail",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ImageDetail {",
+      "sha256": "e7081ab175da9ab00fc19eed15c972684ebac86211f8ea5253c8b8db62ea7d76"
+    },
+    {
+      "id": "MessagePhase",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum MessagePhase {",
+      "sha256": "e229ad4db4bb24086e7b196ff5c2cbd9d99fc71bef7d75814f9ea4d657923b54"
+    },
+    {
+      "id": "InternalChatMessageMetadataPassthrough",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub struct InternalChatMessageMetadataPassthrough {",
+      "sha256": "ae3b8c57241155b74fa47f11408bd00b0f00337cd7c861026fbf78a4db883ec9"
+    },
+    {
+      "id": "ReasoningItemReasoningSummary",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ReasoningItemReasoningSummary {",
+      "sha256": "ca056add2f7dae908db2cbcf236169ac2ebc41e4a286a155329578b7d7ae344a"
+    },
+    {
+      "id": "ReasoningItemContent",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum ReasoningItemContent {",
+      "sha256": "da64ca1c80d0e9ce9fc8bb5745bd53ddc4ce560e478b0c1598bcecb753774486"
+    },
+    {
+      "id": "FunctionCallOutputContentItem",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum FunctionCallOutputContentItem {",
+      "sha256": "7e7d412b7f8c634e3cdd7a1ddd1c6dc53829d1b826e7e64110a591aa58aa8311"
+    },
+    {
+      "id": "FunctionCallOutputPayload",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub struct FunctionCallOutputPayload {",
+      "sha256": "5610cadcac29dc7a9b0a4de5f47697b2ceef139cc61d3fa61e0b11b1ab6f8a2a"
+    },
+    {
+      "id": "FunctionCallOutputBody",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "pub enum FunctionCallOutputBody {",
+      "sha256": "880cd6efc735649ba75449dd780be6ea8915fb03c3cfc150015c328a8453ea13"
+    },
+    {
+      "id": "reasoning-content-serialization",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {",
+      "sha256": "79c38de640b00cd26eff9e762f73e355d522c72413b073ce36e64ceff0b57238"
+    },
+    {
+      "id": "tool-output-serialization",
+      "path": "codex-rs/protocol/src/models.rs",
+      "kind": "block",
+      "anchor": "impl Serialize for FunctionCallOutputPayload {",
+      "sha256": "a06a0938178ed03bf1416ab4d4d2582b32aac818a6ef242f5d42bde6044e5685"
+    },
+    {
+      "id": "client-header-constants",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "range",
+      "anchor": "pub const OPENAI_BETA_HEADER: &str = \"OpenAI-Beta\";",
+      "end": "fn session_telemetry_for_request(",
+      "sha256": "5694d29d6ff3fed7f5e3d9f8b98bc4b173dc30302b0e511c2a78e1593cf4fdaf"
+    },
+    {
+      "id": "prompt-cache-affinity",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn prompt_cache_key(&self, responses_metadata: &CodexResponsesMetadata) -> String {",
+      "sha256": "6d4d218d4bbc48c18c611912acc0070ff7b0e244c1f59f0b95f97e82897f983b"
+    },
+    {
+      "id": "session-affinity",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn responses_session_id(&self, metadata: &CodexResponsesMetadata) -> String {",
+      "sha256": "63bb2e0c5fdab2a6974634adb083fac8781d1754a18d77c02679463fc40788ee"
+    },
+    {
+      "id": "client-compatibility-headers",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn build_responses_compatibility_headers(",
+      "sha256": "00d3495c6336b5236c01c9682f27bbb6de51fc2cb480b65daedd1b6a910ffce2"
+    },
+    {
+      "id": "request-reasoning",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn build_reasoning(",
+      "sha256": "92b993232a57fa78655f3e523a9451a586ad4ddee9ff265d447b012558a2a640"
+    },
+    {
+      "id": "request-builder",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "pub(crate) fn build_responses_request(",
+      "sha256": "b5c502bc98882dacd1c4aa4fc1d74d90c831962133652c4c99bd455a86410a8a"
+    },
+    {
+      "id": "request-item-preparation",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {",
+      "sha256": "35ee56a595fbc391ce528cf85fc6fc410ab7201a90cf17ebe9ae5e6fe100c820"
+    },
+    {
+      "id": "request-auth-headers",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn responses_headers(&self, auth: Option<&CodexAuth>, model: &str) -> ApiHeaderMap {",
+      "sha256": "8dbe419a48a0107350ca0fb0072014e0cadc43b744b2b0df0599b79d37b0d1c6"
+    },
+    {
+      "id": "request-options",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "async fn build_responses_options(",
+      "sha256": "3e962df8b664029b55e36c6aa548671b9670420e71745714939176a564a3e346"
+    },
+    {
+      "id": "turn-state-headers",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn build_responses_headers(",
+      "sha256": "a8c06fc4ac7329c34cd7cdf4af751e36c85a7d482232e4978aad597fa7c986af"
+    },
+    {
+      "id": "responses-lite-header",
+      "path": "codex-rs/core/src/client.rs",
+      "kind": "block",
+      "anchor": "fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: bool) {",
+      "sha256": "9adaf57560173ebf696d4f866b58a1edd7c445bcea149014e140a34aaf9ca26e"
+    }
+  ]
+}

@@ -711,6 +711,9 @@
     font-size: 11px;
     overflow-wrap: anywhere;
   }
+  .session-token-summary { margin-top: 5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .session-token-summary.usage-attention { color: var(--orange); }
+  .session-usage-panel { margin-top: 14px; }
   .session-icon {
     font-size: 20px;
     color: var(--muted);
