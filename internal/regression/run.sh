@@ -51,6 +51,7 @@ clean_env=(env -i "PATH=$PATH" "HOME=$scratch/home" "TMPDIR=$scratch/tmp" \
   "ROUTER_UI_HISTORY_FILE=$scratch/home/router/history.jsonl" \
   "ROUTER_ANTHROPIC_LIMITS_FILE=$scratch/home/router/limits.json" \
   "GOPATH=$scratch/gopath" "GOCACHE=$scratch/gocache" "GOMODCACHE=$modules" \
+  "ROUTER_TEST_SOURCE=$root" "ROUTER_TEST_EXPECT_SHA=$commit_sha" \
   "ROUTER_TEST_SCRATCH=$scratch" "ROUTER_TEST_MODULE_CACHE=$modules" \
   GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local NPM_CONFIG_OFFLINE=true \
   "PLAYWRIGHT_BROWSERS_PATH=$browsers")

@@ -201,7 +201,7 @@ func TestRegressionInterceptionRejectsExternalConflict(t *testing.T) {
 }
 
 func TestRegressionCatalogRollback(t *testing.T) {
-	stand := startRouter(t, testFixture{})
+	stand := startRouter(t, testFixture{codex: true})
 	file := filepath.Join(stand.home, "providers.json")
 	status, _ := action(t, stand, "model.edit", map[string]string{
 		"op": "add", "provider": "fixture-a", "model": "fixture-a-model",
@@ -255,9 +255,24 @@ func TestRegressionCatalogRollback(t *testing.T) {
 	if len(stand.b.allCalls()) != 0 {
 		t.Error("RR-CAT-01: duplicate model changed destination")
 	}
-	// catalog.refresh also queries the hardcoded Anthropic catalog. Without an
-	// explicit safe seam, running it would cross the test-only egress boundary.
 	t.Run("RR-CAT-01/refresh", func(t *testing.T) {
-		t.Skip("blocked RR-CAT-01 full refresh: hardcoded Anthropic catalog endpoint has no safe local stub; duplicate rollback alone is partial evidence")
+		stand.manualCatalogRefresh(t)
+		catalog := stand.catalogState(t)
+		for name, model := range map[string]string{
+			"fixture-a": "fixture-a-model", "fixture-b": "fixture-b-model", "codex": "gpt-6-sol",
+		} {
+			provider := catalog.Providers[name]
+			if len(provider.Models) != 1 || provider.Models[0].ID != model {
+				t.Errorf("RR-CAT-01: %s catalog was not refreshed from its synthetic upstream", name)
+			}
+		}
+		if status, body := stand.clientCall(t, "/v1/messages", requestWithEffort("claude-sonnet-4-5-20250929", "default", "catalog-refresh", false)); status != http.StatusOK {
+			t.Errorf("RR-CAT-01: refreshed catalog broke local routing: HTTP %d", status)
+		} else if err := checkRoutedMessage(body, "claude-sonnet-4-5-20250929", "OK-A"); err != nil {
+			t.Error(err)
+		}
+		if len(stand.b.allCalls()) != 0 || len(stand.cloud.allCalls()) != 0 {
+			t.Error("RR-CAT-01: catalog refresh caused an extra routed attempt")
+		}
 	})
 }

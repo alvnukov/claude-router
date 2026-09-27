@@ -36,6 +36,8 @@ type upstreamStub struct {
 	cancelled chan struct{}
 	name      string
 	order     *attemptLog
+	probes    *startupJournal
+	checker   []observedCall
 }
 
 type attemptLog struct {
@@ -63,29 +65,55 @@ func newUpstreamStub(t *testing.T, body []byte) *upstreamStub {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		if s.probes != nil && r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/chat/completions" {
+			s.probes.record(s.name, r.Method, r.URL.RequestURI())
+			if r.Method != http.MethodGet || r.URL.RequestURI() != "/v1/models" {
+				http.Error(w, "unexpected synthetic catalog probe", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"data":[{"id":%q}]}`, s.name+"-model")
+			return
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 		if err != nil {
 			http.Error(w, "synthetic request unreadable", http.StatusBadRequest)
 			return
 		}
 		var request struct {
-			Model           string `json:"model"`
+			Model     string `json:"model"`
+			MaxTokens int    `json:"max_tokens"`
+			Messages  []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
 			ReasoningEffort string `json:"reasoning_effort"`
-			Reasoning       struct{ Effort string `json:"effort"` } `json:"reasoning"`
-			OutputConfig    struct{ Effort string `json:"effort"` } `json:"output_config"`
+			Reasoning       struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+			OutputConfig struct {
+				Effort string `json:"effort"`
+			} `json:"output_config"`
 		}
 		_ = json.Unmarshal(body, &request)
 		effort := request.ReasoningEffort
 		if request.Reasoning.Effort != "" {
 			effort = request.Reasoning.Effort
 		}
-		s.mu.Lock()
-		s.calls = append(s.calls, observedCall{Path: r.URL.Path, Model: request.Model, Effort: effort, Body: body})
-		if s.order != nil && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/chat/completions") {
-			s.order.append(s.name, request.Model)
-		}
 		if request.OutputConfig.Effort != "" {
-			s.calls[len(s.calls)-1].Effort = request.OutputConfig.Effort
+			effort = request.OutputConfig.Effort
+		}
+		call := observedCall{Path: r.URL.Path, Model: request.Model, Effort: effort, Body: body}
+		checker := request.MaxTokens == 1 && len(request.Messages) == 1 &&
+			request.Messages[0].Role == "user" && request.Messages[0].Content == "ping"
+		s.mu.Lock()
+		if checker {
+			s.checker = append(s.checker, call)
+		} else {
+			s.calls = append(s.calls, call)
+			if s.order != nil && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/chat/completions") {
+				s.order.append(s.name, request.Model)
+			}
 		}
 		reply, respond := s.reply, s.respond
 		s.mu.Unlock()
@@ -155,7 +183,11 @@ func validateProviderFixture(config map[string]any) error {
 	}
 	for _, provider := range providers {
 		if provider["type"] == "codex" {
-			return errors.New("fixture must not create a real Codex account")
+			if provider["name"] != "codex" || provider["base_url"] != "https://chatgpt.com/backend-api/codex" ||
+				provider["auth_id"] != "" || provider["api_key"] != "" {
+				return errors.New("synthetic Codex must use only the pinned legacy fixture account")
+			}
+			continue
 		}
 		if err := validateLoopback(provider["base_url"]); err != nil {
 			return fmt.Errorf("fixture provider %q: %w", provider["name"], err)
@@ -199,6 +231,7 @@ func freeLoopbackAddress(t *testing.T) string {
 
 type testFixture struct {
 	profile string
+	codex   bool
 	setup   func(a, b *upstreamStub) map[string]any
 }
 
@@ -208,6 +241,8 @@ type testStand struct {
 	uiURL       string
 	a, b, cloud *upstreamStub
 	order       *attemptLog
+	probes      *startupJournal
+	expected    []startupProbe
 	env         []string
 	cmd         *exec.Cmd
 	stderr      bytes.Buffer
@@ -221,17 +256,71 @@ var binaryBuild struct {
 	err  error
 }
 
-// Phase A cannot attest the network and write boundary of Go, Node and child
-// processes. Phase B must replace this guard only after an external preflight
-// verifies an isolated container for the entire process tree. Environment
-// variables, proxy settings and loopback fixtures are not such evidence.
-func isolatedFullProcessTree() bool { return false }
+// The image-owned wrapper supplies these paths after checking its baked source
+// and fresh output. This is an ordinary child-side preflight, not an attestation
+// of every descendant or a substitute for the container's network boundary.
+func isolatedFullProcessTree() bool {
+	if os.Geteuid() == 0 || os.Getenv("ROUTER_TEST_SOURCE") != "/workspace/source" ||
+		os.Getenv("ROUTER_TEST_SCRATCH") != "/workspace/output" {
+		return false
+	}
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil || root != "/workspace/source" {
+		return false
+	}
+	sha := os.Getenv("ROUTER_TEST_EXPECT_SHA")
+	if len(sha) != 40 {
+		return false
+	}
+	for _, ch := range sha {
+		if ch < '0' || ch > '9' {
+			if ch < 'a' || ch > 'f' {
+				return false
+			}
+		}
+	}
+	for _, path := range []string{"/workspace/source", "/workspace/output",
+		os.Getenv("ROUTER_TEST_MODULE_CACHE"), os.Getenv("PLAYWRIGHT_BROWSERS_PATH")} {
+		if !filepath.IsAbs(path) || path == "/" {
+			return false
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil || resolved != path {
+			return false
+		}
+	}
+	for _, path := range []string{os.Getenv("ROUTER_TEST_MODULE_CACHE"), os.Getenv("PLAYWRIGHT_BROWSERS_PATH")} {
+		if path == "/workspace/source" || path == "/workspace/output" ||
+			strings.HasPrefix(path, "/workspace/source/") || strings.HasPrefix(path, "/workspace/output/") {
+			return false
+		}
+	}
+	return true
+}
 
-// Startup independently refreshes the hardcoded external catalog and probes
-// each local provider. A future isolation preflight alone does not make those
-// requests part of a route oracle or authorize a catalog fetch. Keep the
-// process stand blocked until an owner supplies a reviewed safe startup seam.
-func safeCatalogStartup() bool { return false }
+// The tagged child requires a private direct-child manifest and a dummy auth
+// fixture before it opens listeners. The synthetic transport verifies each
+// catalog destination; this guard is not a container boundary.
+func safeCatalogStartup(fixture catalogFixture) bool {
+	if fixture.root == "" || filepath.Dir(fixture.manifest) != fixture.root || filepath.Dir(fixture.auth) != fixture.root {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(fixture.root)
+	if err != nil || root != fixture.root {
+		return false
+	}
+	for _, file := range []string{fixture.manifest, fixture.auth} {
+		info, err := os.Lstat(file)
+		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
+			return false
+		}
+	}
+	return true
+}
 
 func testBinary(t *testing.T) string {
 	t.Helper()
@@ -260,7 +349,7 @@ func testBinary(t *testing.T) string {
 			return
 		}
 		binaryBuild.path = filepath.Join(dir, "localrouter")
-		args := []string{"build"}
+		args := []string{"build", "-tags", "catalogsynthetic"}
 		if os.Getenv("ROUTER_TEST_CHILD_RACE") == "1" {
 			args = append(args, "-race")
 		}
@@ -316,10 +405,10 @@ func setupProfiles(a, b *upstreamStub) map[string]any {
 			{"provider": "fixture-b", "model": "fixture-b-model"},
 		},
 		"active_profile": "rr-red",
-		"profiles": map[string]any{"rr-red": red, "rr-blue": blue},
-		"family_routes": red["family_routes"],
-		"routes": red["routes"],
-		"model_pools": red["model_pools"],
+		"profiles":       map[string]any{"rr-red": red, "rr-blue": blue},
+		"family_routes":  red["family_routes"],
+		"routes":         red["routes"],
+		"model_pools":    red["model_pools"],
 	}
 }
 
@@ -358,9 +447,6 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 	if !isolatedFullProcessTree() {
 		t.Skip("blocked: full-path tests require an independently proven isolated runner")
 	}
-	if !safeCatalogStartup() {
-		t.Skip("blocked: startup catalog refresh tries a hardcoded external URL and probes local providers; reviewed safe seam required")
-	}
 	if os.Getenv("ROUTER_TEST_SCRATCH") == "" {
 		t.Fatal("blocked: isolated runner did not assign a temporary scratch directory")
 	}
@@ -374,8 +460,12 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 	b := newUpstreamStub(t, bytes.Replace(text, []byte("OK-A"), []byte("OK-B"), 1))
 	cloud := newUpstreamStub(t, []byte(`{"type":"message","content":[{"type":"text","text":"OK-T"}],"stop_reason":"end_turn"}`))
 	order := new(attemptLog)
-	a.name, a.order = "fixture-a", order
-	b.name, b.order = "fixture-b", order
+	probes := new(startupJournal)
+	official := newCatalogStub(t, "official", "/overview", "text/html", `<button>claude-opus-5-5</button>`, probes)
+	codex := newCatalogStub(t, "codex", "/models?client_version=0.156.0", "application/json",
+		`{"models":[{"slug":"gpt-6-sol","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}`, probes)
+	a.name, a.order, a.probes = "fixture-a", order, probes
+	b.name, b.order, b.probes = "fixture-b", order, probes
 	for _, stub := range []*upstreamStub{a, b, cloud} {
 		if err := validateLoopback(stub.server.URL); err != nil {
 			t.Fatal(err)
@@ -387,6 +477,15 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 	}
 	if fixture.profile != "" {
 		config["active_profile"] = fixture.profile
+	}
+	if fixture.codex {
+		providers, ok := config["providers"].([]map[string]string)
+		if !ok {
+			t.Fatal("synthetic Codex fixture needs declared providers")
+		}
+		config["providers"] = append(providers, map[string]string{
+			"name": "codex", "type": "codex", "base_url": "https://chatgpt.com/backend-api/codex",
+		})
 	}
 	if err := validateProviderFixture(config); err != nil {
 		t.Fatalf("blocked: unsafe upstream fixture before child launch: %v", err)
@@ -404,7 +503,24 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 			t.Fatal(err)
 		}
 	}
-	stand := &testStand{home: home, apiURL: "http://" + apiAddr, uiURL: "http://" + uiAddr, a: a, b: b, cloud: cloud, order: order}
+	var origins []string
+	for _, provider := range config["providers"].([]map[string]string) {
+		if provider["type"] == "codex" {
+			continue
+		}
+		u, err := url.Parse(provider["base_url"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		origins = append(origins, u.Scheme+"://"+u.Host)
+	}
+	catalog := writeCatalogFixture(t, filepath.Join(home, "catalog-fixture"),
+		official.URL+"/overview", codex.URL+"/models?client_version=0.156.0", origins)
+	if !safeCatalogStartup(catalog) {
+		t.Fatal("blocked: synthetic catalog manifest/auth fixture is not private and canonical")
+	}
+	stand := &testStand{home: home, apiURL: "http://" + apiAddr, uiURL: "http://" + uiAddr,
+		a: a, b: b, cloud: cloud, order: order, probes: probes}
 	for _, endpoint := range []string{stand.apiURL, stand.uiURL, cloud.server.URL} {
 		if err := validateLoopback(endpoint); err != nil {
 			t.Fatal(err)
@@ -416,7 +532,8 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 		"ROUTER_LISTEN=" + apiAddr, "ROUTER_PUBLIC_LISTEN=" + apiAddr, "ROUTER_UI_LISTEN=" + uiAddr,
 		"ROUTER_LOCAL_PROBE_INTERVAL=0", "ROUTER_UPSTREAM_URL=" + cloud.server.URL, "ROUTER_PROVIDERS_FILE=" + configPath,
 		"ROUTER_ENV_FILE=" + filepath.Join(home, "env"), "ROUTER_UI_HISTORY_FILE=" + filepath.Join(home, "history.jsonl"),
-		"ROUTER_ANTHROPIC_LIMITS_FILE=" + filepath.Join(home, "limits.json"), "ROUTER_CODEX_AUTH_FILE=" + filepath.Join(home, "codex-auth.json"),
+		"ROUTER_ANTHROPIC_LIMITS_FILE=" + filepath.Join(home, "limits.json"), "ROUTER_CODEX_AUTH_FILE=" + catalog.auth,
+		"ROUTER_CATALOG_SYNTHETIC_MANIFEST=" + catalog.manifest,
 		"ROUTER_STATE_FILE=" + filepath.Join(home, "state.json"), "HTTP_PROXY=http://127.0.0.1:1", "HTTPS_PROXY=http://127.0.0.1:1",
 		"ALL_PROXY=http://127.0.0.1:1", "NO_PROXY=127.0.0.1,localhost", "PATH=/usr/bin:/bin:/opt/homebrew/bin:/usr/local/go/bin",
 	}
@@ -430,6 +547,9 @@ func (s *testStand) launch(t *testing.T) {
 	if s.cmd != nil {
 		t.Fatal("router child already running")
 	}
+	prior := s.catalogState(t).CheckedAt
+	before := len(s.probes.snapshot())
+	want := s.expectedCatalogProbes(t)
 	s.stderr.Reset()
 	s.waited = make(chan struct{})
 	s.exitErr = nil
@@ -448,6 +568,7 @@ func (s *testStand) launch(t *testing.T) {
 	}()
 	waitReady(t, s.apiURL+"/healthz", s)
 	waitReady(t, s.uiURL+"/api/ui/state", s)
+	s.awaitCatalog(t, prior, before, want)
 }
 
 func (s *testStand) stop(t *testing.T) {
@@ -469,6 +590,17 @@ func (s *testStand) stop(t *testing.T) {
 	}
 	if s.exitErr != nil || strings.Contains(s.stderr.String(), "WARNING: DATA RACE") {
 		t.Errorf("router child exit/race: %v (race warning: %v)", s.exitErr, strings.Contains(s.stderr.String(), "WARNING: DATA RACE"))
+	}
+	if err := compareStartupProbes(s.probes.snapshot(), s.expected); err != nil {
+		t.Error(err)
+	}
+	for _, stub := range []*upstreamStub{s.a, s.b} {
+		stub.mu.Lock()
+		checker := len(stub.checker)
+		stub.mu.Unlock()
+		if checker != 0 {
+			t.Errorf("unlisted background checker traffic to %s: %d", stub.name, checker)
+		}
 	}
 	s.cmd = nil
 }
