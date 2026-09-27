@@ -19,6 +19,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"localrouter/internal/anthropicerror"
+	"localrouter/internal/providers/codex"
 )
 
 const compatProviderKey = "synthetic-provider-key"
@@ -921,4 +924,347 @@ func (w *compatPartialWriter) Write(p []byte) (int, error) {
 	}
 	n, _ := w.ResponseRecorder.Write(p[:1])
 	return n, errors.New("synthetic partial write")
+}
+
+// These Stage A fixtures use real loopback HTTP at the outer client and
+// Codex Sender boundaries, but inject the local call site. They do not prove
+// root local.go wiring; that requires the separate integrated-router test.
+func compatCodexPlainBody() []byte {
+	return []byte(`{"model":"synthetic-supported","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hello SyntheticPrivateName"}]}`)
+}
+
+func compatCodexUpstreamError(ctx context.Context, rawStatus int, code string, retry []string, decoded bool) error {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		for _, value := range retry {
+			w.Header().Add("Retry-After", value)
+		}
+		if decoded {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprintf(w, "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"synthetic\",\"error\":{\"code\":%q,\"message\":\"raw-%s\"}}}\n\n", code, compatCanary)
+			return
+		}
+		w.Header().Set("X-Upstream-Error", "raw-"+compatCanary)
+		w.Header().Set("Set-Cookie", "raw-"+compatCanary)
+		w.WriteHeader(rawStatus)
+		_, _ = fmt.Fprintf(w, `{"error":{"code":%q,"message":"raw-%s"}}`, code, compatCanary)
+	}))
+	defer up.Close()
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	_, err := codex.Exchange(ctx, []byte(`{"model":"synthetic-codex","input":[{"type":"message","role":"user","content":"safe"}]}`),
+		func(ctx context.Context, payload []byte, headers http.Header) (*http.Response, error) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, up.URL, bytes.NewReader(payload))
+			if err != nil {
+				return nil, err
+			}
+			req.Header = headers.Clone()
+			return client.Do(req)
+		}, codex.Options{}, nil)
+	return err
+}
+
+func compatCodexEnvelope(t *testing.T, result *compatHTTPResult, status int, kind string) string {
+	t.Helper()
+	if result.Code != status || !strings.HasPrefix(result.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("error status/content type: %d %q, want %d JSON", result.Code, result.Header.Get("Content-Type"), status)
+	}
+	var response struct {
+		Type  string `json:"type"`
+		Error struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil || response.Type != "error" || response.Error.Type != kind || response.Error.Message == "" {
+		t.Fatalf("unsafe/incomplete Anthropic error envelope: %q (%v)", result.Body.String(), err)
+	}
+	for _, secret := range []string{compatCanary, "raw-", "partial-tool", "synthetic-provider-key", "synthetic-profile"} {
+		if strings.Contains(result.Body.String(), secret) || strings.Contains(fmt.Sprint(result.Header), secret) {
+			t.Fatalf("raw upstream/body/header reached client: %s", secret)
+		}
+	}
+	return response.Error.Message
+}
+
+func TestProtectedHTTPCodex429Precommit(t *testing.T) {
+	cases := []struct {
+		name        string
+		rawStatus   int
+		code        string
+		retry       []string
+		untyped     bool
+		unknownHTTP bool
+		beforeHTTP  bool
+		decoded     bool
+		wantHeader  string
+	}{
+		{name: "original429-transient", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"7"}, wantHeader: "7"},
+		{name: "original429-25h-not-clamped", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"90000"}},
+		{name: "original429-no-header", rawStatus: 429, code: "rate_limit_exceeded"},
+		{name: "original429-overflow-header", rawStatus: 429, code: "rate_limit_exceeded", retry: []string{"9223372036854775808"}},
+		{name: "original429-malformed-header", rawStatus: 429, code: "slow_down", retry: []string{"not-a-delay"}},
+		{name: "original429-duplicate-header", rawStatus: 429, code: "slow_down", retry: []string{"7", "8"}},
+		{name: "original429-quota", rawStatus: 429, code: "insufficient_quota", retry: []string{"7"}},
+		{name: "original429-unknown-code", rawStatus: 429, code: "synthetic_unrecognized", retry: []string{"7"}},
+		{name: "raw503-mapped429-rate", rawStatus: 503, code: "rate_limit_exceeded", retry: []string{"7"}},
+		{name: "raw503-mapped429-quota", rawStatus: 503, code: "insufficient_quota", retry: []string{"7"}},
+		{name: "synthetic-decoded502-mapped429", rawStatus: 200, code: "rate_limit_exceeded", decoded: true},
+		{name: "unknown-original-status", code: "rate_limit_exceeded", unknownHTTP: true},
+		{name: "untyped429", untyped: true},
+		{name: "error-before-headers", beforeHTTP: true},
+	}
+	for _, tc := range cases {
+		for _, mode := range []string{"mask", "off"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				var localCalls, legacyCalls atomic.Int32
+				rt := clientCompatRuntime(t, "mask")
+				if mode == "off" {
+					rt = NewRuntime(t.TempDir())
+				}
+				deps := compatHTTPDeps(t, rt, "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
+				failure := func(r *http.Request) (error, int) {
+					if tc.beforeHTTP {
+						return errors.New("raw-before-headers-" + compatCanary), 502
+					}
+					if tc.untyped {
+						return errors.New("raw-" + compatCanary), 429
+					}
+					if tc.unknownHTTP {
+						return &codex.ProtocolError{Code: tc.code, Status: 429, RetryAfter: 7 * time.Second}, 429
+					}
+					err := compatCodexUpstreamError(r.Context(), tc.rawStatus, tc.code, tc.retry, tc.decoded)
+					if err == nil {
+						t.Error("synthetic Codex failure was accepted as success")
+						return errors.New("raw-" + compatCanary), 502
+					}
+					status := tc.rawStatus
+					if tc.decoded || status == 503 {
+						status = 429 // the existing code table maps this outward status
+					}
+					return err, status
+				}
+				preset := func(w http.ResponseWriter) {
+					w.Header().Set("Retry-After", "777")
+					w.Header()["rEtRy-AfTeR"] = []string{"999"}
+					w.Header().Set("Content-Length", "31415")
+				}
+				deps.Resolve = func([]byte) (HTTPRoute, error) {
+					return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
+						localCalls.Add(1)
+						err, status := failure(r)
+						_, _ = ScrubLocalFailure(r, err, "raw-"+compatCanary, status)
+						preset(w)
+						w.Header().Set("Set-Cookie", "raw-"+compatCanary)
+						w.WriteHeader(status)
+						_, _ = io.WriteString(w, "raw-partial-tool-"+compatCanary)
+					}}, nil
+				}
+				deps.Legacy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					legacyCalls.Add(1)
+					err, status := failure(r)
+					preset(w)
+					anthropicerror.WriteHTTP(w, FailureForResponse(r, err, status))
+				})
+				result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatCodexPlainBody())
+				wantStatus, wantType := http.StatusTooManyRequests, "rate_limit_error"
+				if tc.beforeHTTP {
+					wantStatus, wantType = http.StatusBadGateway, "api_error"
+				} else if mode == "mask" && (tc.rawStatus != 429 || tc.unknownHTTP || tc.untyped || tc.decoded) {
+					wantStatus, wantType = http.StatusBadGateway, "api_error"
+				} else if mode == "off" && (tc.rawStatus != 429 || tc.unknownHTTP || tc.untyped || tc.decoded) {
+					wantType = "api_error"
+				}
+				message := compatCodexEnvelope(t, result, wantStatus, wantType)
+				wantHeader := ""
+				if tc.name == "original429-transient" {
+					wantHeader = tc.wantHeader
+				}
+				if got := result.Header.Get("Retry-After"); got != wantHeader {
+					t.Fatalf("public Retry-After = %q, want %q", got, wantHeader)
+				}
+				if tc.name == "original429-25h-not-clamped" && (strings.Contains(message, "24h") || strings.Contains(message, "86400") || strings.Contains(result.Body.String(), "86400")) {
+					t.Fatal("25h header was clamped or a 24h recovery was promised")
+				}
+				lowerMessage := strings.ToLower(message)
+				if tc.name == "original429-quota" && (!strings.Contains(lowerMessage, "reported") || !strings.Contains(lowerMessage, "limit")) {
+					t.Fatal("quota message did not attribute the reported limit to upstream")
+				}
+				if (tc.code == "insufficient_quota" || tc.code == "synthetic_unrecognized") && (strings.Contains(lowerMessage, "temporary") || strings.Contains(lowerMessage, "will reset")) {
+					t.Fatal("quota/unknown error promised a transient recovery")
+				}
+				if tc.name == "original429-unknown-code" && strings.Contains(lowerMessage, "quota") {
+					t.Fatal("unknown original 429 was classified as quota")
+				}
+				if mode == "mask" && (localCalls.Load() != 1 || legacyCalls.Load() != 0) || mode == "off" && (legacyCalls.Load() != 1 || localCalls.Load() != 0) {
+					t.Fatal("protected/off path crossed into the other route")
+				}
+			})
+		}
+	}
+}
+
+func TestProtectedHTTPCodex429LatestCandidateWins(t *testing.T) {
+	var localCalls, legacyCalls atomic.Int32
+	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
+	deps.Resolve = func([]byte) (HTTPRoute, error) {
+		return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
+			localCalls.Add(1)
+			first := compatCodexUpstreamError(r.Context(), 429, "rate_limit_exceeded", []string{"7"}, false)
+			if first == nil {
+				t.Error("missing first candidate failure")
+				return
+			}
+			_, _ = ScrubLocalFailure(r, first, "raw-first-"+compatCanary, 429)
+			last := compatCodexUpstreamError(r.Context(), 429, "insufficient_quota", []string{"11"}, false)
+			if last == nil {
+				t.Error("missing second candidate failure")
+				return
+			}
+			_, _ = ScrubLocalFailure(r, last, "raw-last-"+compatCanary, 429)
+			w.Header().Set("Retry-After", "7") // stale transient header from first candidate
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, "raw-last-"+compatCanary)
+		}}, nil
+	}
+	result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatCodexPlainBody())
+	message := compatCodexEnvelope(t, result, http.StatusTooManyRequests, "rate_limit_error")
+	if !strings.Contains(strings.ToLower(message), "reported") || result.Header.Get("Retry-After") != "" || localCalls.Load() != 1 {
+		t.Fatal("first candidate's transient state or header replaced the final quota outcome")
+	}
+}
+
+func TestProtectedHTTPCodex429ValidationBeatsFailure(t *testing.T) {
+	for _, tc := range []struct{ name, contentType, body string }{
+		{"incomplete-json", "application/json", `{"type":"message","content":[` + compatCanary},
+		{"incomplete-tool-sse", "text/event-stream", strings.Split(compatSSE("safe"), "event: message_stop")[0] +
+			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"partial-tool\",\"name\":\"run_synthetic\",\"input\":{}}\n\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var localCalls, legacyCalls atomic.Int32
+			deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
+			deps.Resolve = func([]byte) (HTTPRoute, error) {
+				return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
+					localCalls.Add(1)
+					err := compatCodexUpstreamError(r.Context(), 429, "rate_limit_exceeded", []string{"7"}, false)
+					if err == nil {
+						t.Error("expected synthetic original HTTP 429")
+						return
+					}
+					_, _ = ScrubLocalFailure(r, err, "raw-"+compatCanary, 429)
+					w.Header().Set("Content-Type", tc.contentType)
+					w.Header().Set("Retry-After", "7")
+					w.WriteHeader(http.StatusOK)
+					_, _ = io.WriteString(w, tc.body)
+				}}, nil
+			}
+			result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatCodexPlainBody())
+			compatCodexEnvelope(t, result, http.StatusBadGateway, "api_error")
+			if result.Header.Get("Retry-After") != "" || localCalls.Load() != 1 {
+				t.Fatal("original 429 overrode failed Restore/validation or leaked header")
+			}
+		})
+	}
+}
+
+func TestProtectedHTTPCodex429DeadlineBeatsFailure(t *testing.T) {
+	var localCalls, legacyCalls atomic.Int32
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	clock := newCompatClock()
+	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
+	deps.Clock = clock
+	deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
+	deps.Resolve = func([]byte) (HTTPRoute, error) {
+		return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
+			localCalls.Add(1)
+			err := compatCodexUpstreamError(r.Context(), 429, "rate_limit_exceeded", []string{"7"}, false)
+			if err == nil {
+				t.Error("expected synthetic original HTTP 429")
+				return
+			}
+			_, _ = ScrubLocalFailure(r, err, "raw-"+compatCanary, 429)
+			close(entered)
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		}}, nil
+	}
+	done, _ := compatStartCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatCodexPlainBody())
+	compatWaitSignal(t, entered)
+	clock.waitArm(t, deps.Limits.Total)
+	clock.advance(deps.Limits.Total + time.Millisecond)
+	result := compatAwait(t, done)
+	compatCodexEnvelope(t, result, http.StatusBadGateway, "api_error")
+	if result.Header.Get("Retry-After") != "" || localCalls.Load() != 1 {
+		t.Fatal("deadline changed protected refusal into Codex 429")
+	}
+}
+
+// Committed delivery is intentionally a different oracle from the precommit
+// HTTP matrix: after any byte is written the handler may only close or append
+// a whole safe SSE error frame, never change status, replay or write JSON.
+// The complete-error-frame path still needs a B-approved postcommit injection
+// seam; a Local callback alone cannot force a client commit through the buffer.
+func TestProtectedHTTPCodex429CommittedPartialWrite(t *testing.T) {
+	var localCalls, legacyCalls atomic.Int32
+	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "codex", &localCalls, &legacyCalls)
+	deps.Resolve = func([]byte) (HTTPRoute, error) {
+		return HTTPRoute{Mode: "codex", Model: compatModel, Local: func(w http.ResponseWriter, _ *http.Request, _ []byte, _ string) {
+			localCalls.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, compatSSE("safe"))
+		}}, nil
+	}
+	writer := &compatPartialWriter{ResponseRecorder: httptest.NewRecorder()}
+	r := httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", bytes.NewReader(compatCodexPlainBody()))
+	r.Header.Set("Content-Type", "application/json")
+	NewProtectedHTTP(deps).ServeHTTP(writer, r)
+	if writer.Code != http.StatusOK || writer.Body.Len() != 1 || strings.Contains(writer.Body.String(), "event: error") || strings.Contains(writer.Body.String(), `"error"`) || localCalls.Load() != 1 {
+		t.Fatal("partial committed SSE write got a second JSON/error frame or changed status")
+	}
+}
+
+func TestProtectedHTTPCodex429OtherAdapterCannotBorrowLocalException(t *testing.T) {
+	var localCalls, legacyCalls atomic.Int32
+	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "openai", &localCalls, &legacyCalls)
+	deps.Resolve = func([]byte) (HTTPRoute, error) {
+		return HTTPRoute{Mode: "openai", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, _ []byte, _ string) {
+			localCalls.Add(1)
+			err := compatCodexUpstreamError(r.Context(), 429, "rate_limit_exceeded", []string{"7"}, false)
+			if err == nil {
+				t.Error("missing synthetic provider failure")
+				return
+			}
+			_, _ = ScrubLocalFailure(r, err, "raw-"+compatCanary, 429)
+			w.Header().Set("Retry-After", "7")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, "raw-"+compatCanary)
+		}}, nil
+	}
+	result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatCodexPlainBody())
+	compatCodexEnvelope(t, result, http.StatusBadGateway, "api_error")
+	if result.Header.Get("Retry-After") != "" || localCalls.Load() != 1 {
+		t.Fatal("generic OpenAI adapter inherited the Codex-local exception")
+	}
+}
+
+func TestProtectedHTTPCodex429DirectCannotBorrowLocalException(t *testing.T) {
+	var localCalls, legacyCalls atomic.Int32
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Retry-After", "7")
+		w.Header().Set("Set-Cookie", "raw-"+compatCanary)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"type":"rate_limit_error","message":"raw-`+compatCanary+`"}}`)
+	}))
+	defer up.Close()
+	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "anthropic", &localCalls, &legacyCalls)
+	result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatHTTPBody())
+	compatCodexEnvelope(t, result, http.StatusBadGateway, "api_error")
+	if result.Header.Get("Retry-After") != "" || localCalls.Load() != 0 {
+		t.Fatal("direct Anthropic raw 429 borrowed the Codex-local exception")
+	}
 }
