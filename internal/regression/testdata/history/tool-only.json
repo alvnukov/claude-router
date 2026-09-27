@@ -1,0 +1,1 @@
+{"content":[{"type":"tool_use","id":"tool_fixture_1","name":"fixture_lookup","input":{"n":7}}],"stop_reason":"tool_use"}

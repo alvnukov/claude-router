@@ -1,0 +1,10 @@
+[
+  {"profile":"rr-red","model":"claude-sonnet-4-5-20250929","effort":"default","status":200,"destination":"fixture-a","served_model":"fixture-a-model"},
+  {"profile":"rr-red","model":"claude-sonnet-4-5-20250929","effort":"low","status":200,"destination":"fixture-b","served_model":"fixture-b-model"},
+  {"profile":"rr-red","model":"claude-sonnet-4-5-20250929","effort":"medium","status":200,"destination":"fixture-a","served_model":"fixture-a-model"},
+  {"profile":"rr-red","model":"claude-sonnet-4-5-20250929","effort":"high","status":200,"destination":"fixture-b","served_model":"fixture-b-model"},
+  {"profile":"rr-red","model":"claude-sonnet-4-5-20250929","effort":"xhigh","status":400,"destination":"","served_model":""},
+  {"profile":"rr-red","model":"claude-sonnet-4-5-20250929","effort":"max","status":400,"destination":"","served_model":""},
+  {"profile":"rr-blue","model":"claude-sonnet-4-5-20250929","effort":"default","status":200,"destination":"fixture-b","served_model":"fixture-b-model"},
+  {"profile":"rr-red","model":"claude-unknown-rr","effort":"default","status":400,"destination":"","served_model":""}
+]

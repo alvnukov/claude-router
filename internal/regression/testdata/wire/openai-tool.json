@@ -1,0 +1,1 @@
+{"id":"chat_fixture_tool","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"tool_fixture_1","type":"function","function":{"name":"fixture_lookup","arguments":"{\"n\":7}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}
