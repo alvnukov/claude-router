@@ -27,7 +27,11 @@ Implementation:
 - [x] UI mode selector, clear exposure notice, profile/single-filter detection,
       separate findings and no restoration affordance for detect results.
 - [x] Independent review, focused/race/full tests and browser validation.
-- [ ] Install merged build with rollback binary and verify live service/UI.
+- [x] Install merged build with rollback binary and verify live service/UI.
+      Installed `1c059a4`; exact mask/restore and detect API smoke plus live
+      Chromium detect/clear passed. Traffic filtering remains disabled.
+      Deployment evidence and first-attempt readiness timeout are recorded in
+      `docs/privacy-traffic.md`.
 
 UI work may run independently against this API contract while the parent handles
 Go/runtime integration. Subagent-driven-development is used for this independent
