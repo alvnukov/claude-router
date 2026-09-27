@@ -231,6 +231,9 @@ func TestCorpusFakeKeysInvalid(t *testing.T) {
 		re    *regexp.Regexp
 		valid func(key string) bool
 	}{
+		{regexp.MustCompile(`https://hooks\.slack\.com/services/[A-Za-z0-9/_-]+`), func(k string) bool {
+			return k != "https://hooks.slack.com/services/FAKE/FAKE/INVALID"
+		}},
 		{regexp.MustCompile(`ghp_[A-Za-z0-9]{36}`), githubChecksumValid},
 		{regexp.MustCompile(`sk-ant-api03-[A-Za-z0-9_-]+`), func(k string) bool { return strings.HasSuffix(k, "AA") }},
 		{regexp.MustCompile(`AKIA[A-Z0-9]{16}`), func(k string) bool { return k != "AKIAIOSFODNN7EXAMPLE" }},
