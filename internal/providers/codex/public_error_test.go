@@ -36,6 +36,7 @@ func TestClassifyFailureRequiresOriginalHTTP429(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			e := upstreamError(tt.code, tt.original)
 			e.HTTPStatus = tt.original
+			e.validHTTPError = tt.original != 0
 			got := ClassifyFailure(fmt.Errorf("wrapped: %w", e), tt.outward)
 			if got.Status != tt.outward || got.Category != tt.want || got.HTTPStatus != tt.original || got.RetryAfter != 0 {
 				t.Fatalf("classification = %+v; want status %d, category %d, HTTP %d, no retry", got, tt.outward, tt.want, tt.original)
@@ -82,6 +83,7 @@ func TestClassifyFailureValidatesOriginalRetryHeaderIndependently(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			e := upstreamError(tt.code, 429)
 			e.HTTPStatus, e.retryHeader, e.observedAt, e.RetryAfter = 429, tt.header, tt.observed, tt.internal
+			e.validHTTPError = true
 			got := ClassifyFailure(e, 429)
 			if tt.name == "date" {
 				if got.RetryAfter < time.Hour || got.RetryAfter > 2*time.Hour {

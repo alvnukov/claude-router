@@ -18,7 +18,7 @@ func ClassifyFailure(err error, status int) anthropicerror.Failure {
 		return f
 	}
 	f.HTTPStatus = protocol.HTTPStatus
-	if status != http.StatusTooManyRequests || protocol.Status != status || protocol.HTTPStatus != http.StatusTooManyRequests {
+	if status != http.StatusTooManyRequests || protocol.Status != status || protocol.HTTPStatus != http.StatusTooManyRequests || !protocol.validHTTPError {
 		return f
 	}
 	switch protocol.Code {

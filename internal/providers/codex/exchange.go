@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -126,13 +127,26 @@ func sampling(ctx context.Context, payload []byte, headers http.Header, send Sen
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		data, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		data, readErr := io.ReadAll(io.LimitReader(response.Body, (64<<10)+1))
+		complete := readErr == nil && len(data) <= 64<<10
+		if len(data) > 64<<10 {
+			data = data[:64<<10]
+		}
 		var body struct {
 			Error wireError `json:"error"`
 		}
-		_ = json.Unmarshal(data, &body)
+		decodeErr := json.Unmarshal(data, &body)
 		err := upstreamError(body.Error.Code, response.StatusCode)
 		err.HTTPStatus = response.StatusCode
+		if complete && decodeErr == nil {
+			var envelope struct {
+				Error json.RawMessage `json:"error"`
+			}
+			if json.Unmarshal(data, &envelope) == nil {
+				errorBody := bytes.TrimSpace(envelope.Error)
+				err.validHTTPError = len(errorBody) > 0 && errorBody[0] == '{'
+			}
+		}
 		var retryValues []string
 		for key, values := range response.Header {
 			if strings.EqualFold(key, "Retry-After") {

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"localrouter/internal/anthropicerror"
 )
 
 func contractHTTPResponse(body, turnState string) *http.Response {
@@ -188,6 +190,44 @@ func TestExchangeRejectsDuplicateAndOversizedPublicRetryHeaders(t *testing.T) {
 			_, err := Exchange(context.Background(), contractRequest(contractUser), send, Options{}, nil)
 			if got := ClassifyFailure(err, http.StatusTooManyRequests); got.RetryAfter != 0 {
 				t.Fatalf("ambiguous public Retry-After = %s", got.RetryAfter)
+			}
+		})
+	}
+}
+
+type contractReadError struct{}
+
+func (contractReadError) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+func TestExchangeIncompleteHTTP429IsNotEligibleForPublicLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		body      io.Reader
+		wantLimit bool
+	}{
+		{"truncated", strings.NewReader(`{"error":{"code":"rate_limit_exceeded"`), false},
+		{"empty", strings.NewReader(""), false},
+		{"null error", strings.NewReader(`{"error":null}`), false},
+		{"missing error", strings.NewReader(`{"other":"not an error"}`), false},
+		{"error read", io.MultiReader(strings.NewReader(`{"error":{"code":"rate_limit_exceeded"}}`), contractReadError{}), false},
+		{"oversized", strings.NewReader(`{"error":{"code":"rate_limit_exceeded"}}` + strings.Repeat(" ", 64<<10)), false},
+		{"valid unknown code", strings.NewReader(`{"error":{}}`), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			send := func(context.Context, []byte, http.Header) (*http.Response, error) {
+				response := &http.Response{StatusCode: http.StatusTooManyRequests, Header: make(http.Header), Body: io.NopCloser(tt.body)}
+				response.Header.Set("Retry-After", "7")
+				return response, nil
+			}
+			_, err := Exchange(context.Background(), contractRequest(contractUser), send, Options{}, nil)
+			var protocol *ProtocolError
+			if !errors.As(err, &protocol) || protocol.Status != 429 || protocol.HTTPStatus != 429 || protocol.RetryAfter != 7*time.Second {
+				t.Fatalf("internal status/parser changed: %+v", protocol)
+			}
+			got := ClassifyFailure(err, 429)
+			eligible := got.Category == anthropicerror.Unknown429
+			if eligible != tt.wantLimit || got.RetryAfter != 0 {
+				t.Fatalf("HTTP body eligibility = %+v; want limit %v", got, tt.wantLimit)
 			}
 		})
 	}
