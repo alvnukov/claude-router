@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/platform"
 )
 
@@ -64,7 +65,7 @@ func newCodexAuthStore() *codexAuthStore {
 	}
 	return &codexAuthStore{
 		path: path, cliPath: filepath.Join(cliHome, "auth.json"), issuer: codexIssuer,
-		client: &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		client: &http.Client{Transport: codextesttransport.AuthTransport(), Timeout: 20 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
 }
 

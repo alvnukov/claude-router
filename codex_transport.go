@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 	codexprovider "localrouter/internal/providers/codex"
@@ -66,7 +67,7 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 	if err != nil {
 		return codexAttemptError(r, start, err)
 	}
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client := &http.Client{Transport: codextesttransport.Transport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	sent := false
 	send := func(ctx context.Context, body []byte, headers http.Header) (*http.Response, error) {
 		if protected && sent {

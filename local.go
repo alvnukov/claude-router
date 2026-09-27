@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 	"localrouter/internal/providers"
@@ -315,7 +316,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	t0 := time.Now()
 	client := http.DefaultClient
 	if cand.Provider.Type == "codex" || privacy.FromRequest(r) != nil {
-		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client = &http.Client{Transport: codextesttransport.Transport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	var resp *http.Response
 	if cand.Provider.Type == "codex" {

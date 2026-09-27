@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"localrouter/internal/catalogstartup"
+	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 	"localrouter/internal/platform"
@@ -68,6 +69,9 @@ func slotStatePath(path string) string {
 
 func (r *routerServer) startBackground() {
 	r.once.Do(func() {
+		if codextesttransport.DisableBackground() {
+			return
+		}
 		r.cs.watch(r.background, 2*time.Second, r.life)
 		startChecker(r.background, r.cs, r.health, r.life)
 		r.catalogRun = r.ui.startCatalogUpdates(r.background)
