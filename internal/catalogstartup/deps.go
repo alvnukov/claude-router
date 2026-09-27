@@ -31,7 +31,10 @@ func (d Dependencies) CodexModelsURL() string { return d.codexURL }
 func (d Dependencies) IsSynthetic() bool      { return d.guard != nil }
 
 func (d Dependencies) Client(timeout time.Duration) *http.Client {
-	client := &http.Client{Timeout: timeout, Transport: d.transport}
+	client := &http.Client{Timeout: timeout}
+	if d.transport != nil {
+		client.Transport = d.transport
+	}
 	if d.guard != nil {
 		client.Transport = d.guard
 		client.CheckRedirect = func(*http.Request, []*http.Request) error {

@@ -71,9 +71,7 @@ func (r *routerServer) startBackground() {
 		r.cs.watch(r.background, 2*time.Second, r.life)
 		startChecker(r.background, r.cs, r.health, r.life)
 		r.catalogRun = r.ui.startCatalogUpdates(r.background)
-		if r.ui.catalog == nil || !r.ui.catalog.IsSynthetic() {
-			r.ui.startCodexUsageUpdates(r.background)
-		}
+		catalogstartup.StartUsage(r.background, r.ui.catalog, r.ui.startCodexUsageUpdates)
 	})
 }
 
@@ -155,14 +153,8 @@ func boolInt(v bool) int {
 
 func (r *routerServer) shutdown(ctx context.Context) (err error) {
 	r.life.drain()
-	r.cancel()
-	r.once.Do(func() {}) // Join a concurrent activation before reading catalogRun.
-	defer func() {
-		wait, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		var deps catalogstartup.Dependencies
-		err = errors.Join(err, deps.Wait(wait, r.catalogRun.Done))
-	}()
+	catalogstartup.Stop(r.cancel, &r.once)
+	defer func() { err = errors.Join(err, r.catalogRun.Join(ctx)) }()
 	if r.apiHTTP != nil {
 		if err := r.apiHTTP.Shutdown(ctx); err != nil {
 			return err
@@ -178,18 +170,7 @@ func (r *routerServer) shutdown(ctx context.Context) (err error) {
 
 func (r *routerServer) run() (result error) {
 	defer func() {
-		r.cancel()
-		r.once.Do(func() {})
-		if r.apiHTTP != nil {
-			r.apiHTTP.Close()
-		}
-		if r.uiHTTP != nil {
-			r.uiHTTP.Close()
-		}
-		wait, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		var deps catalogstartup.Dependencies
-		result = errors.Join(result, deps.Wait(wait, r.catalogRun.Done))
+		result = errors.Join(result, catalogstartup.Finish(context.Background(), r.cancel, &r.once, &r.catalogRun, r.apiHTTP, r.uiHTTP))
 	}()
 	api, err := net.Listen("tcp", r.cfg.listen)
 	if err != nil {

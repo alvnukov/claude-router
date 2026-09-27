@@ -40,6 +40,24 @@ func TestProductionClientUsesSuppliedEndpointAndTimeout(t *testing.T) {
 	}
 }
 
+func TestZeroDependenciesClientUsesDefaultTransport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "models")
+	}))
+	defer server.Close()
+
+	var deps Dependencies
+	resp, err := deps.Client(2 * time.Second).Get(server.URL + "/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || string(body) != "models" {
+		t.Fatalf("default transport = %q, %v", body, err)
+	}
+}
+
 func TestCodexClientDoesNotFollowRedirect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/models" {

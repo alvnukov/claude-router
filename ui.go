@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -1444,66 +1443,21 @@ func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Con
 	}
 	res := probeResult{At: time.Now(), Base: p.BaseURL, Key: p.APIKey, AuthID: p.AuthID}
 	defer func() { u.probe[p.Name] = res }()
-	endpoint := p.BaseURL + "/models"
+	var deps catalogstartup.Dependencies
 	if u.catalog != nil {
-		if err := u.catalog.ValidateProvider(p.Name, p.Type, p.BaseURL, p.AuthID); err != nil {
-			res.Msg = err.Error()
-			return res
-		}
+		deps = *u.catalog
 	}
-	if p.Type == "codex" {
-		endpoint = codexBaseURL + "/models?client_version=0.156.0"
-		if u.catalog != nil {
-			endpoint = u.catalog.CodexModelsURL()
-		}
-	}
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-	if err != nil {
-		res.Msg = err.Error()
-		return res
-	}
-	if p.Type == "codex" {
+	body, msg := deps.FetchModels(ctx, codexBaseURL+"/models?client_version=0.156.0", catalogstartup.ProbeInput{
+		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey,
+	}, func(ctx context.Context, req *http.Request) error {
 		store, err := codexStoreFor(p)
-		if err == nil {
-			err = store.authorize(req.Context(), req)
-		}
 		if err != nil {
-			res.Msg = err.Error()
-			return res
+			return err
 		}
-	} else if p.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+p.APIKey)
-	}
-	client := &http.Client{Timeout: 2 * time.Second}
-	if u.catalog != nil {
-		client = u.catalog.Client(2 * time.Second)
-	}
-	if p.Type == "codex" {
-		if u.catalog != nil {
-			client = u.catalog.CodexClient(5 * time.Second)
-		} else {
-			client.Timeout = 5 * time.Second
-			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-		}
-		req.Header.Set("User-Agent", "claude-router")
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		res.Msg = "недоступен: " + err.Error()
-		return res
-	}
-	defer resp.Body.Close()
-	maxBytes := int64(1 << 20)
-	if p.Type == "codex" {
-		maxBytes = 16 << 20
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if int64(len(body)) > maxBytes {
-		res.Msg = "список моделей слишком велик"
-		return res
-	}
-	if resp.StatusCode >= 400 || (p.Type == "codex" && resp.StatusCode != http.StatusOK) {
-		res.Msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return store.authorize(ctx, req)
+	})
+	if msg != "" {
+		res.Msg = msg
 		return res
 	}
 	if p.Type == "codex" {

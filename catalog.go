@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"html"
-	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -83,32 +82,13 @@ func parseAnthropicCatalog(body []byte) ([]string, error) {
 }
 
 func fetchAnthropicCatalog(ctx context.Context, deps ...catalogstartup.Dependencies) ([]string, error) {
-	endpoint := anthropicCatalogURL
-	client := &http.Client{Timeout: 15 * time.Second}
+	var d catalogstartup.Dependencies
 	if len(deps) > 0 {
-		endpoint = deps[0].OfficialURL()
-		client = deps[0].Client(15 * time.Second)
+		d = deps[0]
 	}
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	body, err := d.FetchOfficial(ctx, anthropicCatalogURL)
 	if err != nil {
 		return nil, err
-	}
-	req.Header.Set("User-Agent", "claude-router/1.0")
-	req.Header.Set("Accept", "text/html")
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > 2<<20 {
-		return nil, fmt.Errorf("каталог слишком велик")
 	}
 	return parseAnthropicCatalog(body)
 }
@@ -124,30 +104,23 @@ func (u *uiServer) startCatalogUpdates(ctx context.Context) catalogstartup.Run {
 // Network reads happen outside the config lock. Results are merged into the
 // latest configuration, so an hourly update never overwrites a dashboard edit.
 func (u *uiServer) refreshModels(ctx context.Context) error {
-	if u.life != nil && !u.life.writesSharedState() {
-		return fmt.Errorf("model catalog refresh requires active instance")
+	if err := catalogstartup.RequireActive(u.life == nil || u.life.writesSharedState()); err != nil {
+		return err
 	}
 	u.catalogMu.Lock()
 	defer u.catalogMu.Unlock()
 	snapshot := u.cs.get().local
 	ids, fetchErr := u.fetchAnthropic(ctx)
-	if err := ctx.Err(); err != nil {
+	results, err := catalogstartup.Collect(ctx, snapshot.Providers, func(p provider) (string, probeResult) {
+		return p.Name, u.probeProvider(p, true, ctx)
+	})
+	if err != nil {
 		return err
-	}
-	results := map[string]probeResult{}
-	for _, p := range snapshot.Providers {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		results[p.Name] = u.probeProvider(p, true, ctx)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 	}
 	u.cs.mu.Lock()
 	defer u.cs.mu.Unlock()
-	if u.life != nil && !u.life.writesSharedState() {
-		return fmt.Errorf("model catalog refresh requires active instance")
+	if err := catalogstartup.RequireActive(u.life == nil || u.life.writesSharedState()); err != nil {
+		return err
 	}
 	next := u.cs.c.local.clone()
 	next.Catalog.CheckedAt = time.Now()
@@ -183,9 +156,7 @@ func (u *uiServer) refreshModels(ctx context.Context) error {
 	if err := next.validateProfiles(); err != nil {
 		return err
 	}
-	// Admit persistence only while active. Once admitted, shutdown joins the
-	// writer; a concurrent cancellation cannot roll back a started file write.
-	if err := ctx.Err(); err != nil {
+	if err := catalogstartup.AdmitPersistence(ctx); err != nil {
 		return err
 	}
 	if u.cs.provPath != "" {
