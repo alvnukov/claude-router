@@ -11,6 +11,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { runReviewRegressions } from './ui-review-regressions.mjs';
 import { runCodexLoginChecks } from './ui-codex-login-check.mjs';
+import { runPrivacyChecks } from './ui-privacy-check.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'internal/ui/web/package.json'));
@@ -137,6 +138,7 @@ try {
   if(preview){await once(router,'exit');process.exitCode=0;}
   else {
     browser=await (isWebkit?webkit:chromium).launch({headless:true});
+    await runPrivacyChecks(browser,base,expect,shots,isWebkit,`http://127.0.0.1:${apiPort}`,upstreamRequests);
     await runReviewRegressions(browser, base);
     await runCodexLoginChecks(browser, base);
     const page=await browser.newPage({viewport:{width:1440,height:1000},locale:'ru-RU',colorScheme:'light'});

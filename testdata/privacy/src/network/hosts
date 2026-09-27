@@ -1,0 +1,10 @@
+⟦keep:127.0.0.1⟧	⟦keep:localhost⟧
+⟦keep:::1⟧	⟦keep:localhost⟧ ip6-localhost
+
+# ⟦org:Ромашка⟧: prod
+⟦ipv4:10.113.7.21⟧	⟦host:gw-msk-2.corp.romashka.example⟧ ⟦host:gw-msk-2⟧
+⟦ipv4:10.113.8.11⟧	⟦host:db-prod-1.corp.romashka.example⟧ ⟦host:db-prod-1⟧
+⟦ipv4:10.113.8.12⟧	⟦host:db-prod-2.corp.romashka.example⟧ ⟦host:db-prod-2⟧
+⟦ipv6:2001:db8:4a1:8::13⟧	⟦host:db-prod-3.corp.romashka.example⟧
+⟦ipv4:172.20.44.5⟧	⟦host:registry.romashka.example⟧
+⟦ipv4:198.51.100.7⟧	⟦host:partner-api.vasilek.example⟧

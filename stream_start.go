@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"strings"
+
+	"localrouter/internal/privacy"
 )
 
 type responseReader struct {
@@ -30,6 +32,9 @@ func firstChatEvent(body io.Reader) (io.Reader, error) {
 		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if data == "[DONE]" {
 			return nil, errors.New("stream ended before any response")
+		}
+		if err := privacy.ValidateObject([]byte(data)); err != nil {
+			return nil, errors.New("invalid upstream stream event")
 		}
 		var chunk openaiChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {

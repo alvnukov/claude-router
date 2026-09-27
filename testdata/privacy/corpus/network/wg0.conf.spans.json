@@ -1,0 +1,68 @@
+[
+  {
+    "start": 51,
+    "end": 59,
+    "kind": "org",
+    "text": "Romashka"
+  },
+  {
+    "start": 86,
+    "end": 99,
+    "kind": "cidr4",
+    "text": "10.250.0.2/32"
+  },
+  {
+    "start": 101,
+    "end": 122,
+    "kind": "cidr6",
+    "text": "fd12:3456:789a::2/128"
+  },
+  {
+    "start": 136,
+    "end": 179,
+    "kind": "secret",
+    "text": "yFAKEr0mashkaWgPr1vateKeyD0N0tUseItAnywhr0="
+  },
+  {
+    "start": 205,
+    "end": 215,
+    "kind": "ipv4",
+    "text": "10.250.0.1"
+  },
+  {
+    "start": 236,
+    "end": 280,
+    "kind": "keep",
+    "text": "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg="
+  },
+  {
+    "start": 296,
+    "end": 339,
+    "kind": "secret",
+    "text": "FAKEpreSharedKeyR0mashkaT3stOnlyXXXXXXXXXX="
+  },
+  {
+    "start": 351,
+    "end": 375,
+    "kind": "host",
+    "text": "vpn-kzn.romashka.example"
+  },
+  {
+    "start": 395,
+    "end": 408,
+    "kind": "cidr4",
+    "text": "10.250.0.0/24"
+  },
+  {
+    "start": 410,
+    "end": 423,
+    "kind": "cidr4",
+    "text": "10.114.0.0/16"
+  },
+  {
+    "start": 425,
+    "end": 444,
+    "kind": "cidr6",
+    "text": "fd12:3456:789a::/48"
+  }
+]

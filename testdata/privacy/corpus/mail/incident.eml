@@ -1,0 +1,32 @@
+Return-Path: <netops@romashka.example>
+Received: from mx1.romashka.example (mx1.romashka.example [203.0.113.25])
+	by mail.vasilek.example with ESMTPS id 4XkQ2r1FzpzJ7
+	for <olga.smirnova@vasilek.example>; Thu, 25 Sep 2026 10:14:02 +0300
+Received: from ws-petrov.corp.romashka.example ([2001:db8:4a1:20::1f])
+	by mx1.romashka.example with ESMTPSA; Thu, 25 Sep 2026 10:13:58 +0300
+From: Иван Петров <ivan.petrov@romashka.example>
+To: Ольга Смирнова <olga.smirnova@vasilek.example>
+Cc: netops@romashka.example
+Subject: =?UTF-8?B?0JjQvdGG0LjQtNC10L3RgjogQkdQ?= (инцидент 2026-0925-03)
+Message-ID: <20260925101358.4f1c2a9e@ws-petrov.corp.romashka.example>
+Content-Type: text/plain; charset=utf-8
+
+Ольга, добрый день.
+
+Сегодня в 03:10 у Ромашки упала BGP-сессия с вашим пиром 198.51.100.1
+(AS64500 ↔ AS64511). Наш анонс 203.0.113.0/24 пропал у вас примерно на 40 минут,
+IPv6-префикс 2001:db8:4a1::/48 остался. Трассировка с gw-msk-2:
+
+  1  10.113.7.1   0.4 ms
+  2  192.168.77.1   1.1 ms
+  3  border1.romashka.example (203.0.113.1)  2.0 ms
+  4  * * *
+
+Мы поменяли MTU на border1 до 1500, после этого сессия поднялась.
+Если нужно, пришлю дамп с интерфейса (MAC пира 00:00:5E:00:53:7F).
+
+Контакт дежурного: noc@romashka.example, +7 000 000-00-00.
+
+--
+Иван Петров, отдел сетей ООО «Ромашка»
+г. Цветогорск, ул. Вымышленная, д. 7, офис 12

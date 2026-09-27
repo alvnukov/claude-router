@@ -1,0 +1,27 @@
+# /etc/network/interfaces on ⟦host:gw-msk-2⟧ (⟦org:Ромашка⟧, стойка B4)
+source /etc/network/interfaces.d/*
+
+auto lo
+iface lo inet loopback
+    address ⟦keep:127.0.0.1⟧
+
+auto eno1
+iface eno1 inet static
+    address ⟦ipv4:10.113.7.21⟧
+    netmask ⟦keep:255.255.255.0⟧
+    gateway ⟦ipv4:10.113.7.1⟧
+    hwaddress ether ⟦mac:00:00:5e:00:53:01⟧
+    dns-nameservers ⟦ipv4:10.113.0.53⟧ ⟦public:8.8.8.8⟧
+    dns-search ⟦host:corp.romashka.example⟧
+    up ip route add ⟦cidr4:172.20.0.0/14⟧ via ⟦ipv4:10.113.7.254⟧ dev eno1
+
+iface eno1 inet6 static
+    address ⟦ipv6:2001:db8:4a1:7::21⟧
+    netmask 64
+    gateway ⟦ipv6:fe80::200:5eff:fe00:5301⟧
+
+auto eno2.310
+iface eno2.310 inet static
+    address ⟦cidr4:192.168.77.10/27⟧
+    vlan-raw-device eno2
+    post-up ip route add ⟦keep:0.0.0.0/0⟧ via ⟦ipv4:192.168.77.1⟧ table 310

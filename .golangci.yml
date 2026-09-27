@@ -83,6 +83,16 @@ linters:
           deny:
             - pkg: localrouter/internal/server
               desc: server and ui do not import each other
+        # privacy is a leaf: the standard library, platform and its vendored
+        # Crypto-PAn, nothing else. An allow list, so a new import is a
+        # decision rather than a slip.
+        privacy:
+          files: ["**/internal/privacy/**"]
+          list-mode: strict
+          allow:
+            - $gostd
+            - localrouter/internal/platform
+            - localrouter/internal/privacy/cryptopan
         cmd:
           files: ["**/internal/**"]
           deny:

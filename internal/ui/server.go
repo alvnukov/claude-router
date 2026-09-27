@@ -64,6 +64,7 @@ func Error(w http.ResponseWriter, status int, message string) {
 }
 
 func Mount(mux *http.ServeMux, b Backend) {
+	mountPrivacy(mux, b)
 	files, _ := fs.Sub(assets, "dist")
 	serve := http.FileServerFS(files)
 	mux.Handle("GET /assets/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +80,7 @@ func Mount(mux *http.ServeMux, b Backend) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(data)
 	}
-	for _, path := range []string{"/{$}", "/requests", "/requests/{id}", "/routes", "/connections", "/settings"} {
+	for _, path := range []string{"/{$}", "/requests", "/requests/{id}", "/routes", "/connections", "/settings", "/privacy"} {
 		mux.HandleFunc("GET "+path, page)
 	}
 	mux.HandleFunc("GET /api/ui/state", func(w http.ResponseWriter, r *http.Request) { JSON(w, 200, b.State(r.Context())) })

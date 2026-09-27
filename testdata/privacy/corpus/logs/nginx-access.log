@@ -1,0 +1,5 @@
+198.51.100.23 - - [25/Sep/2026:10:03:11 +0300] "GET /api/v2/invoices?customer=olga.smirnova@vasilek.example HTTP/2.0" 200 5123 "https://billing.romashka.example/invoices" "Mozilla/5.0 (X11; Linux x86_64) Firefox/131.0" rt=0.042 upstream=10.113.8.21:8080
+2001:db8:ffff:12::7 - - [25/Sep/2026:10:03:12 +0300] "POST /api/v2/login HTTP/2.0" 401 87 "-" "curl/8.9.1" rt=0.003 upstream=10.113.8.22:8080
+10.113.7.21 - - [25/Sep/2026:10:03:14 +0300] "GET /healthz HTTP/1.1" 200 2 "-" "kube-probe/1.31" rt=0.001 upstream=127.0.0.1:8080
+203.0.113.45 - - [25/Sep/2026:10:03:15 +0300] "GET /api/v2/export?token=FAKEexp0rtT0kenR0mashka9f8e7d6c HTTP/2.0" 403 0 "-" "python-requests/2.32.3" xff="192.0.2.10, 10.113.7.254" rt=0.002
+198.51.100.23 - - [25/Sep/2026:10:03:18 +0300] "GET /static/app.4f1c2a9e.js HTTP/2.0" 200 91822 "https://billing.romashka.example/" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605.1.15" rt=0.000 upstream=-

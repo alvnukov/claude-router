@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"localrouter/internal/history"
+	"localrouter/internal/privacy"
 )
 
 func newID(prefix string) string {
@@ -73,7 +74,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	// Claude Code cannot size its context per model, so the prompt it builds can
 	// overrun the local endpoint. Fit it here rather than refusing it: see
 	// fitToBudget for why refusing leaves the session with no way out.
-	if cfg.maxInputChars > 0 {
+	if cfg.maxInputChars > 0 && privateAttempt(r) == nil {
 		if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after {
 			log.Printf("trimmed prompt %d -> %d chars (budget %d): %s",
 				before, after, cfg.maxInputChars, strings.Join(notes, "; "))
@@ -101,6 +102,34 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	}
 	var last attemptResult
 	for i, cand := range cands {
+		if p := privateAttempt(r); p != nil {
+			masked, maskErr := p.prepare(privacy.Target{Model: cand.Key, Pool: p.pool, Provider: cand.Provider.Name}, body)
+			if maskErr == nil {
+				maskErr = p.exchange.CheckControl(cand.Model)
+			}
+			if maskErr != nil {
+				writeAnthropicError(w, 400, "invalid_request_error", "privacy: request rejected")
+				return
+			}
+			var safe anthropicRequest
+			if err = json.Unmarshal(masked, &safe); err == nil {
+				oreq, err = toOpenAI(safe, "")
+			}
+			if err != nil {
+				writeAnthropicError(w, 400, "invalid_request_error", "privacy: unsupported request")
+				return
+			}
+			if cfg.maxInputChars > 0 {
+				fitToBudget(&oreq, cfg.maxInputChars)
+			}
+			if cand.Provider.Type == "codex" {
+				oreq, err = restoreCodexCalls(oreq, "", nil)
+				if err != nil {
+					writeAnthropicError(w, 400, "invalid_request_error", "privacy: include complete tool call history for Codex")
+					return
+				}
+			}
+		}
 		oreq.Model = cand.Model
 		sourceEffort := req.OutputConfig.Effort
 		if sourceEffort == "" {
@@ -151,6 +180,10 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			responseBody = res.resp.Body
 		}
 
+		if res.err != nil && privateAttempt(r) != nil {
+			res.err = errors.New("upstream response failed")
+			res.detail = "upstream response failed"
+		}
 		if tr != nil {
 			tr.Attempts = append(tr.Attempts, history.Attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
 		}
@@ -182,6 +215,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		res.cancel()
 		hl.release(cand.Key)
 		if werr != nil {
+			if privateAttempt(r) != nil {
+				werr = errors.New("upstream response failed")
+			}
 			if tr != nil {
 				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
 			}
@@ -264,7 +300,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	t0 := time.Now()
 	client := http.DefaultClient
-	if cand.Provider.Type == "codex" {
+	if cand.Provider.Type == "codex" || privateAttempt(r) != nil {
 		client = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	var resp *http.Response
@@ -275,6 +311,9 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	ttfb := time.Since(t0)
 	if err != nil {
+		if privateAttempt(r) != nil {
+			err = errors.New("upstream request failed")
+		}
 		cancel()
 		if r.Context().Err() != nil {
 			return attemptResult{err: err, clientGone: true}
@@ -287,11 +326,14 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		}
 		return attemptResult{err: err, ttfb: ttfb, retryable: true}
 	}
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode >= 400 || privateAttempt(r) != nil && resp.StatusCode >= 300 {
 		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		cancel()
-		if cand.Provider.Type != "codex" {
+		if privateAttempt(r) != nil {
+			detail = []byte("upstream request failed")
+		}
+		if cand.Provider.Type != "codex" && privateAttempt(r) == nil {
 			log.Printf("local endpoint %d (%s): %s", resp.StatusCode, model, detail)
 		}
 		if cand.Provider.Type == "codex" {
@@ -318,8 +360,11 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	original := resp.Body
 	body := original
+	if privateAttempt(r) != nil {
+		body = &responseReader{Reader: &privacyResponseReader{source: original, remaining: privacy.TrafficOutputLimit}, close: original.Close}
+	}
 	if stream && cand.Provider.Type == "codex" {
-		body = codexChatStream(original)
+		body = codexChatStream(body)
 	}
 	var ready io.Reader
 	if stream {
@@ -397,7 +442,22 @@ type openaiResponse struct {
 
 func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	var or openaiResponse
-	if err := json.NewDecoder(body).Decode(&or); err != nil {
+	var raw json.RawMessage
+	decoder := json.NewDecoder(body)
+	decodeErr := decoder.Decode(&raw)
+	if decodeErr == nil {
+		var trailing any
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			decodeErr = errors.New("trailing or incomplete upstream response")
+		}
+	}
+	if decodeErr == nil {
+		decodeErr = privacy.ValidateObject(raw)
+	}
+	if decodeErr == nil {
+		decodeErr = json.Unmarshal(raw, &or)
+	}
+	if err := decodeErr; err != nil {
 		writeAnthropicError(w, http.StatusBadGateway, "api_error", "decode local response: "+err.Error())
 		return fmt.Errorf("decode local response: %w", err)
 	}
@@ -414,8 +474,13 @@ func blockingResponse(w http.ResponseWriter, body io.Reader, model string) error
 	for _, tc := range ch.Message.ToolCalls {
 		var input any = map[string]any{}
 		if tc.Function.Arguments != "" {
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
-				input = map[string]any{}
+			err := privacy.ValidateObject([]byte(tc.Function.Arguments))
+			if err == nil {
+				err = json.Unmarshal([]byte(tc.Function.Arguments), &input)
+			}
+			if err != nil {
+				writeAnthropicError(w, http.StatusBadGateway, "api_error", "invalid tool arguments; model must correct the JSON")
+				return errors.New("invalid tool arguments")
 			}
 		}
 		id := tc.ID
@@ -553,8 +618,11 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 		}
 
 		var chunk openaiChunk
+		if err := privacy.ValidateObject([]byte(data)); err != nil {
+			return errors.New("invalid upstream stream event")
+		}
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue
+			return errors.New("invalid upstream stream event")
 		}
 		if chunk.Usage != nil {
 			inTokens = chunk.Usage.PromptTokens
@@ -632,7 +700,7 @@ func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
 	}
 	readErr := scanner.Err()
 	if readErr != nil {
-		log.Printf("stream read: %v", readErr)
+		log.Printf("stream read failed")
 		return fmt.Errorf("stream read: %w", readErr)
 	}
 

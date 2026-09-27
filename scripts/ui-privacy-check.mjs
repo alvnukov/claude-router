@@ -1,0 +1,150 @@
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+
+export async function runPrivacyChecks(browser, base, expect, shots, isWebkit, apiBase, upstreamRequests) {
+  const page=await browser.newPage({viewport:{width:1440,height:1040},locale:'ru-RU',colorScheme:'light'});
+  const errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  await page.addInitScript(()=>{window.__csp=[];document.addEventListener('securitypolicyviolation',e=>window.__csp.push(e.violatedDirective));});
+  const post=async(path,body)=>fetch(base+'/api/ui/privacy'+path,{method:'POST',headers:{'Content-Type':'application/json',Origin:base},body:JSON.stringify(body)});
+  const capture=async(name)=>{if(isWebkit) return; await page.evaluate(()=>{document.activeElement?.blur();window.scrollTo(0,0);});await page.screenshot({path:join(shots,name),fullPage:true});};
+  const initialConfig=(await (await fetch(base+'/api/ui/privacy/config')).json()).config;
+  try {
+    await page.goto(base+'/privacy');
+    await expect(page.getByRole('heading',{name:'Конфиденциальность.'})).toBeVisible();
+    await expect(page.getByText('Маскирование трафика выключено',{exact:true})).toBeVisible();
+    const original=await page.getByLabel('Исходные данные',{exact:true}).inputValue();
+    await page.getByRole('button',{name:'Маскировать →',exact:true}).click();
+    await expect(page.getByLabel('Маскированный текст',{exact:true})).not.toHaveValue(original,{timeout:20000});
+    const masked=await page.getByLabel('Маскированный текст',{exact:true}).inputValue();
+    assert(!masked.includes('Алексей Ветров') && !masked.includes('Demo-Only-Secret') && !masked.includes('10.24.8.12'));
+    await expect(page.getByText('Обратная проверка точна',{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Демаскировать →',exact:true}).click();
+    await expect(page.getByLabel('Восстановленный ответ',{exact:true})).toHaveValue(original);
+    await capture('privacy-lab-light.png');
+    await page.getByRole('button',{name:'Аргументы инструмента ↗',exact:true}).click();
+    await page.getByRole('button',{name:'Маскировать →',exact:true}).click();
+    await expect(page.getByLabel('Ответ модели',{exact:true})).toBeVisible();
+    await page.getByRole('button',{name:'Внести ошибку в секрет',exact:true}).click();
+    await page.getByRole('button',{name:'Демаскировать →',exact:true}).click();
+    await expect(page.getByRole('alert')).toContainText('Восстановление отклонено');
+    await expect(page.getByLabel('Восстановленный ответ',{exact:true})).toHaveCount(0);
+    await page.getByRole('button',{name:'Вернуть точный ответ',exact:true}).click();
+    await page.getByRole('button',{name:'Демаскировать →',exact:true}).click();
+    await expect(page.getByLabel('Восстановленный ответ',{exact:true})).toHaveValue(/Demo-Only-Secret-4821/);
+    await page.getByRole('button',{name:/Профили и назначения/}).click();
+    await page.getByRole('button',{name:'+ Новый профиль',exact:true}).click();
+    await page.getByLabel('Название профиля фильтров',{exact:true}).fill('Инфраструктура');
+    await page.getByText('Словарь, шаблоны и расширенные правила · JSON',{exact:true}).click();
+    for(const badRules of ['{"domains":"example.internal"}','{"filters":{"secret":true,"secret":false}}']) {
+      await page.getByLabel('Правила профиля',{exact:true}).fill(badRules);
+      await page.getByRole('button',{name:'Применить JSON к редактору',exact:true}).click();
+      await expect(page.getByRole('alert')).toContainText('Некорректные правила');
+      await expect(page.getByLabel('Правила профиля',{exact:true})).toHaveValue(badRules);
+    }
+    await page.getByRole('button',{name:'Заполнить демонстрационными правилами',exact:true}).click();
+    await page.getByLabel('Фильтр: IPv4 и подсети',{exact:true}).uncheck();
+    await page.getByLabel('Использовать назначения профилей',{exact:true}).check();
+    const profileId=await page.getByLabel('Профиль по умолчанию',{exact:true}).locator('option').last().getAttribute('value');
+    await page.getByLabel('Профиль по умолчанию',{exact:true}).selectOption(profileId);
+    await page.getByRole('button',{name:'+ Назначение',exact:true}).click();
+    await page.getByLabel('Область назначения 1',{exact:true}).selectOption('model');
+    await page.getByLabel('Получатель назначения 1',{exact:true}).selectOption('local-test/fast-model');
+    await page.getByRole('button',{name:'+ Назначение',exact:true}).click();
+    await page.getByLabel('Область назначения 2',{exact:true}).selectOption('pool');
+    await page.getByLabel('Получатель назначения 2',{exact:true}).selectOption('default/Рабочий');
+    await page.getByRole('button',{name:'+ Назначение',exact:true}).click();
+    await page.getByLabel('Получатель назначения 3',{exact:true}).selectOption('local-test');
+    await page.getByRole('button',{name:'Сохранить профили',exact:true}).click();
+    await expect(page.getByText(/Профили сохранены\. Новые запросы/)).toBeVisible();
+    const config=await (await fetch(base+'/api/ui/privacy/config')).json();
+    await expect(page.getByText('Маскирование подключено к трафику',{exact:true})).toBeVisible();
+    const live=await fetch(apiBase+'/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-5',max_tokens:50,output_config:{effort:'high'},messages:[{role:'user',content:'password=CANARY-live-traffic-789'}]})});
+    assert.equal(live.status,200,await live.text());
+    assert(!JSON.stringify(upstreamRequests.at(-1)).includes('CANARY-live-traffic-789'),'live upstream received original');
+    const liveMetrics=(await (await fetch(base+'/api/ui/privacy')).json()).traffic;
+    assert(liveMetrics.enabled && liveMetrics.protected>0 && liveMetrics.restored>0);
+    assert(!(await (await fetch(base+'/api/ui/requests')).text()).includes('CANARY-live-traffic-789'));
+    assert.equal(config.config.profiles[0].rules.filters.ipv4,false);
+    assert.deepEqual(config.config.bindings.map(b=>b.kind),['model','pool','provider']);
+    await page.getByRole('button',{name:'Проверить профиль ↗',exact:true}).click();
+    await page.getByLabel('Формат',{exact:true}).selectOption('text');
+    await page.getByLabel('Исходные данные',{exact:true}).fill('10.24.8.12\npassword=CANARY-browser-private-1928');
+    await page.getByRole('button',{name:'Маскировать →',exact:true}).click();
+    await expect(page.getByLabel('Маскированный текст',{exact:true})).toHaveValue(/10\.24\.8\.12/);
+    assert(!(await page.getByLabel('Маскированный текст',{exact:true}).inputValue()).includes('CANARY'));
+    await page.getByLabel('Объём проверки',{exact:true}).selectOption('ipv4');
+    await page.getByRole('button',{name:'Маскировать →',exact:true}).click();
+    await expect(page.getByLabel('Маскированный текст',{exact:true})).toBeVisible();
+    assert(!(await page.getByLabel('Маскированный текст',{exact:true}).inputValue()).includes('10.24.8.12'));
+    assert((await page.getByLabel('Маскированный текст',{exact:true}).inputValue()).includes('CANARY'));
+    await page.getByRole('button',{name:'Наблюдение',exact:true}).click();
+    await expect(page.getByRole('heading',{name:'Последние проверки',exact:true})).toBeVisible();
+    await expect.poll(async()=>(await (await fetch(base+'/api/ui/privacy')).json()).rejected).toBeGreaterThan(0);
+    const metrics=JSON.stringify(await (await fetch(base+'/api/ui/privacy')).json());
+    assert(!metrics.includes('CANARY') && !metrics.includes('Demo-Only-Secret'));
+    const storage=await page.evaluate(()=>JSON.stringify({local:{...localStorage},session:{...sessionStorage}}));
+    assert(!storage.includes('CANARY') && !storage.includes('Demo-Only-Secret'));
+    assert(!(await (await fetch(base+'/api/ui/requests')).text()).includes('CANARY'));
+    await capture('privacy-observability-light.png');
+    await page.getByLabel('Цветовая тема',{exact:true}).selectOption('dark');
+    await page.getByRole('button',{name:/Профили и назначения/}).click();
+    await capture('privacy-profiles-dark.png');
+    await page.setViewportSize({width:375,height:812});
+    for(const tab of ['Лаборатория','Профили и назначения','Наблюдение']) {
+      await page.getByRole('button',{name:new RegExp('^'+tab)}).click();
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'privacy mobile overflow: '+tab);
+    }
+    await page.getByRole('button',{name:'Лаборатория',exact:true}).click();
+    await page.getByRole('button',{name:'Очистить данные',exact:true}).click();
+    await expect(page.getByLabel('Исходные данные',{exact:true})).toHaveValue('');
+    await expect.poll(async()=>(await (await fetch(base+'/api/ui/privacy')).json()).active).toBe(0);
+    await page.getByRole('button',{name:'Серверы и доступ ↗',exact:true}).click();
+    await capture('privacy-mobile-dark.png');
+    await page.getByLabel('Исходные данные',{exact:true}).fill('x'.repeat(262145));
+    await expect(page.getByRole('button',{name:'Маскировать →',exact:true})).toBeDisabled();
+    await page.goto(base+'/privacy');
+    await page.getByRole('button',{name:/Профили и назначения/}).click();
+    await expect(page.getByLabel('Название профиля фильтров',{exact:true})).toHaveValue('Инфраструктура');
+    await expect(page.getByLabel('Фильтр: IPv4 и подсети',{exact:true})).not.toBeChecked();
+    await page.getByRole('button',{name:'Дублировать профиль',exact:true}).click();
+    await expect(page.getByLabel('Название профиля фильтров',{exact:true})).toHaveValue('Инфраструктура · копия');
+    await page.getByRole('button',{name:'Удалить профиль',exact:true}).click();
+    let releaseSave, saveReceived, saveDispatched;
+    const gate=new Promise(resolve=>releaseSave=resolve), received=new Promise(resolve=>saveReceived=resolve), dispatched=new Promise(resolve=>saveDispatched=resolve);
+    const holdSave=async route=>{if(route.request().method()==='POST'){saveReceived();await gate;await route.continue();saveDispatched();}else await route.continue();};
+    await page.route('**/api/ui/privacy/config',holdSave);
+    try {
+      await page.getByRole('button',{name:'Сохранить профили',exact:true}).click();
+      await received;
+      await expect(page.getByRole('button',{name:'Отменить удаление',exact:true})).toBeDisabled();
+    } finally { releaseSave(); await dispatched; await page.unroute('**/api/ui/privacy/config',holdSave); }
+    await expect(page.getByRole('button',{name:'Отменить удаление',exact:true})).toBeEnabled();
+    await page.getByRole('button',{name:'Отменить удаление',exact:true}).click();
+    await expect(page.getByLabel('Название профиля фильтров',{exact:true})).toHaveValue('Инфраструктура · копия');
+    await expect(page.getByRole('button',{name:'Сохранить профили',exact:true})).toBeEnabled();
+    assert.equal((await (await fetch(base+'/api/ui/privacy/config')).json()).config.profiles.length,1,'undo was incorrectly persisted');
+    await page.getByRole('button',{name:'Удалить профиль',exact:true}).click();
+    const stale=await post('/config',{revision:'missing',config:config.config});
+    assert.equal(stale.status,409);
+    const latest=await (await fetch(base+'/api/ui/privacy/config')).json();
+    const sentinels=structuredClone(latest.config);
+    for(const id of ['demo','temporary']) sentinels.profiles.push({id,name:'Пользовательский '+id,enabled:false,rules:{}});
+    assert.equal((await post('/config',{revision:latest.revision,config:sentinels})).status,200);
+    await page.goto(base+'/privacy');
+    for(const id of ['demo','temporary']) {
+      await page.getByLabel('Профиль для проверки',{exact:true}).selectOption('profile:'+id);
+      await page.getByLabel('Исходные данные',{exact:true}).fill('10.20.30.40');
+      await page.getByRole('button',{name:'Маскировать →',exact:true}).click();
+      await expect(page.getByLabel('Маскированный текст',{exact:true})).toHaveValue('10.20.30.40');
+      await expect(page.getByRole('region',{name:'Лаборатория фильтров',exact:true}).getByText('Обход фильтра',{exact:true})).toBeVisible();
+    }
+    assert.deepEqual(errors,[],'privacy JavaScript errors');
+    assert.deepEqual(await page.evaluate(()=>window.__csp),[],'privacy CSP violations');
+    console.log('PASS privacy: exact roundtrip, tool rejection/retry, profiles persisted, filter toggles/isolated test, model/pool/provider bindings, content-free metrics/storage, clear, limits, conflict, dark/mobile');
+  } finally {
+    const current=await (await fetch(base+'/api/ui/privacy/config')).json();
+    assert.equal((await post('/config',{revision:current.revision,config:initialConfig})).status,200,'restore privacy configuration for remaining UI scenarios');
+    await page.close();
+  }
+}

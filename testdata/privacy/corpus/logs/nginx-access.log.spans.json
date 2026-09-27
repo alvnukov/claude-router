@@ -1,0 +1,86 @@
+[
+  {
+    "start": 0,
+    "end": 13,
+    "kind": "ipv4",
+    "text": "198.51.100.23"
+  },
+  {
+    "start": 78,
+    "end": 107,
+    "kind": "email",
+    "text": "olga.smirnova@vasilek.example"
+  },
+  {
+    "start": 136,
+    "end": 160,
+    "kind": "host",
+    "text": "billing.romashka.example"
+  },
+  {
+    "start": 237,
+    "end": 248,
+    "kind": "ipv4",
+    "text": "10.113.8.21"
+  },
+  {
+    "start": 254,
+    "end": 273,
+    "kind": "ipv6",
+    "text": "2001:db8:ffff:12::7"
+  },
+  {
+    "start": 379,
+    "end": 390,
+    "kind": "ipv4",
+    "text": "10.113.8.22"
+  },
+  {
+    "start": 396,
+    "end": 407,
+    "kind": "ipv4",
+    "text": "10.113.7.21"
+  },
+  {
+    "start": 511,
+    "end": 520,
+    "kind": "keep",
+    "text": "127.0.0.1"
+  },
+  {
+    "start": 526,
+    "end": 538,
+    "kind": "ipv4",
+    "text": "203.0.113.45"
+  },
+  {
+    "start": 598,
+    "end": 629,
+    "kind": "secret",
+    "text": "FAKEexp0rtT0kenR0mashka9f8e7d6c"
+  },
+  {
+    "start": 680,
+    "end": 690,
+    "kind": "ipv4",
+    "text": "192.0.2.10"
+  },
+  {
+    "start": 692,
+    "end": 704,
+    "kind": "ipv4",
+    "text": "10.113.7.254"
+  },
+  {
+    "start": 715,
+    "end": 728,
+    "kind": "ipv4",
+    "text": "198.51.100.23"
+  },
+  {
+    "start": 820,
+    "end": 844,
+    "kind": "host",
+    "text": "billing.romashka.example"
+  }
+]

@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-api
+  namespace: ⟦org:romashka⟧-prod
+  annotations:
+    owner: ⟦email:ivan.petrov@romashka.example⟧
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: billing-api}
+  template:
+    metadata:
+      labels: {app: billing-api}
+    spec:
+      imagePullSecrets: [{name: regcred}]
+      hostAliases:
+        - ip: "⟦ipv4:10.113.9.5⟧"
+          hostnames: ["⟦host:ldap.corp.romashka.example⟧"]
+      containers:
+        - name: api
+          image: ⟦host:registry.romashka.example⟧/billing/api:⟦keep:2.14.3⟧
+          env:
+            - name: DB_HOST
+              value: ⟦host:db-prod-1.corp.romashka.example⟧
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: billing-db, key: password}}
+            - name: TRUSTED_PROXIES
+              value: "⟦cidr4:10.113.0.0/16⟧,⟦cidr6:2001:db8:4a1::/48⟧"
+          ports: [{containerPort: 8080}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: billing-api
+  namespace: ⟦org:romashka⟧-prod
+spec:
+  type: LoadBalancer
+  clusterIP: ⟦ipv4:10.96.14.22⟧
+  loadBalancerIP: ⟦ipv4:203.0.113.80⟧
+  loadBalancerSourceRanges: ["⟦cidr4:198.51.100.0/24⟧"]
+  ports: [{port: 443, targetPort: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: billing
+  namespace: ⟦org:romashka⟧-prod
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+spec:
+  tls: [{hosts: ["⟦host:billing.romashka.example⟧"], secretName: billing-tls}]
+  rules:
+    - host: ⟦host:billing.romashka.example⟧
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: billing-api, port: {number: 443}}}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: billing-db
+  namespace: ⟦org:romashka⟧-prod
+type: Opaque
+stringData:
+  password: ⟦secret:FAKE-Pa55w0rd-Romashka⟧

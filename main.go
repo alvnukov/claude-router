@@ -19,6 +19,7 @@ import (
 
 	"localrouter/internal/cli"
 	"localrouter/internal/history"
+	"localrouter/internal/privacy"
 )
 
 // respCaptureLimit bounds how much of a response the UI keeps per request.
@@ -375,12 +376,13 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 		}
 		log.Printf("pass %s %s -> %d in %s", r.Method, path, status, time.Since(start).Round(time.Millisecond))
 	})
+	protected := privacyTraffic(mux, cs, hl)
 	if life == nil {
-		return mux
+		return protected
 	}
 	api := http.NewServeMux()
 	api.HandleFunc("/healthz", life.healthz)
-	api.Handle("/", life.guard(mux))
+	api.Handle("/", life.guard(protected))
 	return api
 }
 
@@ -416,6 +418,7 @@ func main() {
 		ReadEnv:      readEnv,
 	}, cli.SystemHost())
 	table := append(append([]cli.Entry{serve}, service...),
+		cli.Entry{Name: "privacy", Run: privacy.Command},
 		cli.Entry{Name: "deploy", Run: func(ctx context.Context, args []string, stdout, _ io.Writer) error {
 			return runDeploy(ctx, args, stdout, newDeployOps)
 		}},

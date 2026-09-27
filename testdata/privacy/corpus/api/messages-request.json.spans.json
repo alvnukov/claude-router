@@ -1,0 +1,146 @@
+[
+  {
+    "start": 152,
+    "end": 160,
+    "kind": "org",
+    "text": "Romashka"
+  },
+  {
+    "start": 202,
+    "end": 215,
+    "kind": "person",
+    "text": "Olga Smirnova"
+  },
+  {
+    "start": 217,
+    "end": 246,
+    "kind": "email",
+    "text": "olga.smirnova@vasilek.example"
+  },
+  {
+    "start": 366,
+    "end": 374,
+    "kind": "host",
+    "text": "gw-msk-2"
+  },
+  {
+    "start": 395,
+    "end": 406,
+    "kind": "ipv4",
+    "text": "10.113.8.21"
+  },
+  {
+    "start": 423,
+    "end": 436,
+    "kind": "cidr4",
+    "text": "10.113.8.0/24"
+  },
+  {
+    "start": 447,
+    "end": 457,
+    "kind": "ipv4",
+    "text": "10.113.8.1"
+  },
+  {
+    "start": 733,
+    "end": 763,
+    "kind": "host",
+    "text": "gw-msk-2.corp.romashka.example"
+  },
+  {
+    "start": 785,
+    "end": 796,
+    "kind": "ipv4",
+    "text": "10.113.8.21"
+  },
+  {
+    "start": 1002,
+    "end": 1004,
+    "kind": "keep",
+    "text": "lo"
+  },
+  {
+    "start": 1034,
+    "end": 1045,
+    "kind": "keep",
+    "text": "127.0.0.1/8"
+  },
+  {
+    "start": 1046,
+    "end": 1053,
+    "kind": "keep",
+    "text": "::1/128"
+  },
+  {
+    "start": 1087,
+    "end": 1100,
+    "kind": "cidr4",
+    "text": "10.113.8.1/24"
+  },
+  {
+    "start": 1101,
+    "end": 1123,
+    "kind": "cidr6",
+    "text": "fd12:3456:789a:8::1/64"
+  },
+  {
+    "start": 1124,
+    "end": 1151,
+    "kind": "cidr6",
+    "text": "fe80::200:5eff:fe00:5301/64"
+  },
+  {
+    "start": 1185,
+    "end": 1198,
+    "kind": "cidr4",
+    "text": "172.28.0.1/24"
+  },
+  {
+    "start": 1205,
+    "end": 1216,
+    "kind": "ipv4",
+    "text": "10.113.8.21"
+  },
+  {
+    "start": 1218,
+    "end": 1229,
+    "kind": "ipv4",
+    "text": "10.113.8.21"
+  },
+  {
+    "start": 1259,
+    "end": 1269,
+    "kind": "ipv4",
+    "text": "10.113.8.1"
+  },
+  {
+    "start": 1376,
+    "end": 1404,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 1426,
+    "end": 1447,
+    "kind": "host",
+    "text": "chat.romashka.example"
+  },
+  {
+    "start": 1514,
+    "end": 1578,
+    "kind": "keep",
+    "text": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  {
+    "start": 1600,
+    "end": 1636,
+    "kind": "keep",
+    "text": "00000000-0000-4000-8000-000000000000"
+  },
+  {
+    "start": 1656,
+    "end": 1692,
+    "kind": "keep",
+    "text": "5b0e8c2a-9f4d-4e1b-a7c3-2d6f8e1b0a94"
+  }
+]

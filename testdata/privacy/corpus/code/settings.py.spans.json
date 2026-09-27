@@ -1,0 +1,86 @@
+[
+  {
+    "start": 27,
+    "end": 35,
+    "kind": "org",
+    "text": "Romashka"
+  },
+  {
+    "start": 62,
+    "end": 122,
+    "kind": "secret",
+    "text": "django-insecure-FAKE-r0mashka-9x!k2@q#w8z$e5v^t7y\u0026u1i*o3p(0)"
+  },
+  {
+    "start": 156,
+    "end": 179,
+    "kind": "host",
+    "text": "portal.romashka.example"
+  },
+  {
+    "start": 183,
+    "end": 205,
+    "kind": "host",
+    "text": ".corp.romashka.example"
+  },
+  {
+    "start": 209,
+    "end": 220,
+    "kind": "ipv4",
+    "text": "10.113.8.30"
+  },
+  {
+    "start": 240,
+    "end": 249,
+    "kind": "keep",
+    "text": "127.0.0.1"
+  },
+  {
+    "start": 352,
+    "end": 383,
+    "kind": "host",
+    "text": "db-prod-2.corp.romashka.example"
+  },
+  {
+    "start": 457,
+    "end": 478,
+    "kind": "secret",
+    "text": "FAKE-portal-Pa55-2026"
+  },
+  {
+    "start": 504,
+    "end": 525,
+    "kind": "host",
+    "text": "smtp.romashka.example"
+  },
+  {
+    "start": 549,
+    "end": 563,
+    "kind": "org",
+    "text": "Ромашка"
+  },
+  {
+    "start": 565,
+    "end": 588,
+    "kind": "email",
+    "text": "portal@romashka.example"
+  },
+  {
+    "start": 603,
+    "end": 614,
+    "kind": "person",
+    "text": "Ivan Petrov"
+  },
+  {
+    "start": 618,
+    "end": 646,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 672,
+    "end": 887,
+    "kind": "secret",
+    "text": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAAFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\nRkFLRSBrZXkgZm9yIHRlc3RzIG9ubHksIG5vdCBhIHJlYWwga2V5LCBSb21hc2hrYQAAAA==\n-----END OPENSSH PRIVATE KEY-----"
+  }
+]

@@ -1,0 +1,32 @@
+Return-Path: <⟦email:netops@romashka.example⟧>
+Received: from ⟦host:mx1.romashka.example⟧ (⟦host:mx1.romashka.example⟧ [⟦ipv4:203.0.113.25⟧])
+	by ⟦host:mail.vasilek.example⟧ with ESMTPS id 4XkQ2r1FzpzJ7
+	for <⟦email:olga.smirnova@vasilek.example⟧>; Thu, 25 Sep 2026 10:14:02 +0300
+Received: from ⟦host:ws-petrov.corp.romashka.example⟧ ([⟦ipv6:2001:db8:4a1:20::1f⟧])
+	by ⟦host:mx1.romashka.example⟧ with ESMTPSA; Thu, 25 Sep 2026 10:13:58 +0300
+From: ⟦person:Иван Петров⟧ <⟦email:ivan.petrov@romashka.example⟧>
+To: ⟦person:Ольга Смирнова⟧ <⟦email:olga.smirnova@vasilek.example⟧>
+Cc: ⟦email:netops@romashka.example⟧
+Subject: =?UTF-8?B?0JjQvdGG0LjQtNC10L3RgjogQkdQ?= (инцидент 2026-0925-03)
+Message-ID: <20260925101358.4f1c2a9e@⟦host:ws-petrov.corp.romashka.example⟧>
+Content-Type: text/plain; charset=utf-8
+
+⟦person:Ольга⟧, добрый день.
+
+Сегодня в 03:10 у ⟦org:Ромашки⟧ упала BGP-сессия с вашим пиром ⟦ipv4:198.51.100.1⟧
+(AS64500 ↔ AS64511). Наш анонс ⟦cidr4:203.0.113.0/24⟧ пропал у вас примерно на 40 минут,
+IPv6-префикс ⟦cidr6:2001:db8:4a1::/48⟧ остался. Трассировка с ⟦host:gw-msk-2⟧:
+
+  1  ⟦ipv4:10.113.7.1⟧   0.4 ms
+  2  ⟦ipv4:192.168.77.1⟧   1.1 ms
+  3  ⟦host:border1.romashka.example⟧ (⟦ipv4:203.0.113.1⟧)  2.0 ms
+  4  * * *
+
+Мы поменяли MTU на ⟦host:border1⟧ до 1500, после этого сессия поднялась.
+Если нужно, пришлю дамп с интерфейса (MAC пира ⟦mac:00:00:5E:00:53:7F⟧).
+
+Контакт дежурного: ⟦email:noc@romashka.example⟧, ⟦phone:+7 000 000-00-00⟧.
+
+--
+⟦person:Иван Петров⟧, отдел сетей ООО «⟦org:Ромашка⟧»
+⟦address:г. Цветогорск, ул. Вымышленная, д. 7, офис 12⟧

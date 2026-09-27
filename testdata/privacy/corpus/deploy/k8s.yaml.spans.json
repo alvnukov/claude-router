@@ -1,0 +1,110 @@
+[
+  {
+    "start": 80,
+    "end": 88,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 120,
+    "end": 148,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 362,
+    "end": 372,
+    "kind": "ipv4",
+    "text": "10.113.9.5"
+  },
+  {
+    "start": 397,
+    "end": 423,
+    "kind": "host",
+    "text": "ldap.corp.romashka.example"
+  },
+  {
+    "start": 481,
+    "end": 506,
+    "kind": "host",
+    "text": "registry.romashka.example"
+  },
+  {
+    "start": 519,
+    "end": 525,
+    "kind": "keep",
+    "text": "2.14.3"
+  },
+  {
+    "start": 590,
+    "end": 621,
+    "kind": "host",
+    "text": "db-prod-1.corp.romashka.example"
+  },
+  {
+    "start": 787,
+    "end": 800,
+    "kind": "cidr4",
+    "text": "10.113.0.0/16"
+  },
+  {
+    "start": 801,
+    "end": 818,
+    "kind": "cidr6",
+    "text": "2001:db8:4a1::/48"
+  },
+  {
+    "start": 937,
+    "end": 945,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 991,
+    "end": 1002,
+    "kind": "ipv4",
+    "text": "10.96.14.22"
+  },
+  {
+    "start": 1021,
+    "end": 1033,
+    "kind": "ipv4",
+    "text": "203.0.113.80"
+  },
+  {
+    "start": 1064,
+    "end": 1079,
+    "kind": "cidr4",
+    "text": "198.51.100.0/24"
+  },
+  {
+    "start": 1213,
+    "end": 1221,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 1314,
+    "end": 1338,
+    "kind": "host",
+    "text": "billing.romashka.example"
+  },
+  {
+    "start": 1389,
+    "end": 1413,
+    "kind": "host",
+    "text": "billing.romashka.example"
+  },
+  {
+    "start": 1617,
+    "end": 1625,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 1668,
+    "end": 1690,
+    "kind": "secret",
+    "text": "FAKE-Pa55w0rd-Romashka"
+  }
+]

@@ -1,0 +1,10 @@
+127.0.0.1	localhost
+::1	localhost ip6-localhost
+
+# Ромашка: prod
+10.113.7.21	gw-msk-2.corp.romashka.example gw-msk-2
+10.113.8.11	db-prod-1.corp.romashka.example db-prod-1
+10.113.8.12	db-prod-2.corp.romashka.example db-prod-2
+2001:db8:4a1:8::13	db-prod-3.corp.romashka.example
+172.20.44.5	registry.romashka.example
+198.51.100.7	partner-api.vasilek.example

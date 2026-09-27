@@ -1,0 +1,4 @@
+Frequently Occurring Surnames from the 2010 Census. United States Census Bureau.
+United States government work, public domain.
+Source: https://www.census.gov/topics/population/genealogy/data/2010_surnames.html
+Distribution: https://github.com/cfpb/proxy-methodology/blob/master/input_files/Names_2010Census.csv

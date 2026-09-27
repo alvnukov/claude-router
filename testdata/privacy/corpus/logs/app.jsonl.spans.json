@@ -1,0 +1,134 @@
+[
+  {
+    "start": 7,
+    "end": 31,
+    "kind": "keep",
+    "text": "2026-09-25T07:03:11.482Z"
+  },
+  {
+    "start": 74,
+    "end": 110,
+    "kind": "keep",
+    "text": "5b0e8c2a-9f4d-4e1b-a7c3-2d6f8e1b0a94"
+  },
+  {
+    "start": 122,
+    "end": 135,
+    "kind": "ipv4",
+    "text": "198.51.100.23"
+  },
+  {
+    "start": 151,
+    "end": 175,
+    "kind": "host",
+    "text": "billing.romashka.example"
+  },
+  {
+    "start": 185,
+    "end": 214,
+    "kind": "email",
+    "text": "olga.smirnova@vasilek.example"
+  },
+  {
+    "start": 237,
+    "end": 261,
+    "kind": "keep",
+    "text": "2026-09-25T07:03:12.019Z"
+  },
+  {
+    "start": 309,
+    "end": 345,
+    "kind": "keep",
+    "text": "0c7d1e5f-3a2b-4c8d-9e6f-1a2b3c4d5e6f"
+  },
+  {
+    "start": 358,
+    "end": 377,
+    "kind": "ipv6",
+    "text": "2001:db8:ffff:12::7"
+  },
+  {
+    "start": 394,
+    "end": 416,
+    "kind": "email",
+    "text": "admin@romashka.example"
+  },
+  {
+    "start": 450,
+    "end": 474,
+    "kind": "keep",
+    "text": "2026-09-25T07:03:13.700Z"
+  },
+  {
+    "start": 508,
+    "end": 519,
+    "kind": "ipv4",
+    "text": "10.113.8.40"
+  },
+  {
+    "start": 583,
+    "end": 612,
+    "kind": "host",
+    "text": "worker-7.k8s.romashka.example"
+  },
+  {
+    "start": 622,
+    "end": 646,
+    "kind": "keep",
+    "text": "2026-09-25T07:03:14.001Z"
+  },
+  {
+    "start": 678,
+    "end": 709,
+    "kind": "host",
+    "text": "db-prod-2.corp.romashka.example"
+  },
+  {
+    "start": 713,
+    "end": 724,
+    "kind": "ipv4",
+    "text": "10.113.0.53"
+  },
+  {
+    "start": 763,
+    "end": 787,
+    "kind": "keep",
+    "text": "2026-09-25T07:03:15.250Z"
+  },
+  {
+    "start": 844,
+    "end": 854,
+    "kind": "ipv4",
+    "text": "10.113.7.1"
+  },
+  {
+    "start": 866,
+    "end": 883,
+    "kind": "mac",
+    "text": "00-00-5E-00-53-2A"
+  },
+  {
+    "start": 913,
+    "end": 937,
+    "kind": "keep",
+    "text": "2026-09-25T07:03:16.900Z"
+  },
+  {
+    "start": 979,
+    "end": 986,
+    "kind": "keep",
+    "text": "v2.14.3"
+  },
+  {
+    "start": 994,
+    "end": 1002,
+    "kind": "keep",
+    "text": "go1.26.7"
+  },
+  {
+    "start": 1014,
+    "end": 1026,
+    "kind": "keep",
+    "text": "4f1c2a9e0b7d"
+  }
+]

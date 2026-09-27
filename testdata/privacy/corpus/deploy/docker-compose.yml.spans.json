@@ -1,0 +1,152 @@
+[
+  {
+    "start": 6,
+    "end": 14,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 52,
+    "end": 77,
+    "kind": "host",
+    "text": "registry.romashka.example"
+  },
+  {
+    "start": 90,
+    "end": 96,
+    "kind": "keep",
+    "text": "2.14.3"
+  },
+  {
+    "start": 104,
+    "end": 167,
+    "kind": "keep",
+    "text": "4f1c2a9e0b7d3c5a8e6f1b2d4c7a9e0f3b5d8c1a2e4f6b8d0c3a5e7f9b1d2c4"
+  },
+  {
+    "start": 224,
+    "end": 246,
+    "kind": "secret",
+    "text": "FAKE-Pa55w0rd-Romashka"
+  },
+  {
+    "start": 247,
+    "end": 278,
+    "kind": "host",
+    "text": "db-prod-1.corp.romashka.example"
+  },
+  {
+    "start": 326,
+    "end": 337,
+    "kind": "ipv4",
+    "text": "10.113.8.40"
+  },
+  {
+    "start": 360,
+    "end": 392,
+    "kind": "email",
+    "text": "billing-noreply@romashka.example"
+  },
+  {
+    "start": 419,
+    "end": 451,
+    "kind": "secret",
+    "text": "0123456789abcdefFAKE0123456789ab"
+  },
+  {
+    "start": 452,
+    "end": 475,
+    "kind": "host",
+    "text": "sentry.romashka.example"
+  },
+  {
+    "start": 503,
+    "end": 530,
+    "kind": "host",
+    "text": "partner-api.vasilek.example"
+  },
+  {
+    "start": 549,
+    "end": 556,
+    "kind": "keep",
+    "text": "0.0.0.0"
+  },
+  {
+    "start": 588,
+    "end": 614,
+    "kind": "host",
+    "text": "ldap.corp.romashka.example"
+  },
+  {
+    "start": 615,
+    "end": 625,
+    "kind": "ipv4",
+    "text": "10.113.9.5"
+  },
+  {
+    "start": 636,
+    "end": 643,
+    "kind": "host",
+    "text": "kafka-1"
+  },
+  {
+    "start": 644,
+    "end": 662,
+    "kind": "ipv6",
+    "text": "2001:db8:4a1:9::31"
+  },
+  {
+    "start": 715,
+    "end": 726,
+    "kind": "ipv4",
+    "text": "172.28.5.10"
+  },
+  {
+    "start": 749,
+    "end": 774,
+    "kind": "host",
+    "text": "registry.romashka.example"
+  },
+  {
+    "start": 790,
+    "end": 796,
+    "kind": "keep",
+    "text": "2.14.3"
+  },
+  {
+    "start": 839,
+    "end": 859,
+    "kind": "secret",
+    "text": "AKIAIOSFODNN7EXAMPLE"
+  },
+  {
+    "start": 889,
+    "end": 929,
+    "kind": "secret",
+    "text": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+  },
+  {
+    "start": 947,
+    "end": 955,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 1036,
+    "end": 1049,
+    "kind": "cidr4",
+    "text": "172.28.5.0/24"
+  },
+  {
+    "start": 1069,
+    "end": 1079,
+    "kind": "ipv4",
+    "text": "172.28.5.1"
+  },
+  {
+    "start": 1098,
+    "end": 1119,
+    "kind": "cidr6",
+    "text": "fd12:3456:789a:5::/64"
+  }
+]

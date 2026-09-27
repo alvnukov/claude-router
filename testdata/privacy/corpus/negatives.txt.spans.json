@@ -1,0 +1,266 @@
+[
+  {
+    "start": 92,
+    "end": 98,
+    "kind": "keep",
+    "text": "1.26.7"
+  },
+  {
+    "start": 108,
+    "end": 114,
+    "kind": "keep",
+    "text": "v2.4.1"
+  },
+  {
+    "start": 130,
+    "end": 145,
+    "kind": "keep",
+    "text": "10.0.19045.3693"
+  },
+  {
+    "start": 154,
+    "end": 170,
+    "kind": "keep",
+    "text": "6.8.0-45-generic"
+  },
+  {
+    "start": 189,
+    "end": 206,
+    "kind": "keep",
+    "text": "1.3.6.1.2.1.1.5.0"
+  },
+  {
+    "start": 219,
+    "end": 232,
+    "kind": "keep",
+    "text": "1.3.6.1.4.1.9"
+  },
+  {
+    "start": 245,
+    "end": 270,
+    "kind": "keep",
+    "text": "2026-09-25T10:14:02+03:00"
+  },
+  {
+    "start": 275,
+    "end": 287,
+    "kind": "keep",
+    "text": "10:14:02.482"
+  },
+  {
+    "start": 298,
+    "end": 305,
+    "kind": "keep",
+    "text": "1:30:00"
+  },
+  {
+    "start": 312,
+    "end": 348,
+    "kind": "keep",
+    "text": "0c7d1e5f-3a2b-4c8d-9e6f-1a2b3c4d5e6f"
+  },
+  {
+    "start": 354,
+    "end": 366,
+    "kind": "keep",
+    "text": "4f1c2a9e0b7d"
+  },
+  {
+    "start": 375,
+    "end": 446,
+    "kind": "keep",
+    "text": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+  },
+  {
+    "start": 454,
+    "end": 459,
+    "kind": "keep",
+    "text": ":8080"
+  },
+  {
+    "start": 464,
+    "end": 478,
+    "kind": "keep",
+    "text": "127.0.0.1:8787"
+  },
+  {
+    "start": 487,
+    "end": 495,
+    "kind": "keep",
+    "text": "[::]:443"
+  },
+  {
+    "start": 497,
+    "end": 507,
+    "kind": "keep",
+    "text": "0.0.0.0:22"
+  },
+  {
+    "start": 515,
+    "end": 528,
+    "kind": "keep",
+    "text": "255.255.255.0"
+  },
+  {
+    "start": 539,
+    "end": 548,
+    "kind": "keep",
+    "text": "0.0.0.255"
+  },
+  {
+    "start": 564,
+    "end": 573,
+    "kind": "keep",
+    "text": "0.0.0.0/0"
+  },
+  {
+    "start": 578,
+    "end": 582,
+    "kind": "keep",
+    "text": "::/0"
+  },
+  {
+    "start": 593,
+    "end": 602,
+    "kind": "keep",
+    "text": "127.0.0.1"
+  },
+  {
+    "start": 604,
+    "end": 607,
+    "kind": "keep",
+    "text": "::1"
+  },
+  {
+    "start": 609,
+    "end": 618,
+    "kind": "keep",
+    "text": "localhost"
+  },
+  {
+    "start": 630,
+    "end": 647,
+    "kind": "keep",
+    "text": "ff:ff:ff:ff:ff:ff"
+  },
+  {
+    "start": 659,
+    "end": 670,
+    "kind": "keep",
+    "text": "std::vector"
+  },
+  {
+    "start": 682,
+    "end": 697,
+    "kind": "keep",
+    "text": "std::io::Result"
+  },
+  {
+    "start": 716,
+    "end": 726,
+    "kind": "keep",
+    "text": "dead::beef"
+  },
+  {
+    "start": 746,
+    "end": 750,
+    "kind": "keep",
+    "text": "a::b"
+  },
+  {
+    "start": 758,
+    "end": 762,
+    "kind": "keep",
+    "text": "16:9"
+  },
+  {
+    "start": 770,
+    "end": 778,
+    "kind": "keep",
+    "text": "12:34:56"
+  },
+  {
+    "start": 788,
+    "end": 793,
+    "kind": "keep",
+    "text": "3.2.1"
+  },
+  {
+    "start": 819,
+    "end": 831,
+    "kind": "keep",
+    "text": "2026-0925-03"
+  },
+  {
+    "start": 844,
+    "end": 851,
+    "kind": "keep",
+    "text": "main.go"
+  },
+  {
+    "start": 853,
+    "end": 864,
+    "kind": "keep",
+    "text": "values.yaml"
+  },
+  {
+    "start": 866,
+    "end": 875,
+    "kind": "keep",
+    "text": "README.md"
+  },
+  {
+    "start": 889,
+    "end": 898,
+    "kind": "keep",
+    "text": "client.Do"
+  },
+  {
+    "start": 907,
+    "end": 919,
+    "kind": "keep",
+    "text": "os.path.join"
+  },
+  {
+    "start": 1007,
+    "end": 1023,
+    "kind": "keep",
+    "text": "user@example.com"
+  },
+  {
+    "start": 1044,
+    "end": 1051,
+    "kind": "keep",
+    "text": "x.x.x.x"
+  },
+  {
+    "start": 1053,
+    "end": 1057,
+    "kind": "keep",
+    "text": "\u003cIP\u003e"
+  },
+  {
+    "start": 1059,
+    "end": 1064,
+    "kind": "keep",
+    "text": "$HOST"
+  },
+  {
+    "start": 1171,
+    "end": 1193,
+    "kind": "keep",
+    "text": "вера в успех"
+  },
+  {
+    "start": 1195,
+    "end": 1216,
+    "kind": "keep",
+    "text": "роза ветров"
+  },
+  {
+    "start": 1247,
+    "end": 1263,
+    "kind": "keep",
+    "text": "aGVsbG8gd29ybGQ="
+  }
+]

@@ -1,0 +1,6 @@
+{"ts":"2026-09-25T07:03:11.482Z","level":"info","msg":"request","req_id":"5b0e8c2a-9f4d-4e1b-a7c3-2d6f8e1b0a94","remote":"198.51.100.23:51344","host":"billing.romashka.example","user":"olga.smirnova@vasilek.example","status":200}
+{"ts":"2026-09-25T07:03:12.019Z","level":"warn","msg":"login failed","req_id":"0c7d1e5f-3a2b-4c8d-9e6f-1a2b3c4d5e6f","remote":"[2001:db8:ffff:12::7]:40022","user":"admin@romashka.example","reason":"bad password"}
+{"ts":"2026-09-25T07:03:13.700Z","level":"error","msg":"dial tcp 10.113.8.40:6379: connect: connection refused","component":"cache","node":"worker-7.k8s.romashka.example"}
+{"ts":"2026-09-25T07:03:14.001Z","level":"error","msg":"lookup db-prod-2.corp.romashka.example on 10.113.0.53:53: no such host","attempt":3}
+{"ts":"2026-09-25T07:03:15.250Z","level":"debug","msg":"arp","iface":"eno1","neighbor":"10.113.7.1","lladdr":"00-00-5E-00-53-2A","state":"REACHABLE"}
+{"ts":"2026-09-25T07:03:16.900Z","level":"info","msg":"build","version":"v2.14.3","go":"go1.26.7","commit":"4f1c2a9e0b7d"}

@@ -1,0 +1,104 @@
+[
+  {
+    "start": 29,
+    "end": 37,
+    "kind": "host",
+    "text": "gw-msk-2"
+  },
+  {
+    "start": 39,
+    "end": 53,
+    "kind": "org",
+    "text": "Ромашка"
+  },
+  {
+    "start": 151,
+    "end": 160,
+    "kind": "keep",
+    "text": "127.0.0.1"
+  },
+  {
+    "start": 207,
+    "end": 218,
+    "kind": "ipv4",
+    "text": "10.113.7.21"
+  },
+  {
+    "start": 231,
+    "end": 244,
+    "kind": "keep",
+    "text": "255.255.255.0"
+  },
+  {
+    "start": 257,
+    "end": 267,
+    "kind": "ipv4",
+    "text": "10.113.7.1"
+  },
+  {
+    "start": 288,
+    "end": 305,
+    "kind": "mac",
+    "text": "00:00:5e:00:53:01"
+  },
+  {
+    "start": 326,
+    "end": 337,
+    "kind": "ipv4",
+    "text": "10.113.0.53"
+  },
+  {
+    "start": 338,
+    "end": 345,
+    "kind": "public",
+    "text": "8.8.8.8"
+  },
+  {
+    "start": 361,
+    "end": 382,
+    "kind": "host",
+    "text": "corp.romashka.example"
+  },
+  {
+    "start": 403,
+    "end": 416,
+    "kind": "cidr4",
+    "text": "172.20.0.0/14"
+  },
+  {
+    "start": 421,
+    "end": 433,
+    "kind": "ipv4",
+    "text": "10.113.7.254"
+  },
+  {
+    "start": 480,
+    "end": 498,
+    "kind": "ipv6",
+    "text": "2001:db8:4a1:7::21"
+  },
+  {
+    "start": 526,
+    "end": 550,
+    "kind": "ipv6",
+    "text": "fe80::200:5eff:fe00:5301"
+  },
+  {
+    "start": 605,
+    "end": 621,
+    "kind": "cidr4",
+    "text": "192.168.77.10/27"
+  },
+  {
+    "start": 672,
+    "end": 681,
+    "kind": "keep",
+    "text": "0.0.0.0/0"
+  },
+  {
+    "start": 686,
+    "end": 698,
+    "kind": "ipv4",
+    "text": "192.168.77.1"
+  }
+]

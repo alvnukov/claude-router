@@ -1,0 +1,5 @@
+id,full_name,department,email,phone,office,workstation
+1017,Петров Иван Сергеевич,Сети,ivan.petrov@romashka.example,+7 000 000-00-01,"Цветогорск, ул. Вымышленная, 7, офис 12",ws-petrov.corp.romashka.example
+1018,Кузнецова Анна Павловна,Бухгалтерия,a.kuznetsova@romashka.example,+7 000 000-00-02,"Цветогорск, ул. Вымышленная, 7, офис 3",10.113.30.18
+1019,John Doe-Fictional,IT,j.doe@romashka.example,+1 555 0100,"12 Placeholder Street, Springfield, EX 00000",0000.5e00.5321
+1020,Смирнова Ольга,Василёк (подрядчик),olga.smirnova@vasilek.example,,"Цветогорск, Садовая ул., 15",

@@ -1,0 +1,33 @@
+name: ⟦org:romashka⟧-billing
+
+services:
+  api:
+    image: ⟦host:registry.romashka.example⟧/billing/api:⟦keep:2.14.3⟧@sha256:⟦keep:4f1c2a9e0b7d3c5a8e6f1b2d4c7a9e0f3b5d8c1a2e4f6b8d0c3a5e7f9b1d2c4⟧
+    environment:
+      DATABASE_URL: postgres://billing:⟦secret:FAKE-Pa55w0rd-Romashka⟧@⟦host:db-prod-1.corp.romashka.example⟧:5432/billing?sslmode=require
+      REDIS_ADDR: ⟦ipv4:10.113.8.40⟧:6379
+      SMTP_FROM: ⟦email:billing-noreply@romashka.example⟧
+      SENTRY_DSN: https://⟦secret:0123456789abcdefFAKE0123456789ab⟧@⟦host:sentry.romashka.example⟧/12
+      UPSTREAM: https://⟦host:partner-api.vasilek.example⟧/v2/
+      LISTEN: ⟦keep:0.0.0.0⟧:8080
+    extra_hosts:
+      - "⟦host:ldap.corp.romashka.example⟧:⟦ipv4:10.113.9.5⟧"
+      - "⟦host:kafka-1⟧:⟦ipv6:2001:db8:4a1:9::31⟧"
+    networks:
+      backend:
+        ipv4_address: ⟦ipv4:172.28.5.10⟧
+
+  worker:
+    image: ⟦host:registry.romashka.example⟧/billing/worker:⟦keep:2.14.3⟧
+    environment:
+      AWS_ACCESS_KEY_ID: ⟦secret:AKIAIOSFODNN7EXAMPLE⟧
+      AWS_SECRET_ACCESS_KEY: ⟦secret:wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY⟧
+      S3_BUCKET: ⟦org:romashka⟧-billing-archive
+
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: ⟦cidr4:172.28.5.0/24⟧
+          gateway: ⟦ipv4:172.28.5.1⟧
+        - subnet: ⟦cidr6:fd12:3456:789a:5::/64⟧

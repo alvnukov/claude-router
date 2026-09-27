@@ -1,0 +1,194 @@
+[
+  {
+    "start": 14,
+    "end": 37,
+    "kind": "email",
+    "text": "netops@romashka.example"
+  },
+  {
+    "start": 54,
+    "end": 74,
+    "kind": "host",
+    "text": "mx1.romashka.example"
+  },
+  {
+    "start": 76,
+    "end": 96,
+    "kind": "host",
+    "text": "mx1.romashka.example"
+  },
+  {
+    "start": 98,
+    "end": 110,
+    "kind": "ipv4",
+    "text": "203.0.113.25"
+  },
+  {
+    "start": 117,
+    "end": 137,
+    "kind": "host",
+    "text": "mail.vasilek.example"
+  },
+  {
+    "start": 173,
+    "end": 202,
+    "kind": "email",
+    "text": "olga.smirnova@vasilek.example"
+  },
+  {
+    "start": 252,
+    "end": 283,
+    "kind": "host",
+    "text": "ws-petrov.corp.romashka.example"
+  },
+  {
+    "start": 286,
+    "end": 305,
+    "kind": "ipv6",
+    "text": "2001:db8:4a1:20::1f"
+  },
+  {
+    "start": 312,
+    "end": 332,
+    "kind": "host",
+    "text": "mx1.romashka.example"
+  },
+  {
+    "start": 385,
+    "end": 406,
+    "kind": "person",
+    "text": "Иван Петров"
+  },
+  {
+    "start": 408,
+    "end": 436,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 442,
+    "end": 469,
+    "kind": "person",
+    "text": "Ольга Смирнова"
+  },
+  {
+    "start": 471,
+    "end": 500,
+    "kind": "email",
+    "text": "olga.smirnova@vasilek.example"
+  },
+  {
+    "start": 506,
+    "end": 529,
+    "kind": "email",
+    "text": "netops@romashka.example"
+  },
+  {
+    "start": 649,
+    "end": 680,
+    "kind": "host",
+    "text": "ws-petrov.corp.romashka.example"
+  },
+  {
+    "start": 723,
+    "end": 733,
+    "kind": "person",
+    "text": "Ольга"
+  },
+  {
+    "start": 786,
+    "end": 800,
+    "kind": "org",
+    "text": "Ромашки"
+  },
+  {
+    "start": 854,
+    "end": 866,
+    "kind": "ipv4",
+    "text": "198.51.100.1"
+  },
+  {
+    "start": 908,
+    "end": 922,
+    "kind": "cidr4",
+    "text": "203.0.113.0/24"
+  },
+  {
+    "start": 1003,
+    "end": 1020,
+    "kind": "cidr6",
+    "text": "2001:db8:4a1::/48"
+  },
+  {
+    "start": 1063,
+    "end": 1071,
+    "kind": "host",
+    "text": "gw-msk-2"
+  },
+  {
+    "start": 1079,
+    "end": 1089,
+    "kind": "ipv4",
+    "text": "10.113.7.1"
+  },
+  {
+    "start": 1104,
+    "end": 1116,
+    "kind": "ipv4",
+    "text": "192.168.77.1"
+  },
+  {
+    "start": 1131,
+    "end": 1155,
+    "kind": "host",
+    "text": "border1.romashka.example"
+  },
+  {
+    "start": 1157,
+    "end": 1168,
+    "kind": "ipv4",
+    "text": "203.0.113.1"
+  },
+  {
+    "start": 1221,
+    "end": 1228,
+    "kind": "host",
+    "text": "border1"
+  },
+  {
+    "start": 1376,
+    "end": 1393,
+    "kind": "mac",
+    "text": "00:00:5E:00:53:7F"
+  },
+  {
+    "start": 1432,
+    "end": 1452,
+    "kind": "email",
+    "text": "noc@romashka.example"
+  },
+  {
+    "start": 1454,
+    "end": 1470,
+    "kind": "phone",
+    "text": "+7 000 000-00-00"
+  },
+  {
+    "start": 1476,
+    "end": 1497,
+    "kind": "person",
+    "text": "Иван Петров"
+  },
+  {
+    "start": 1530,
+    "end": 1544,
+    "kind": "org",
+    "text": "Ромашка"
+  },
+  {
+    "start": 1547,
+    "end": 1621,
+    "kind": "address",
+    "text": "г. Цветогорск, ул. Вымышленная, д. 7, офис 12"
+  }
+]

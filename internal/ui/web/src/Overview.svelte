@@ -44,6 +44,7 @@
     {data.interception.error}
   </p>{/if}
 <PatchBay {data} />
+<section class="panel"><div class="spread"><div><h2>Конфиденциальность</h2><p class="muted">Настройте профили защиты, проверьте преобразования в лаборатории и наблюдайте за применением к трафику.</p></div><a class="button" href="#/privacy">Проверить фильтр ↗</a></div></section>
 <section>
   <div class="section-head">
     <h2>Сессии</h2>

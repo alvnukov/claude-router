@@ -1,0 +1,122 @@
+[
+  {
+    "start": 0,
+    "end": 9,
+    "kind": "keep",
+    "text": "127.0.0.1"
+  },
+  {
+    "start": 10,
+    "end": 19,
+    "kind": "keep",
+    "text": "localhost"
+  },
+  {
+    "start": 20,
+    "end": 23,
+    "kind": "keep",
+    "text": "::1"
+  },
+  {
+    "start": 24,
+    "end": 33,
+    "kind": "keep",
+    "text": "localhost"
+  },
+  {
+    "start": 51,
+    "end": 65,
+    "kind": "org",
+    "text": "Ромашка"
+  },
+  {
+    "start": 72,
+    "end": 83,
+    "kind": "ipv4",
+    "text": "10.113.7.21"
+  },
+  {
+    "start": 84,
+    "end": 114,
+    "kind": "host",
+    "text": "gw-msk-2.corp.romashka.example"
+  },
+  {
+    "start": 115,
+    "end": 123,
+    "kind": "host",
+    "text": "gw-msk-2"
+  },
+  {
+    "start": 124,
+    "end": 135,
+    "kind": "ipv4",
+    "text": "10.113.8.11"
+  },
+  {
+    "start": 136,
+    "end": 167,
+    "kind": "host",
+    "text": "db-prod-1.corp.romashka.example"
+  },
+  {
+    "start": 168,
+    "end": 177,
+    "kind": "host",
+    "text": "db-prod-1"
+  },
+  {
+    "start": 178,
+    "end": 189,
+    "kind": "ipv4",
+    "text": "10.113.8.12"
+  },
+  {
+    "start": 190,
+    "end": 221,
+    "kind": "host",
+    "text": "db-prod-2.corp.romashka.example"
+  },
+  {
+    "start": 222,
+    "end": 231,
+    "kind": "host",
+    "text": "db-prod-2"
+  },
+  {
+    "start": 232,
+    "end": 250,
+    "kind": "ipv6",
+    "text": "2001:db8:4a1:8::13"
+  },
+  {
+    "start": 251,
+    "end": 282,
+    "kind": "host",
+    "text": "db-prod-3.corp.romashka.example"
+  },
+  {
+    "start": 283,
+    "end": 294,
+    "kind": "ipv4",
+    "text": "172.20.44.5"
+  },
+  {
+    "start": 295,
+    "end": 320,
+    "kind": "host",
+    "text": "registry.romashka.example"
+  },
+  {
+    "start": 321,
+    "end": 333,
+    "kind": "ipv4",
+    "text": "198.51.100.7"
+  },
+  {
+    "start": 334,
+    "end": 361,
+    "kind": "host",
+    "text": "partner-api.vasilek.example"
+  }
+]

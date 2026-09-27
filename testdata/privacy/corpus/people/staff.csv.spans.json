@@ -1,0 +1,140 @@
+[
+  {
+    "start": 55,
+    "end": 59,
+    "kind": "keep",
+    "text": "1017"
+  },
+  {
+    "start": 60,
+    "end": 100,
+    "kind": "person",
+    "text": "Петров Иван Сергеевич"
+  },
+  {
+    "start": 110,
+    "end": 138,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 139,
+    "end": 155,
+    "kind": "phone",
+    "text": "+7 000 000-00-01"
+  },
+  {
+    "start": 157,
+    "end": 223,
+    "kind": "address",
+    "text": "Цветогорск, ул. Вымышленная, 7, офис 12"
+  },
+  {
+    "start": 225,
+    "end": 256,
+    "kind": "host",
+    "text": "ws-petrov.corp.romashka.example"
+  },
+  {
+    "start": 257,
+    "end": 261,
+    "kind": "keep",
+    "text": "1018"
+  },
+  {
+    "start": 262,
+    "end": 306,
+    "kind": "person",
+    "text": "Кузнецова Анна Павловна"
+  },
+  {
+    "start": 330,
+    "end": 359,
+    "kind": "email",
+    "text": "a.kuznetsova@romashka.example"
+  },
+  {
+    "start": 360,
+    "end": 376,
+    "kind": "phone",
+    "text": "+7 000 000-00-02"
+  },
+  {
+    "start": 378,
+    "end": 443,
+    "kind": "address",
+    "text": "Цветогорск, ул. Вымышленная, 7, офис 3"
+  },
+  {
+    "start": 445,
+    "end": 457,
+    "kind": "ipv4",
+    "text": "10.113.30.18"
+  },
+  {
+    "start": 458,
+    "end": 462,
+    "kind": "keep",
+    "text": "1019"
+  },
+  {
+    "start": 463,
+    "end": 481,
+    "kind": "person",
+    "text": "John Doe-Fictional"
+  },
+  {
+    "start": 485,
+    "end": 507,
+    "kind": "email",
+    "text": "j.doe@romashka.example"
+  },
+  {
+    "start": 508,
+    "end": 519,
+    "kind": "phone",
+    "text": "+1 555 0100"
+  },
+  {
+    "start": 521,
+    "end": 565,
+    "kind": "address",
+    "text": "12 Placeholder Street, Springfield, EX 00000"
+  },
+  {
+    "start": 567,
+    "end": 581,
+    "kind": "mac",
+    "text": "0000.5e00.5321"
+  },
+  {
+    "start": 582,
+    "end": 586,
+    "kind": "keep",
+    "text": "1020"
+  },
+  {
+    "start": 587,
+    "end": 614,
+    "kind": "person",
+    "text": "Смирнова Ольга"
+  },
+  {
+    "start": 615,
+    "end": 629,
+    "kind": "org",
+    "text": "Василёк"
+  },
+  {
+    "start": 651,
+    "end": 680,
+    "kind": "email",
+    "text": "olga.smirnova@vasilek.example"
+  },
+  {
+    "start": 683,
+    "end": 729,
+    "kind": "address",
+    "text": "Цветогорск, Садовая ул., 15"
+  }
+]

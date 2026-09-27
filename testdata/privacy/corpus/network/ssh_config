@@ -1,0 +1,16 @@
+Host bastion
+    HostName bastion.dc2.romashka.example
+    User deploy
+    Port 2222
+    IdentityFile ~/.ssh/id_ed25519_romashka
+
+Host db-prod-*
+    ProxyJump bastion
+    User postgres
+
+Host db-prod-1
+    HostName 10.113.8.11
+
+Host legacy-ftp
+    HostName 203.0.113.200
+    HostKeyAlgorithms +ssh-rsa

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"localrouter/internal/privacy"
 )
 
 type codexRequest struct {
@@ -141,7 +143,7 @@ func readCodexEvents(body io.Reader) (codexResult, error) {
 			continue
 		}
 		var e codexEvent
-		if err := json.Unmarshal(data, &e); err != nil {
+		if err := decodeCodexEvent(data, &e); err != nil {
 			return out, fmt.Errorf("decode Codex event: %w", err)
 		}
 		switch e.Type {
@@ -222,7 +224,7 @@ func writeCodexChatStream(w io.Writer, body io.Reader) error {
 			continue
 		}
 		var e codexEvent
-		if err := json.Unmarshal(data, &e); err != nil {
+		if err := decodeCodexEvent(data, &e); err != nil {
 			return fmt.Errorf("decode Codex event: %w", err)
 		}
 		switch e.Type {
@@ -310,4 +312,11 @@ func writeCodexChatStream(w io.Writer, body io.Reader) error {
 		return errors.New("Codex stream ended before response.completed")
 	}
 	return nil
+}
+
+func decodeCodexEvent(data []byte, event *codexEvent) error {
+	if err := privacy.ValidateObject(data); err != nil {
+		return errors.New("invalid Codex event")
+	}
+	return json.Unmarshal(data, event)
 }

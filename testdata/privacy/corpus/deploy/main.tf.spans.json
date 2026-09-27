@@ -1,0 +1,68 @@
+[
+  {
+    "start": 20,
+    "end": 28,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 58,
+    "end": 71,
+    "kind": "cidr4",
+    "text": "10.120.0.0/16"
+  },
+  {
+    "start": 123,
+    "end": 145,
+    "kind": "email",
+    "text": "infra@romashka.example"
+  },
+  {
+    "start": 218,
+    "end": 226,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 253,
+    "end": 266,
+    "kind": "cidr4",
+    "text": "10.120.1.0/24"
+  },
+  {
+    "start": 291,
+    "end": 312,
+    "kind": "cidr6",
+    "text": "2001:db8:4a1:a00::/64"
+  },
+  {
+    "start": 539,
+    "end": 553,
+    "kind": "cidr4",
+    "text": "203.0.113.0/26"
+  },
+  {
+    "start": 557,
+    "end": 573,
+    "kind": "cidr4",
+    "text": "198.51.100.64/28"
+  },
+  {
+    "start": 781,
+    "end": 790,
+    "kind": "keep",
+    "text": "0.0.0.0/0"
+  },
+  {
+    "start": 930,
+    "end": 950,
+    "kind": "host",
+    "text": "api.romashka.example"
+  },
+  {
+    "start": 998,
+    "end": 1010,
+    "kind": "ipv4",
+    "text": "203.0.113.80"
+  }
+]

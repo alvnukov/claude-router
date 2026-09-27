@@ -1,0 +1,140 @@
+[
+  {
+    "start": 89,
+    "end": 103,
+    "kind": "org",
+    "text": "Ромашки"
+  },
+  {
+    "start": 105,
+    "end": 151,
+    "kind": "address",
+    "text": "Цветогорск, Садовая ул., 15"
+  },
+  {
+    "start": 169,
+    "end": 183,
+    "kind": "person",
+    "text": "Петрова"
+  },
+  {
+    "start": 234,
+    "end": 252,
+    "kind": "person",
+    "text": "Смирновой"
+  },
+  {
+    "start": 415,
+    "end": 432,
+    "kind": "mac",
+    "text": "00:00:5e:00:53:91"
+  },
+  {
+    "start": 437,
+    "end": 454,
+    "kind": "keep",
+    "text": "ff:ff:ff:ff:ff:ff"
+  },
+  {
+    "start": 464,
+    "end": 479,
+    "kind": "cidr4",
+    "text": "169.254.12.7/16"
+  },
+  {
+    "start": 484,
+    "end": 499,
+    "kind": "keep",
+    "text": "169.254.255.255"
+  },
+  {
+    "start": 528,
+    "end": 555,
+    "kind": "cidr6",
+    "text": "fe80::200:5eff:fe00:5391/64"
+  },
+  {
+    "start": 600,
+    "end": 630,
+    "kind": "host",
+    "text": "intranet.corp.romashka.example"
+  },
+  {
+    "start": 651,
+    "end": 681,
+    "kind": "host",
+    "text": "intranet.corp.romashka.example"
+  },
+  {
+    "start": 683,
+    "end": 694,
+    "kind": "ipv4",
+    "text": "10.113.20.5"
+  },
+  {
+    "start": 730,
+    "end": 759,
+    "kind": "host",
+    "text": "ap-3f.office.romashka.example"
+  },
+  {
+    "start": 761,
+    "end": 773,
+    "kind": "ipv4",
+    "text": "192.168.77.1"
+  },
+  {
+    "start": 789,
+    "end": 799,
+    "kind": "ipv4",
+    "text": "172.20.0.1"
+  },
+  {
+    "start": 853,
+    "end": 865,
+    "kind": "ipv4",
+    "text": "192.168.77.2"
+  },
+  {
+    "start": 874,
+    "end": 888,
+    "kind": "ipv4",
+    "text": "192.168.77.100"
+  },
+  {
+    "start": 891,
+    "end": 905,
+    "kind": "ipv4",
+    "text": "192.168.77.199"
+  },
+  {
+    "start": 960,
+    "end": 985,
+    "kind": "person",
+    "text": "Ивану Петрову"
+  },
+  {
+    "start": 991,
+    "end": 1019,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 1042,
+    "end": 1060,
+    "kind": "phone",
+    "text": "+7 (000) 123-45-67"
+  },
+  {
+    "start": 1106,
+    "end": 1146,
+    "kind": "org",
+    "text": "ООО «Василёк Телеком»"
+  },
+  {
+    "start": 1155,
+    "end": 1165,
+    "kind": "keep",
+    "text": "0000000000"
+  }
+]

@@ -1,0 +1,5 @@
+id,full_name,department,email,phone,office,workstation
+⟦keep:1017⟧,⟦person:Петров Иван Сергеевич⟧,Сети,⟦email:ivan.petrov@romashka.example⟧,⟦phone:+7 000 000-00-01⟧,"⟦address:Цветогорск, ул. Вымышленная, 7, офис 12⟧",⟦host:ws-petrov.corp.romashka.example⟧
+⟦keep:1018⟧,⟦person:Кузнецова Анна Павловна⟧,Бухгалтерия,⟦email:a.kuznetsova@romashka.example⟧,⟦phone:+7 000 000-00-02⟧,"⟦address:Цветогорск, ул. Вымышленная, 7, офис 3⟧",⟦ipv4:10.113.30.18⟧
+⟦keep:1019⟧,⟦person:John Doe-Fictional⟧,IT,⟦email:j.doe@romashka.example⟧,⟦phone:+1 555 0100⟧,"⟦address:12 Placeholder Street, Springfield, EX 00000⟧",⟦mac:0000.5e00.5321⟧
+⟦keep:1020⟧,⟦person:Смирнова Ольга⟧,⟦org:Василёк⟧ (подрядчик),⟦email:olga.smirnova@vasilek.example⟧,,"⟦address:Цветогорск, Садовая ул., 15⟧",

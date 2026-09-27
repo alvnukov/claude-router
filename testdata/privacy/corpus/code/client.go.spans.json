@@ -1,0 +1,74 @@
+[
+  {
+    "start": 80,
+    "end": 87,
+    "kind": "org",
+    "text": "Vasilek"
+  },
+  {
+    "start": 115,
+    "end": 150,
+    "kind": "host",
+    "text": "partner-api.staging.vasilek.example"
+  },
+  {
+    "start": 185,
+    "end": 212,
+    "kind": "host",
+    "text": "partner-api.vasilek.example"
+  },
+  {
+    "start": 234,
+    "end": 274,
+    "kind": "secret",
+    "text": "ghp_FAKEr0mashkaT0kenD0N0tUseXXXXXXXXXXX"
+  },
+  {
+    "start": 349,
+    "end": 366,
+    "kind": "secret",
+    "text": "FAKE/FAKE/INVALID"
+  },
+  {
+    "start": 425,
+    "end": 438,
+    "kind": "cidr4",
+    "text": "10.113.0.0/16"
+  },
+  {
+    "start": 466,
+    "end": 483,
+    "kind": "cidr6",
+    "text": "2001:db8:4a1::/48"
+  },
+  {
+    "start": 511,
+    "end": 522,
+    "kind": "keep",
+    "text": "127.0.0.0/8"
+  },
+  {
+    "start": 577,
+    "end": 588,
+    "kind": "ipv4",
+    "text": "10.113.0.53"
+  },
+  {
+    "start": 756,
+    "end": 837,
+    "kind": "secret",
+    "text": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyb21hc2hrYS10ZXN0In0.RkFLRXNpZ25hdHVyZUZBS0VGQUtF"
+  },
+  {
+    "start": 869,
+    "end": 877,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 886,
+    "end": 892,
+    "kind": "keep",
+    "text": "2.14.3"
+  }
+]

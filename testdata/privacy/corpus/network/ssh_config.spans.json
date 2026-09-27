@@ -1,0 +1,38 @@
+[
+  {
+    "start": 26,
+    "end": 54,
+    "kind": "host",
+    "text": "bastion.dc2.romashka.example"
+  },
+  {
+    "start": 64,
+    "end": 70,
+    "kind": "keep",
+    "text": "deploy"
+  },
+  {
+    "start": 120,
+    "end": 128,
+    "kind": "org",
+    "text": "romashka"
+  },
+  {
+    "start": 191,
+    "end": 200,
+    "kind": "host",
+    "text": "db-prod-1"
+  },
+  {
+    "start": 214,
+    "end": 225,
+    "kind": "ipv4",
+    "text": "10.113.8.11"
+  },
+  {
+    "start": 256,
+    "end": 269,
+    "kind": "ipv4",
+    "text": "203.0.113.200"
+  }
+]

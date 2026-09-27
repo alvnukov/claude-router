@@ -1,0 +1,17 @@
+Near misses. Nothing here is sensitive; every marked value must pass through unchanged.
+
+Go ⟦keep:1.26.7⟧, release ⟦keep:v2.4.1⟧, Windows build ⟦keep:10.0.19045.3693⟧, kernel ⟦keep:6.8.0-45-generic⟧.
+SNMP sysName OID ⟦keep:1.3.6.1.2.1.1.5.0⟧, enterprise ⟦keep:1.3.6.1.4.1.9⟧.
+Timestamps ⟦keep:2026-09-25T10:14:02+03:00⟧ and ⟦keep:10:14:02.482⟧, duration ⟦keep:1:30:00⟧.
+UUID ⟦keep:0c7d1e5f-3a2b-4c8d-9e6f-1a2b3c4d5e6f⟧, git ⟦keep:4f1c2a9e0b7d⟧.
+Digest ⟦keep:sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae⟧.
+Ports ⟦keep::8080⟧ and ⟦keep:127.0.0.1:8787⟧, listen ⟦keep:[::]:443⟧, ⟦keep:0.0.0.0:22⟧.
+Masks ⟦keep:255.255.255.0⟧, wildcard ⟦keep:0.0.0.255⟧, default route ⟦keep:0.0.0.0/0⟧ and ⟦keep:::/0⟧.
+Loopback ⟦keep:127.0.0.1⟧, ⟦keep:::1⟧, ⟦keep:localhost⟧; broadcast ⟦keep:ff:ff:ff:ff:ff:ff⟧.
+C++ scope ⟦keep:std::vector⟧, Rust path ⟦keep:std::io::Result⟧, IPv6-looking hex ⟦keep:dead::beef⟧ in a comment about ⟦keep:a::b⟧.
+Ratio ⟦keep:16:9⟧, clock ⟦keep:12:34:56⟧, chapter ⟦keep:3.2.1⟧, phone-like order number ⟦keep:2026-0925-03⟧.
+File names ⟦keep:main.go⟧, ⟦keep:values.yaml⟧, ⟦keep:README.md⟧; method call ⟦keep:client.Do⟧; Python ⟦keep:os.path.join⟧.
+Addresses in words: "ten dot one" and "the 10-net" say nothing concrete.
+Placeholders ⟦keep:user@example.com⟧ from documentation, ⟦keep:x.x.x.x⟧, ⟦keep:<IP>⟧, ⟦keep:$HOST⟧.
+Ordinary words that look like names: Роза, Лилия and Вера are flowers or common nouns here: ⟦keep:вера в успех⟧, ⟦keep:роза ветров⟧.
+Base64 that is not a secret: ⟦keep:aGVsbG8gd29ybGQ=⟧ (hello world).

@@ -1,0 +1,74 @@
+[
+  {
+    "start": 67,
+    "end": 81,
+    "kind": "org",
+    "text": "Ромашки"
+  },
+  {
+    "start": 120,
+    "end": 148,
+    "kind": "host",
+    "text": "bastion.dc2.romashka.example"
+  },
+  {
+    "start": 156,
+    "end": 167,
+    "kind": "ipv4",
+    "text": "10.113.8.21"
+  },
+  {
+    "start": 168,
+    "end": 179,
+    "kind": "ipv4",
+    "text": "10.113.8.22"
+  },
+  {
+    "start": 180,
+    "end": 198,
+    "kind": "ipv6",
+    "text": "2001:db8:4a1:8::23"
+  },
+  {
+    "start": 225,
+    "end": 333,
+    "kind": "secret",
+    "text": "sk-ant-api03-FAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEXXX"
+  },
+  {
+    "start": 528,
+    "end": 555,
+    "kind": "host",
+    "text": "deploy-log.romashka.example"
+  },
+  {
+    "start": 598,
+    "end": 637,
+    "kind": "secret",
+    "text": "FAKEdepl0yT0kenR0mashka0123456789abcdef"
+  },
+  {
+    "start": 681,
+    "end": 709,
+    "kind": "email",
+    "text": "ivan.petrov@romashka.example"
+  },
+  {
+    "start": 747,
+    "end": 754,
+    "kind": "public",
+    "text": "1.1.1.1"
+  },
+  {
+    "start": 819,
+    "end": 829,
+    "kind": "public",
+    "text": "github.com"
+  },
+  {
+    "start": 830,
+    "end": 838,
+    "kind": "org",
+    "text": "romashka"
+  }
+]

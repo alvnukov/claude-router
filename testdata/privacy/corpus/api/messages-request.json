@@ -1,0 +1,31 @@
+{
+  "model": "claude-sonnet-5",
+  "max_tokens": 8192,
+  "stream": true,
+  "system": [
+    {"type": "text", "text": "You are a network assistant for the Romashka operations team. The on-call engineer is Olga Smirnova (olga.smirnova@vasilek.example)."}
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Почему gw-msk-2 не пингует 10.113.8.21? Подсеть 10.113.8.0/24, шлюз 10.113.8.1."}
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {"type": "text", "text": "Посмотрю адреса на интерфейсах."},
+        {"type": "tool_use", "id": "toolu_01FAKE0000000000000000", "name": "Bash", "input": {"command": "ssh gw-msk-2.corp.romashka.example ip -br a && ping -c1 10.113.8.21", "description": "Show interfaces on the gateway"}}
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {"type": "tool_result", "tool_use_id": "toolu_01FAKE0000000000000000", "content": "lo               UNKNOWN        127.0.0.1/8 ::1/128\neno1             UP             10.113.8.1/24 fd12:3456:789a:8::1/64 fe80::200:5eff:fe00:5301/64\nwg0              UNKNOWN        172.28.0.1/24\nPING 10.113.8.21 (10.113.8.21) 56(84) bytes of data.\nFrom 10.113.8.1 icmp_seq=1 Destination Host Unreachable\n"},
+        {"type": "text", "text": "Владелец узла <ivan.petrov@romashka.example>, пиши ему в chat.romashka.example."}
+      ]
+    }
+  ],
+  "metadata": {"user_id": "{\"device_id\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"account_uuid\":\"00000000-0000-4000-8000-000000000000\",\"session_id\":\"5b0e8c2a-9f4d-4e1b-a7c3-2d6f8e1b0a94\"}"}
+}

@@ -6,6 +6,7 @@
   import Requests from "./Requests.svelte";
   import Routes from "./Routes.svelte";
   import Connections from "./Connections.svelte";
+  import Privacy from "./Privacy.svelte";
   let data = $state<UIState | null>(null);
   let screen = $state("overview");
   let offline = $state(false);
@@ -20,6 +21,7 @@
     ["requests", "Запросы"],
     ["routes", "Маршруты"],
     ["connections", "Подключения"],
+    ["privacy", "Конфиденциальность"],
   ];
   function route() {
     const value = location.hash.replace(/^#\//, "").split("?")[0];
@@ -194,7 +196,7 @@
         {data}
       />{:else if screen === "connections"}<Connections
         {data}
-      />{:else}<Overview {data} />{/if}{:else}<div class="empty">
+      />{:else if screen === "privacy"}<Privacy {data}/>{:else}<Overview {data} />{/if}{:else}<div class="empty">
       <h1>Роутер недоступен</h1>
       <p>Проверьте, что процесс запущен, и повторите подключение.</p>
       <button class="primary" onclick={() => void refresh()}>Повторить</button>

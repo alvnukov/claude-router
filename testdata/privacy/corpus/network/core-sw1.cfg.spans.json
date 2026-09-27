@@ -1,0 +1,116 @@
+[
+  {
+    "start": 65,
+    "end": 88,
+    "kind": "email",
+    "text": "netops@romashka.example"
+  },
+  {
+    "start": 111,
+    "end": 140,
+    "kind": "host",
+    "text": "core-sw1.dc2.romashka.example"
+  },
+  {
+    "start": 159,
+    "end": 210,
+    "kind": "secret",
+    "text": "$9$FAKEr0mashkaH4sh$Q2hhbmdlTWVGYWtlSGFzaEZvclRlc3Q"
+  },
+  {
+    "start": 248,
+    "end": 292,
+    "kind": "secret",
+    "text": "$9$FAKEs4ltV4lue$Tm90QVJlYWxQYXNzd29yZEhhc2g"
+  },
+  {
+    "start": 336,
+    "end": 344,
+    "kind": "host",
+    "text": "gw-msk-2"
+  },
+  {
+    "start": 357,
+    "end": 369,
+    "kind": "ipv4",
+    "text": "192.168.77.2"
+  },
+  {
+    "start": 370,
+    "end": 385,
+    "kind": "keep",
+    "text": "255.255.255.224"
+  },
+  {
+    "start": 400,
+    "end": 422,
+    "kind": "cidr6",
+    "text": "2001:db8:4a1:310::2/64"
+  },
+  {
+    "start": 473,
+    "end": 485,
+    "kind": "host",
+    "text": "ap-floor3-07"
+  },
+  {
+    "start": 490,
+    "end": 504,
+    "kind": "mac",
+    "text": "0000.5e00.5344"
+  },
+  {
+    "start": 579,
+    "end": 589,
+    "kind": "ipv4",
+    "text": "10.113.7.0"
+  },
+  {
+    "start": 590,
+    "end": 599,
+    "kind": "keep",
+    "text": "0.0.0.255"
+  },
+  {
+    "start": 627,
+    "end": 639,
+    "kind": "ipv4",
+    "text": "203.0.113.45"
+  },
+  {
+    "start": 699,
+    "end": 720,
+    "kind": "secret",
+    "text": "R0mashkaFAKEcommunity"
+  },
+  {
+    "start": 749,
+    "end": 760,
+    "kind": "ipv4",
+    "text": "10.113.7.30"
+  },
+  {
+    "start": 772,
+    "end": 793,
+    "kind": "secret",
+    "text": "R0mashkaFAKEcommunity"
+  },
+  {
+    "start": 807,
+    "end": 825,
+    "kind": "ipv6",
+    "text": "2001:db8:4a1:7::40"
+  },
+  {
+    "start": 837,
+    "end": 858,
+    "kind": "host",
+    "text": "ntp1.romashka.example"
+  },
+  {
+    "start": 870,
+    "end": 884,
+    "kind": "public",
+    "text": "0.pool.ntp.org"
+  }
+]

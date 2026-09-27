@@ -23,6 +23,7 @@ import (
 
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
+	"localrouter/internal/privacy"
 	webui "localrouter/internal/ui"
 )
 
@@ -33,6 +34,8 @@ var uiFS embed.FS
 // (loopback by default) so nothing about it touches the API path, and it has
 // no auth: everything it shows is the traffic of the user running it.
 type uiServer struct {
+	privacyOnce    sync.Once
+	privacyLab     *privacy.Lab
 	codexUsage     codexUsageCache // template: per-connection caches copy its client
 	usageMu        sync.Mutex
 	codexUsages    map[string]*codexUsageCache // by name + "\x00" + auth id

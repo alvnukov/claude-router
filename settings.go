@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"localrouter/internal/privacy"
 )
 
 // configStore holds the live config behind a lock so the UI can change it while
@@ -20,6 +22,8 @@ import (
 // failover) and providers.json for local providers and models. Both are
 // rewritten in place by the UI and re-read on a hand edit.
 type configStore struct {
+	privacyOnce  sync.Once
+	privacy      *privacy.Runtime
 	mu           sync.RWMutex
 	c            config
 	envPath      string
