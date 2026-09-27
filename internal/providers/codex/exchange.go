@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -131,6 +132,17 @@ func sampling(ctx context.Context, payload []byte, headers http.Header, send Sen
 		}
 		_ = json.Unmarshal(data, &body)
 		err := upstreamError(body.Error.Code, response.StatusCode)
+		err.HTTPStatus = response.StatusCode
+		var retryValues []string
+		for key, values := range response.Header {
+			if strings.EqualFold(key, "Retry-After") {
+				retryValues = append(retryValues, values...)
+			}
+		}
+		if len(retryValues) == 1 && len(retryValues[0]) <= 128 {
+			err.retryHeader = retryValues[0]
+			err.observedAt = time.Now()
+		}
 		if seconds, parseErr := strconv.Atoi(response.Header.Get("Retry-After")); parseErr == nil && seconds > 0 {
 			err.RetryAfter = time.Duration(seconds) * time.Second
 		} else if reset, parseErr := http.ParseTime(response.Header.Get("Retry-After")); parseErr == nil {

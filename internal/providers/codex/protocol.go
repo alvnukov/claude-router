@@ -14,10 +14,13 @@ const maxProtocolBytes = 16 << 20
 // ProtocolError distinguishes terminal request errors from transient upstream
 // failures. Its public text never includes upstream bodies or credentials.
 type ProtocolError struct {
-	Code       string
-	Status     int
-	Retryable  bool
-	RetryAfter time.Duration
+	Code        string
+	Status      int
+	Retryable   bool
+	RetryAfter  time.Duration
+	HTTPStatus  int
+	retryHeader string
+	observedAt  time.Time
 }
 
 func (e *ProtocolError) Error() string { return "Codex: " + e.Code }

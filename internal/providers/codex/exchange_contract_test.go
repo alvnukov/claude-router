@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -129,6 +130,64 @@ func TestExchangeBoundsInvalidContinuations(t *testing.T) {
 			_, err := Exchange(context.Background(), contractRequest(contractUser), send, Options{MaxContinuations: 2}, nil)
 			if err == nil || calls != tt.wantCalls {
 				t.Fatalf("bad continuation accepted or looped: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestExchangePreservesOriginalHTTPStatusAfterCodeMapping(t *testing.T) {
+	send := func(context.Context, []byte, http.Header) (*http.Response, error) {
+		response := contractHTTPResponse(`{"error":{"code":"rate_limit_exceeded"}}`, "")
+		response.StatusCode = http.StatusServiceUnavailable
+		return response, nil
+	}
+	_, err := Exchange(context.Background(), contractRequest(contractUser), send, Options{}, nil)
+	var protocol *ProtocolError
+	if !errors.As(err, &protocol) || protocol.Status != http.StatusTooManyRequests {
+		t.Fatalf("mapped status = %v; want 429", err)
+	}
+	original := reflect.ValueOf(protocol).Elem().FieldByName("HTTPStatus")
+	if !original.IsValid() || original.Int() != http.StatusServiceUnavailable {
+		t.Fatalf("original HTTP status lost after mapping: %+v", protocol)
+	}
+}
+
+func TestExchangeSSEFailureDoesNotInventOriginalHTTPStatus(t *testing.T) {
+	for _, event := range []string{
+		`{"type":"error","error":{"code":"rate_limit_exceeded"}}`,
+		`{"type":"response.failed","response":{"id":"r","error":{"code":"insufficient_quota"}}}`,
+	} {
+		t.Run(event, func(t *testing.T) {
+			send := func(context.Context, []byte, http.Header) (*http.Response, error) {
+				return contractHTTPResponse(contractSSE(event), ""), nil
+			}
+			_, err := Exchange(context.Background(), contractRequest(contractUser), send, Options{}, nil)
+			var protocol *ProtocolError
+			if !errors.As(err, &protocol) || protocol.Status != http.StatusTooManyRequests || protocol.HTTPStatus != 0 {
+				t.Fatalf("SSE error gained original HTTP status: %+v", protocol)
+			}
+		})
+	}
+}
+
+func TestExchangeRejectsDuplicateAndOversizedPublicRetryHeaders(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		headers http.Header
+	}{
+		{"duplicate canonical", http.Header{"Retry-After": {"7", "8"}}},
+		{"duplicate case variants", http.Header{"Retry-After": {"7"}, "retry-after": {"8"}}},
+		{"oversized", http.Header{"Retry-After": {strings.Repeat("1", 129)}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			send := func(context.Context, []byte, http.Header) (*http.Response, error) {
+				response := contractHTTPResponse(`{"error":{"code":"rate_limit_exceeded"}}`, "")
+				response.StatusCode, response.Header = http.StatusTooManyRequests, tt.headers
+				return response, nil
+			}
+			_, err := Exchange(context.Background(), contractRequest(contractUser), send, Options{}, nil)
+			if got := ClassifyFailure(err, http.StatusTooManyRequests); got.RetryAfter != 0 {
+				t.Fatalf("ambiguous public Retry-After = %s", got.RetryAfter)
 			}
 		})
 	}
