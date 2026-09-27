@@ -70,8 +70,8 @@ run_step ui-check 'npm run check' "$web" npm run check
 run_step ui-browser 'npm run test:browser' "$web" npm run test:browser
 run_step ui-usage 'npm run test:usage' "$web" npm run test:usage
 
-# Node is already required by the browser suite. Parse only actions, packages
-# and allowlisted test names; never copy the Output field into a public file.
+# Node is already required by the browser suite. Inspect raw actions and
+# packages privately; publish only allowlisted checks, never the Output field.
 "${clean_env[@]}" RR_REPORT="$report" RR_COMMIT_SHA="$commit_sha" RR_GO_VERSION="$go_version" node <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
@@ -116,56 +116,94 @@ const testIDs = {
     ['regression', 'TestRegressionHistoryOracleRejectsExtraSimilarModel'],
     ['regression', 'TestRegressionUIOracleRejectsForeignMutation'],
   ],
+  'regression-full-path': [
+    ['regression', 'TestRegressionRouteMatrix'],
+    ['regression', 'TestRegressionEffortMappingAndAbsentMapping'],
+    ['regression', 'TestRegressionCloudPassthroughAndDisabled'],
+    ['regression', 'TestRegressionProfileSwitchAndRestart'],
+    ['regression', 'TestRegressionPoolAttemptOrderAndAffinity'],
+    ['regression', 'TestRegressionMessageShapes'],
+    ['regression', 'TestRegressionLocalOpenAIWire'],
+    ['regression', 'TestRegressionSSEEventsAndFinal'],
+    ['regression', 'TestRegressionStreamFailurePhases'],
+    ['regression', 'TestRegressionCancelNoRetry'],
+    ['regression', 'TestRegressionConfigCrashSafeRestart'],
+    ['regression', 'TestRegressionProfileCloneAndDeletionGuards'],
+    ['regression', 'TestRegressionAccountIdentityAndNoCrossCall'],
+    ['regression', 'TestRegressionInterceptionRoundTrip'],
+    ['regression', 'TestRegressionInterceptionRejectsExternalConflict'],
+    ['regression', 'TestRegressionCatalogRollback'],
+    ['regression', 'TestRegressionHistoryDetailAndExactFilter'],
+    ['regression', 'TestRegressionHistoryToolOnlyDetail'],
+    ['regression', 'TestRegressionHistoryLiteralJSONText'],
+    ['regression', 'TestRegressionUIDetailCapsLongResponse'],
+    ['regression', 'TestRegressionUIHostOriginEventsAndCap'],
+    ['regression', 'TestRegressionLimitsAccountFreshness'],
+    ['regression', 'TestRegressionHealthAndCancel'],
+    ['regression', 'TestRegressionAccountIdentityAndNoCrossCall/RR-ACC-01-02-03/auth-refresh'],
+    ['regression', 'TestRegressionCatalogRollback/RR-CAT-01/refresh'],
+    ['regression', 'TestRegressionLimitsAccountFreshness/RR-LIM-01/account-window'],
+    ['regression', 'TestRegressionHealthAndCancel/RR-HEA-01/recovery'],
+  ],
 };
 const goStep = steps.find(step => step.id === 'go-test');
+const required = [...new Set(Object.values(testIDs).flat().map(([pkg, name]) => `${pkg}:${name}`))];
 const packages = new Map();
 const tests = new Map();
-let complete = goStep?.status === 'pass';
+let complete = goStep?.command === 'go test -count=1 -json ./...' &&
+  goStep.status === 'pass' && goStep.exit_code === 0;
+let duplicate = false;
 try {
   const source = fs.readFileSync(path.join(reportDir, 'private/go-test.jsonl'), 'utf8');
   if (!source.endsWith('\n')) complete = false;
-  for (const line of source.trimEnd().split('\n')) {
+  const lines = (source.endsWith('\n') ? source.slice(0, -1) : source).split('\n');
+  for (const line of lines) {
     const event = JSON.parse(line);
-    if (!event.Package || !event.Action) throw Error('missing Go test event fields');
-    const namedObserver = event.Test === 'TestPrivacyHTTPProtectedObserver/SyntheticProtectedObserver';
-    if (event.Test && (!event.Test.includes('/') || namedObserver) &&
-        ['run', 'pass', 'fail', 'skip'].includes(event.Action)) {
+    if (typeof event.Package !== 'string' || !event.Package || !event.Action) {
+      throw Error('missing Go test event fields');
+    }
+    if (event.Test && ['run', 'pass', 'fail', 'skip'].includes(event.Action)) {
       const key = `${event.Package}:${event.Test}`;
-      const current = tests.get(key) || {runs: 0, terminal: null};
-      if (event.Action === 'run') current.runs++;
-      else if (current.terminal !== null) complete = false;
-      else current.terminal = event.Action;
+      const current = tests.get(key) || {runs: 0, terminal: null, duplicate: false};
+      if (event.Action === 'run') {
+        current.runs++;
+        if (current.runs > 1 || current.terminal !== null) current.duplicate = duplicate = true;
+      } else if (current.terminal !== null) {
+        current.duplicate = duplicate = true;
+      } else {
+        current.terminal = event.Action;
+      }
       tests.set(key, current);
     }
     if (!event.Test && ['pass', 'fail', 'skip'].includes(event.Action)) {
-      if (packages.has(event.Package)) complete = false;
+      if (packages.has(event.Package)) duplicate = true;
       packages.set(event.Package, event.Action);
     }
   }
-  if (packages.size === 0) complete = false;
+  if (packages.size === 0 || duplicate) complete = false;
 } catch {
   complete = false;
 }
 function verdict(names) {
-  if (!complete) return 'blocked';
+  if (duplicate) return 'fail';
+  let blocked = !complete;
   for (const [pkg, name] of names) {
-    const matching = [...tests].filter(([key]) => key.endsWith(`/internal/${pkg}:${name}`));
-    if (matching.length !== 1) return 'blocked';
-    const [key, result] = matching[0];
-    if (packages.get(key.split(':')[0]) !== 'pass') return 'blocked';
-    if (result.runs !== 1 || result.terminal !== 'pass') return 'fail';
+    const key = `localrouter/internal/${pkg}:${name}`;
+    const result = tests.get(key);
+    if (result?.duplicate || result?.terminal === 'fail') return 'fail';
+    if (!result || result.runs !== 1 || result.terminal !== 'pass' ||
+        packages.get(`localrouter/internal/${pkg}`) !== 'pass') blocked = true;
   }
-  return 'pass';
+  return blocked ? 'blocked' : 'pass';
 }
-const checks = [...new Set(Object.values(testIDs).flat().map(([pkg, name]) => `${pkg}:${name}`))]
-  .map(entry => {
-    const [pkg, name] = entry.split(':');
-    const matching = [...tests].filter(([key]) => key.endsWith(`/internal/${pkg}:${name}`));
-    const [key, result] = matching.length === 1 ? matching[0] : [null, null];
-    return {package: `internal/${pkg}`, test: name, runs: result?.runs ?? 0,
-      terminal: result?.terminal ?? null, package_status: key ? packages.get(key.split(':')[0]) ?? null : null};
-  });
-const summary = {schema_version: 1, complete, commit_sha: process.env.RR_COMMIT_SHA,
+const checks = required.map(entry => {
+  const [pkg, name] = entry.split(':');
+  const result = tests.get(`localrouter/internal/${pkg}:${name}`);
+  return {package: `internal/${pkg}`, test: name, runs: result?.runs ?? 0,
+    terminal: result?.terminal ?? null,
+    package_status: packages.get(`localrouter/internal/${pkg}`) ?? null};
+});
+const summary = {schema_version: 2, complete, commit_sha: process.env.RR_COMMIT_SHA,
   checks, verdicts: Object.fromEntries(Object.entries(testIDs).map(([id, names]) => [id, verdict(names)]))};
 const summaryName = 'go-test-summary.json';
 fs.writeFileSync(path.join(reportDir, summaryName), JSON.stringify(summary) + '\n', {mode: 0o600});
@@ -178,11 +216,12 @@ const byID = Object.fromEntries(steps.map(step => [step.id, step]));
 const status = steps.every(step => step.status === 'pass') ? 'pass' :
   steps.some(step => step.status === 'fail') ? 'fail' : 'blocked';
 const productIDs = ['go-build', 'go-test', 'go-race', 'go-vet', 'ui-check', 'ui-browser', 'ui-usage',
-  'privacy-lab', 'privacy-p1-a', 'privacy-p1-b', 'privacy-p1-explicit-exception'];
+  'privacy-lab', 'privacy-p1-a', 'privacy-p1-b', 'privacy-p1-explicit-exception',
+  'oracle-sensitivity', 'regression-full-path'];
 const productStatus = productIDs.every(id => byID[id]?.status === 'pass') ? 'pass' :
   productIDs.some(id => byID[id]?.status === 'fail') ? 'fail' : 'blocked';
 const report = {
-  schema_version: 1, status,
+  schema_version: 2, status,
   base_sha: baseSHA,
   commit_sha: process.env.RR_COMMIT_SHA,
   platform: {os: process.platform, arch: process.arch},

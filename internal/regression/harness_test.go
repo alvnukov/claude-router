@@ -69,13 +69,18 @@ func newUpstreamStub(t *testing.T, body []byte) *upstreamStub {
 			return
 		}
 		var request struct {
-			Model        string `json:"model"`
-			Reasoning    struct{ Effort string `json:"effort"` } `json:"reasoning"`
-			OutputConfig struct{ Effort string `json:"effort"` } `json:"output_config"`
+			Model           string `json:"model"`
+			ReasoningEffort string `json:"reasoning_effort"`
+			Reasoning       struct{ Effort string `json:"effort"` } `json:"reasoning"`
+			OutputConfig    struct{ Effort string `json:"effort"` } `json:"output_config"`
 		}
 		_ = json.Unmarshal(body, &request)
+		effort := request.ReasoningEffort
+		if request.Reasoning.Effort != "" {
+			effort = request.Reasoning.Effort
+		}
 		s.mu.Lock()
-		s.calls = append(s.calls, observedCall{Path: r.URL.Path, Model: request.Model, Effort: request.Reasoning.Effort, Body: body})
+		s.calls = append(s.calls, observedCall{Path: r.URL.Path, Model: request.Model, Effort: effort, Body: body})
 		if s.order != nil && (r.URL.Path == "/v1/chat/completions" || r.URL.Path == "/chat/completions") {
 			s.order.append(s.name, request.Model)
 		}
@@ -222,6 +227,12 @@ var binaryBuild struct {
 // variables, proxy settings and loopback fixtures are not such evidence.
 func isolatedFullProcessTree() bool { return false }
 
+// Startup independently refreshes the hardcoded external catalog and probes
+// each local provider. A future isolation preflight alone does not make those
+// requests part of a route oracle or authorize a catalog fetch. Keep the
+// process stand blocked until an owner supplies a reviewed safe startup seam.
+func safeCatalogStartup() bool { return false }
+
 func testBinary(t *testing.T) string {
 	t.Helper()
 	if !isolatedFullProcessTree() {
@@ -345,7 +356,10 @@ func waitReady(t *testing.T, endpoint string, stand *testStand) {
 func startRouter(t *testing.T, fixture testFixture) *testStand {
 	t.Helper()
 	if !isolatedFullProcessTree() {
-		t.Fatal("blocked: full-path tests require an independently proven isolated runner")
+		t.Skip("blocked: full-path tests require an independently proven isolated runner")
+	}
+	if !safeCatalogStartup() {
+		t.Skip("blocked: startup catalog refresh tries a hardcoded external URL and probes local providers; reviewed safe seam required")
 	}
 	if os.Getenv("ROUTER_TEST_SCRATCH") == "" {
 		t.Fatal("blocked: isolated runner did not assign a temporary scratch directory")
