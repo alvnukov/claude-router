@@ -31,6 +31,9 @@ type HTTPDeps struct {
 	Clock      LifecycleClock
 	Limits     LifecycleLimits
 	WriteError func(http.ResponseWriter, int, string, string)
+	// ObserveAnthropicResponse reads subscription headers without capturing
+	// bodies or changing the response. Observation must never fail a request.
+	ObserveAnthropicResponse func(*http.Response) error
 }
 
 type LifecycleClock interface {
@@ -411,6 +414,9 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		return
 	}
 	life.gotHeaders(resp.Body)
+	if deps.ObserveAnthropicResponse != nil {
+		_ = deps.ObserveAnthropicResponse(resp)
+	}
 	if resp.StatusCode >= 400 && resp.StatusCode <= 599 {
 		if !life.commit(r.Context()) {
 			reject(502, "api_error", "privacy: upstream response rejected")

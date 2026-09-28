@@ -378,7 +378,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 		}
 		log.Printf("pass %s %s -> %d in %s", r.Method, path, status, time.Since(start).Round(time.Millisecond))
 	})
-	protected := privacyTraffic(mux, cs, hl)
+	protected := privacyTraffic(mux, cs, hl, proxy.ModifyResponse)
 	if life == nil {
 		return protected
 	}

@@ -22,9 +22,10 @@ func (s *configStore) privacyRuntime() *privacy.Runtime {
 
 // privacyTraffic runs before any raw body/history capture. The legacy handler
 // remains intact for explicit global-off; malformed config never reaches it.
-func privacyTraffic(next http.Handler, cs *configStore, hl *health) http.Handler {
+func privacyTraffic(next http.Handler, cs *configStore, hl *health, observeAnthropic func(*http.Response) error) http.Handler {
 	return privacy.NewProtectedHTTP(privacy.HTTPDeps{
 		Runtime: cs.privacyRuntime(), Legacy: next, WriteError: writeAnthropicError,
+		ObserveAnthropicResponse: observeAnthropic,
 		Resolve: func(body []byte) (privacy.HTTPRoute, error) {
 			cfg := cs.get()
 			model, route, err := configuredRequestRoute(cfg, body)
