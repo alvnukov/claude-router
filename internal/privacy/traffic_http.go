@@ -94,6 +94,10 @@ func NewProtectedHTTP(deps HTTPDeps) http.Handler {
 			deps.Legacy.ServeHTTP(w, r)
 			return
 		}
+		if policy.observationOnly() {
+			serveObservedHTTP(w, r, policy, deps)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.RawPath != "" || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/messages/count_tokens") || !supportedPrivacyQuery(r.URL.RawQuery) {
 			reject(400, "invalid_request_error", "privacy: unsupported endpoint or query")
 			return

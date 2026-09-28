@@ -19,7 +19,7 @@ export interface Binding { kind: string; target: string; profile: string }
 export interface PrivacyConfig { version: number; enabled: boolean; default: string; profiles: FilterProfile[]; bindings: Binding[] }
 export interface ProfileSnapshot { status: string; revision: string; config: PrivacyConfig | null }
 export interface PrivacyMetrics {
-  traffic?: {status:string;enabled:boolean;protected:number;detected:number;findings:Record<string,number>;bypassed:number;rejected:number;restored:number;active:number;buffered:boolean};
+  traffic?: {status:string;enabled:boolean;protected:number;detected:number;detection_errors?:number;findings:Record<string,number>;bypassed:number;rejected:number;restored:number;active:number;buffered:boolean};
   trafficApplied: boolean; started: string; checks: number; detects: number; restores: number; rejected: number;
   masked: Record<string, number>; detected: Record<string, number>; active: number; inputLimit: number; ttlSeconds: number;
   events: { at: string; operation: string; outcome: string; durationMs: number; inputBytes: number; outputBytes: number; replacements: number; findings: number }[];

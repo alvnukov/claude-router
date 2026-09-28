@@ -89,8 +89,10 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 		response, err := store.doWithReauth(client, request)
 		if err == nil && protected {
 			privacy.ObserveProviderHeaders(r)
-			original := response.Body
-			response.Body = &responseReader{Reader: privacy.NewResponseReader(original), close: original.Close}
+			if privacy.FromRequest(r).MaskExpected() {
+				original := response.Body
+				response.Body = &responseReader{Reader: privacy.NewResponseReader(original), close: original.Close}
+			}
 		}
 		return response, err
 	}

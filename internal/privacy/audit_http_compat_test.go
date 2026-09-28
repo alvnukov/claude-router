@@ -60,7 +60,11 @@ func TestPrivacyAuditDirectErrorStatus(t *testing.T) {
 				if wantType == "" {
 					wantType = "api_error"
 				}
-				if !strings.Contains(result.Body.String(), `"type":"`+wantType+`"`) || strings.Contains(result.Body.String(), compatCanary) || result.Header.Get("Set-Cookie") != "" {
+				validBody := strings.Contains(result.Body.String(), `"type":"`+wantType+`"`) && !strings.Contains(result.Body.String(), compatCanary)
+				if mode == "detect" {
+					validBody = result.Body.String() == compatCanary
+				}
+				if !validBody || result.Header.Get("Set-Cookie") != "" {
 					t.Fatal("unsafe or incompatible provider error")
 				}
 				if (code == 429 || code == 503 || code == 529) && result.Header.Get("Retry-After") != "7" {

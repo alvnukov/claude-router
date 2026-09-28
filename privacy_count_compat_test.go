@@ -88,7 +88,7 @@ func TestPrivacyCountUsesSelectedRouteWithoutGeneration(t *testing.T) {
 	}
 }
 
-func TestPrivacyCountRejectsInvalidUpstreamResponse(t *testing.T) {
+func TestPrivacyDetectCountPreservesUpstreamResponse(t *testing.T) {
 	for _, response := range []string{`{}`, `{"input_tokens":-1}`, `{"input_tokens":"12"}`, `{"input_tokens":1.5}`, `{"input_tokens":9223372036854775808}`, `{"input_tokens":1,"input_tokens":2}`, `{"input_tokens":null}`, `{"input_tokens":2}garbage`} {
 		t.Run(response, func(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,8 +108,8 @@ func TestPrivacyCountRejectsInvalidUpstreamResponse(t *testing.T) {
 				t.Fatal(err)
 			}
 			result := trafficCall(h, "/v1/messages/count_tokens", trafficBody)
-			if result.Code != http.StatusBadGateway || strings.Contains(result.Body.String(), "input_tokens") {
-				t.Fatalf("invalid token count released: %d %s", result.Code, result.Body)
+			if result.Code != http.StatusOK || result.Body.String() != response {
+				t.Fatalf("detect changed token count response: %d %s", result.Code, result.Body)
 			}
 		})
 	}

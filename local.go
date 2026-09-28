@@ -386,7 +386,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	}
 	original := resp.Body
 	body := original
-	if privacy.FromRequest(r) != nil {
+	if p := privacy.FromRequest(r); p != nil && p.MaskExpected() {
 		body = &responseReader{Reader: privacy.NewResponseReader(original), close: original.Close}
 	}
 	if stream && cand.Provider.Type == "codex" {

@@ -400,6 +400,12 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 						}}, nil
 					}
 					result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
+					if mode == "detect" {
+						if result.Code != http.StatusOK || result.Body.String() != tc.stream || localCalls.Load() != 1 {
+							t.Fatal("observation changed local SSE")
+						}
+						return
+					}
 					if result.Code != tc.wantStatus || localCalls.Load() != 1 || strings.Contains(result.Body.String(), "not-part-of-response") || tc.wantStatus != http.StatusOK && strings.Contains(result.Body.String(), "event: content_block") {
 						t.Fatalf("unverified local SSE released: mode=%s case=%s status=%d body=%q", mode, tc.name, result.Code, result.Body.String())
 					}
@@ -868,7 +874,7 @@ func TestProtectedHTTPLifecycle(t *testing.T) {
 		}))
 		defer up.Close()
 		clock := newCompatClock()
-		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), up.URL, "model", &localCalls, &legacyCalls)
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "model", &localCalls, &legacyCalls)
 		deps.Clock = clock
 		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
 		deps.Resolve = func([]byte) (HTTPRoute, error) {
@@ -909,7 +915,7 @@ func TestProtectedHTTPLifecycle(t *testing.T) {
 		clock := newCompatClock()
 		providerHeaders, generate := make(chan struct{}), make(chan struct{})
 		generated := make(chan struct{})
-		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
 		deps.Clock = clock
 		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
 		deps.Resolve = func([]byte) (HTTPRoute, error) {
@@ -951,7 +957,7 @@ func TestProtectedHTTPLifecycle(t *testing.T) {
 		var localCalls, legacyCalls atomic.Int32
 		clock := newCompatClock()
 		panicked := make(chan bool, 1)
-		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
 		deps.Clock = clock
 		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
 		deps.Resolve = func([]byte) (HTTPRoute, error) {
@@ -982,7 +988,7 @@ func TestProtectedHTTPLifecycle(t *testing.T) {
 	t.Run("local-ping-after-anthropic-headers-does-not-extend-idle", func(t *testing.T) {
 		var localCalls, legacyCalls atomic.Int32
 		clock := newCompatClock()
-		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
 		deps.Clock = clock
 		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
 		deps.Resolve = func([]byte) (HTTPRoute, error) {
@@ -1013,7 +1019,7 @@ func TestProtectedHTTPLifecycle(t *testing.T) {
 		var localCalls, legacyCalls atomic.Int32
 		clock := newCompatClock()
 		continueDelta, continueTerminal := make(chan struct{}), make(chan struct{})
-		deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
 		deps.Clock = clock
 		deps.Limits = LifecycleLimits{Inbound: 200 * time.Millisecond, Headers: 300 * time.Millisecond, Idle: 100 * time.Millisecond, Total: 800 * time.Millisecond, Cleanup: 90 * time.Millisecond}
 		deps.Resolve = func([]byte) (HTTPRoute, error) {
@@ -1182,7 +1188,7 @@ func TestProtectedHTTPTerminalSegmentation(t *testing.T) {
 			for _, part := range parts {
 				body.parts = append(body.parts, []byte(part))
 			}
-			deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "anthropic", &localCalls, &legacyCalls)
+			deps := compatHTTPDeps(t, clientCompatRuntime(t, "bypass"), "http://synthetic.invalid", "anthropic", &localCalls, &legacyCalls)
 			deps.Client = &http.Client{Transport: compatRoundTripFunc(func(r *http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: body, Request: r}, nil
 			})}
@@ -1201,7 +1207,7 @@ func TestProtectedHTTPTerminalSegmentation(t *testing.T) {
 		}
 		for _, parts := range [][]string{{prefix[:1], prefix[1:] + suffix}, {prefix[:1], prefix[1:], suffix}} {
 			var localCalls, legacyCalls atomic.Int32
-			deps := compatHTTPDeps(t, clientCompatRuntime(t, "detect"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
+			deps := compatHTTPDeps(t, clientCompatRuntime(t, "bypass"), "http://synthetic.invalid", "model", &localCalls, &legacyCalls)
 			deps.Resolve = func([]byte) (HTTPRoute, error) {
 				return HTTPRoute{Mode: "model", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
 					localCalls.Add(1)

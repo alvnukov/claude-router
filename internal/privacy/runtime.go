@@ -27,16 +27,17 @@ type Runtime struct {
 	stats          RuntimeState
 }
 type RuntimeState struct {
-	Status    string       `json:"status"`
-	Enabled   bool         `json:"enabled"`
-	Protected int          `json:"protected"`
-	Detected  int          `json:"detected"`
-	Findings  map[Kind]int `json:"findings"`
-	Bypassed  int          `json:"bypassed"`
-	Rejected  int          `json:"rejected"`
-	Restored  int          `json:"restored"`
-	Active    int          `json:"active"`
-	Buffered  bool         `json:"buffered"`
+	Status          string       `json:"status"`
+	Enabled         bool         `json:"enabled"`
+	Protected       int          `json:"protected"`
+	Detected        int          `json:"detected"`
+	DetectionErrors int          `json:"detection_errors,omitempty"`
+	Findings        map[Kind]int `json:"findings"`
+	Bypassed        int          `json:"bypassed"`
+	Rejected        int          `json:"rejected"`
+	Restored        int          `json:"restored"`
+	Active          int          `json:"active"`
+	Buffered        bool         `json:"buffered"`
 }
 type Policy struct {
 	config         *Profiles
@@ -71,6 +72,7 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 	}
 	if r.policy != nil && r.revision == snapshot.Revision {
 		r.stats.Enabled = r.policy.Enabled()
+		r.stats.Buffered = !r.policy.observationOnly()
 		return r.policy, nil
 	}
 	p := &Policy{config: snapshot.Config, engines: map[string]*Engine{}, clientControls: r.clientControls.clone(), runtime: r}
@@ -107,6 +109,7 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 	}
 	r.revision, r.policy = snapshot.Revision, p
 	r.stats.Enabled = p.Enabled()
+	r.stats.Buffered = !p.observationOnly()
 	return p, nil
 }
 func (p *Policy) Enabled() bool { return p != nil && p.config != nil && p.config.Enabled }
@@ -127,21 +130,26 @@ func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) 
 		return nil, body, nil
 	}
 	e := p.engines[resolution.Profile]
-	if e == nil || len(body) > TrafficInputLimit {
-		return nil, nil, errTraffic
-	}
 	if resolution.Mode == ModeDetect {
-		counts, err := e.Detect(body)
-		if err != nil {
-			return nil, nil, errTraffic
+		var counts map[Kind]int
+		err := errTraffic
+		if e != nil {
+			counts, err = e.Detect(body)
 		}
 		p.runtime.mu.Lock()
-		p.runtime.stats.Detected++
-		for kind, count := range counts {
-			p.runtime.stats.Findings[kind] += count
+		if err != nil {
+			p.runtime.stats.DetectionErrors++
+		} else {
+			p.runtime.stats.Detected++
+			for kind, count := range counts {
+				p.runtime.stats.Findings[kind] += count
+			}
 		}
 		p.runtime.mu.Unlock()
 		return nil, body, nil
+	}
+	if e == nil || len(body) > TrafficInputLimit {
+		return nil, nil, errTraffic
 	}
 	if err := e.checkTransport(body); err != nil {
 		return nil, nil, errTraffic
