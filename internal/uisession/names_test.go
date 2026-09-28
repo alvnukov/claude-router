@@ -37,10 +37,96 @@ func TestReadIdentitySkipsPayloadsAndForeignRecords(t *testing.T) {
 		`{"type":"user","sessionId":"s","cwd":"/work/my-project","gitBranch":"feature/name"}` + "\n" +
 		`{"type":"custom-title","sessionId":"s","customTitle":"  Новое\nназвание\u202e  "}` + "\n" +
 		`{"type":"custom-title","sessionId":"other","customTitle":"Чужое"}`
-	got := readIdentity(strings.NewReader(input), "s")
+	got, _ := readIdentity(strings.NewReader(input), "s", Identity{})
 	if got.Title != "Новое название" || got.Project != "my-project" || got.Branch != "feature/name" {
 		t.Fatalf("identity=%+v", got)
 	}
+}
+
+func TestLoadNamesReadsOnlyAppendedJournal(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	if err := os.Mkdir(project, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(project, "s.jsonl")
+	write := func(data string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendTo := func(data string) {
+		t.Helper()
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteString(data)
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := `{"type":"custom-title","sessionId":"s","customTitle":"First"}` + "\n"
+	write(first + `{"type":"user","sessionId":"s","cwd":"/work/router","gitBranch":"main"}` + "\n")
+	entries := loadNames(root, []string{"s"}, nil)
+	if got := entries["s"].identity; got != (Identity{Title: "First", Project: "router", Branch: "main"}) {
+		t.Fatalf("initial=%+v", got)
+	}
+
+	t.Run("appended tail only", func(t *testing.T) {
+		// Rewriting an old line in place is invisible to a tail reader: proof
+		// that the start of the journal is not scanned again.
+		f, err := os.OpenFile(path, os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = f.WriteAt([]byte("Xirst"), int64(strings.Index(first, "First")))
+		f.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		appendTo(`{"type":"user","sessionId":"s","cwd":"/work/next","gitBranch":"dev"}` + "\n")
+		entries = loadNames(root, []string{"s"}, entries)
+		if got := entries["s"].identity; got != (Identity{Title: "First", Project: "next", Branch: "dev"}) {
+			t.Fatalf("after append=%+v", got)
+		}
+	})
+	t.Run("partial last line waits", func(t *testing.T) {
+		line := `{"type":"custom-title","sessionId":"s","customTitle":"Later"}`
+		appendTo(line[:20])
+		entries = loadNames(root, []string{"s"}, entries)
+		if got := entries["s"].identity.Title; got != "First" {
+			t.Fatalf("partial line parsed: %q", got)
+		}
+		appendTo(line[20:] + "\n")
+		entries = loadNames(root, []string{"s"}, entries)
+		if got := entries["s"].identity.Title; got != "Later" {
+			t.Fatalf("completed line missed: %q", got)
+		}
+	})
+	t.Run("truncated journal is read again", func(t *testing.T) {
+		write(`{"type":"custom-title","sessionId":"s","customTitle":"Short"}` + "\n")
+		entries = loadNames(root, []string{"s"}, entries)
+		if got := entries["s"].identity; got != (Identity{Title: "Short"}) {
+			t.Fatalf("after truncation=%+v", got)
+		}
+	})
+	t.Run("replaced journal is read again", func(t *testing.T) {
+		next := filepath.Join(project, "next.tmp")
+		data := `{"type":"custom-title","sessionId":"s","customTitle":"Replaced"}` + "\n" + strings.Repeat(`{"type":"noise"}`+"\n", 20)
+		if err := os.WriteFile(next, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(next, path); err != nil {
+			t.Fatal(err)
+		}
+		entries = loadNames(root, []string{"s"}, entries)
+		if got := entries["s"].identity; got != (Identity{Title: "Replaced"}) {
+			t.Fatalf("after replace=%+v", got)
+		}
+	})
 }
 
 func TestLoadNamesRefreshesChangedFilesAndContainsPaths(t *testing.T) {

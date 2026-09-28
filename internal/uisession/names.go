@@ -23,6 +23,7 @@ type nameEntry struct {
 	identity Identity
 	path     string
 	stat     os.FileInfo
+	offset   int64 // end of the last complete line read
 }
 
 // Names caches session identities. The UI never waits for local Claude
@@ -112,30 +113,45 @@ func loadNames(dir string, ids []string, previous map[string]nameEntry) map[stri
 				continue
 			}
 			old := previous[id]
-			if old.path == name && old.stat != nil && os.SameFile(old.stat, stat) && old.stat.Size() == stat.Size() && old.stat.ModTime().Equal(stat.ModTime()) {
+			same := old.path == name && old.stat != nil && os.SameFile(old.stat, stat)
+			if same && old.stat.Size() == stat.Size() && old.stat.ModTime().Equal(stat.ModTime()) {
 				out[id] = old
 				break
+			}
+			// A growing journal is read from where the last pass stopped; a
+			// shorter, replaced or rewritten one is read from the start.
+			start, identity := int64(0), Identity{}
+			if same && stat.Size() > old.stat.Size() {
+				start, identity = old.offset, old.identity
 			}
 			f, err := root.Open(name)
 			if err != nil {
 				continue
 			}
-			identity := readIdentity(io.LimitReader(f, stat.Size()), id)
+			if _, err := f.Seek(start, io.SeekStart); err != nil {
+				f.Close()
+				continue
+			}
+			identity, read := readIdentity(io.LimitReader(f, stat.Size()-start), id, identity)
 			f.Close()
-			out[id] = nameEntry{identity: identity, path: name, stat: stat}
+			out[id] = nameEntry{identity: identity, path: name, stat: stat, offset: start + read}
 			break
 		}
 	}
 	return out
 }
 
-func readIdentity(input io.Reader, id string) Identity {
-	var out Identity
+// readIdentity applies the complete lines of input to out and returns the
+// result with the number of bytes consumed. A last line without a newline may
+// still be being written; it is left for the next pass.
+func readIdentity(input io.Reader, id string, out Identity) (Identity, int64) {
 	reader := bufio.NewReader(input)
 	var line []byte
+	var read, size int64
 	oversized := false
 	for {
 		fragment, err := reader.ReadSlice('\n')
+		size += int64(len(fragment))
 		// A large tool payload must not consume unbounded memory or hide a later
 		// small rename record. Continue at the next line rather than stop scanning.
 		if len(line)+len(fragment) > 1<<20 {
@@ -148,7 +164,11 @@ func readIdentity(input io.Reader, id string) Identity {
 		if err == bufio.ErrBufferFull {
 			continue
 		}
-		if !oversized && len(line) > 0 {
+		if err != nil {
+			break
+		}
+		read += size
+		if !oversized {
 			var record struct {
 				Type        string `json:"type"`
 				SessionID   string `json:"sessionId"`
@@ -167,12 +187,10 @@ func readIdentity(input io.Reader, id string) Identity {
 			}
 		}
 		line = line[:0]
+		size = 0
 		oversized = false
-		if err != nil {
-			break
-		}
 	}
-	return out
+	return out, read
 }
 
 func compact(text string, limit int) string {

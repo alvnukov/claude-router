@@ -218,7 +218,9 @@ func TestUIJSONRequestFiltersDetailsAndUTF8(t *testing.T) {
 		writeTrafficConfig(t, filepath.Dir(u.cs.provPath), `{}`)
 		u.st.Add(&history.Record{Start: time.Now(), Model: "claude-sonnet-5", Session: "private-session", Route: "cloud", ReqBody: []byte(`{"messages":[{"role":"user","content":"Секретная задача"}]}`)})
 		body := apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes()
-		var state struct{ Sessions []struct{ ID, Title, Preview string } }
+		var state struct {
+			Sessions []struct{ ID, Title, Preview string }
+		}
 		if err := json.Unmarshal(body, &state); err != nil {
 			t.Fatal(err)
 		}
