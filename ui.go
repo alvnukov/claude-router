@@ -49,6 +49,7 @@ type uiServer struct {
 	st                *history.Store
 	connectionMetrics connectionUsageCache
 	sessionNames      uisession.Names
+	sessionBodies     uisession.Bodies
 	cs                *configStore
 	hl                *health
 	life              *lifecycle

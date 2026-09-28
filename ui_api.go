@@ -203,7 +203,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	sort.Slice(out.Pools, func(i, j int) bool { return out.Pools[i].Name < out.Pools[j].Name })
 	sessions := map[string]*webui.Session{}
 	routeIndexes := map[string]map[[5]string]int{}
-	sessionBodies := map[string][][]byte{}
+	sessionPrompts := map[string][]string{}
 	for _, rec := range records {
 		out.Summary.Total++
 		if !rec.Done() {
@@ -219,32 +219,27 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if model == "" {
 			model = rec.Model
 		}
-		var request struct {
-			OutputConfig struct {
-				Effort string `json:"effort"`
-			} `json:"output_config"`
-		}
-		_ = json.Unmarshal(rec.ReqBody, &request)
+		facts := u.sessionBodies.Facts(rec.ID, rec.ReqBody)
 		connection := uisession.Connection(rec.Route, rec.Served)
 		s := sessions[rec.Session]
 		if s == nil {
 			item := b.requestDTO(rec)
-			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: item.Preview, Connection: connection, Effort: request.OutputConfig.Effort, Route: rec.Route, LastAt: rec.Start, Routes: []webui.SessionRoute{}}
+			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: item.Preview, Connection: connection, Effort: facts.Effort, Route: rec.Route, LastAt: rec.Start, Routes: []webui.SessionRoute{}}
 			sessions[rec.Session] = s
 			routeIndexes[rec.Session] = map[[5]string]int{}
 		}
-		key := [5]string{rec.Model, model, connection, request.OutputConfig.Effort, rec.Route}
+		key := [5]string{rec.Model, model, connection, facts.Effort, rec.Route}
 		index, exists := routeIndexes[rec.Session][key]
 		if !exists {
 			index = len(s.Routes)
 			routeIndexes[rec.Session][key] = index
-			s.Routes = append(s.Routes, webui.SessionRoute{RequestedModel: rec.Model, Model: model, Connection: connection, Effort: request.OutputConfig.Effort, Route: rec.Route})
+			s.Routes = append(s.Routes, webui.SessionRoute{RequestedModel: rec.Model, Model: model, Connection: connection, Effort: facts.Effort, Route: rec.Route})
 		}
 		s.Routes[index].Requests++
 		if !rec.Done() {
 			s.Routes[index].Pending++
 		}
-		sessionBodies[rec.Session] = append(sessionBodies[rec.Session], rec.ReqBody)
+		sessionPrompts[rec.Session] = append(sessionPrompts[rec.Session], facts.Prompt)
 		s.Requests++
 		if !rec.Done() {
 			s.Pending++
@@ -253,6 +248,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 			s.Error = u.publicUIMessage(requestError(rec))
 		}
 	}
+	u.sessionBodies.Sweep()
 	for _, s := range sessions {
 		s.Usage = usage.sessions[s.ID]
 		s.Usage.Since = now.Add(-24 * time.Hour)
@@ -277,9 +273,9 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		identity := names[session.ID]
 		session.Title, session.Project, session.Branch = identity.Title, identity.Project, identity.Branch
 		if session.Title == "" && session.ID != "" && promptTitles {
-			bodies := sessionBodies[session.ID]
-			for j := len(bodies) - 1; j >= 0; j-- {
-				if session.Title = uisession.FirstPrompt(bodies[j]); session.Title != "" {
+			prompts := sessionPrompts[session.ID]
+			for j := len(prompts) - 1; j >= 0; j-- {
+				if session.Title = prompts[j]; session.Title != "" {
 					break
 				}
 			}

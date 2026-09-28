@@ -68,6 +68,20 @@ func FirstPrompt(body []byte) string {
 	return ""
 }
 
+// Facts is what the session list takes from one request body.
+type Facts struct{ Effort, Prompt string }
+
+// ParseFacts reads the requested effort and the first meaningful prompt.
+func ParseFacts(body []byte) Facts {
+	var request struct {
+		OutputConfig struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+	}
+	_ = json.Unmarshal(body, &request)
+	return Facts{Effort: request.OutputConfig.Effort, Prompt: FirstPrompt(body)}
+}
+
 // Connection names the connection that served a request: Anthropic for the
 // cloud and passthrough routes, otherwise the provider part of served.
 func Connection(route, served string) string {
