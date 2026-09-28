@@ -175,17 +175,19 @@ func checkSupportedTrafficSSE(body []byte) error {
 	if len(body) > TrafficOutputLimit || !utf8.Valid(body) {
 		return errRestore
 	}
-	normalized := bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
-	if !bytes.HasSuffix(normalized, []byte("\n\n")) {
-		return errRestore
-	}
 	started, stopped := false, false
 	open, seen := map[string]string{}, map[string]bool{}
-	for _, frame := range bytes.Split(normalized, []byte("\n\n")) {
-		if len(bytes.TrimSpace(frame)) == 0 {
+	for pos := 0; pos < len(body); {
+		frame, end, complete := nextProtectedFrame(body, pos)
+		if !complete {
+			return errRestore
+		}
+		pos = end
+		parsed := parseSSEFrame(frame)
+		if !parsed.hasData {
 			continue
 		}
-		event, n, data := protectedFrameEvent(frame)
+		event, n, data := protectedParsedFrameEvent(parsed)
 		if n == nil || stopped || event == "error" {
 			return errRestore
 		}

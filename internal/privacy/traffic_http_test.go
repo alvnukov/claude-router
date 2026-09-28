@@ -482,7 +482,7 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 				t.Fatal("mixed or malformed client authentication sent upstream")
 			}
 		}
-		for _, path := range []string{"/v1/messages?beta=true&extra=1", "/v1/messages?beta=%74rue", "/v1/messages/"} {
+		for _, path := range []string{"/v1/messages?beta=true&extra=1", "/v1/messages/"} {
 			w := compatHTTPCall(t, h, path, compatHTTPBody())
 			if w.Code != http.StatusBadRequest || upstreamCalls.Load() != 0 {
 				t.Fatal("unsupported path/query reached provider")
@@ -1845,7 +1845,7 @@ func TestProtectedHTTPCodex429OtherAdapterCannotBorrowLocalException(t *testing.
 	}
 }
 
-func TestProtectedHTTPCodex429DirectCannotBorrowLocalException(t *testing.T) {
+func TestProtectedHTTPDirect429PreservesStatusWithoutRawBody(t *testing.T) {
 	var localCalls, legacyCalls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -1857,8 +1857,8 @@ func TestProtectedHTTPCodex429DirectCannotBorrowLocalException(t *testing.T) {
 	defer up.Close()
 	deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "anthropic", &localCalls, &legacyCalls)
 	result := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages?beta=true", compatHTTPBody())
-	compatCodexEnvelope(t, result, http.StatusBadGateway, "api_error")
-	if result.Header.Get("Retry-After") != "" || localCalls.Load() != 0 {
-		t.Fatal("direct Anthropic raw 429 borrowed the Codex-local exception")
+	compatCodexEnvelope(t, result, http.StatusTooManyRequests, "rate_limit_error")
+	if result.Header.Get("Retry-After") != "7" || result.Header.Get("Set-Cookie") != "" || localCalls.Load() != 0 || legacyCalls.Load() != 0 {
+		t.Fatal("direct 429 lost safe retry metadata or escaped its route")
 	}
 }

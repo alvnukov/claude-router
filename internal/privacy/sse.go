@@ -13,14 +13,104 @@ import (
 )
 
 type blockTail struct{ text, typ string }
+
+type sseDataPart struct{ start, end, offset int }
+type parsedSSEFrame struct {
+	event   string
+	data    []byte
+	parts   []sseDataPart
+	hasData bool
+}
+
+func nextSSELine(body []byte, start int) (int, int, bool) {
+	end := bytes.IndexAny(body[start:], "\r\n")
+	if end < 0 {
+		return len(body), len(body), false
+	}
+	end += start
+	next := end + 1
+	if body[end] == '\r' && next < len(body) && body[next] == '\n' {
+		next++
+	}
+	return end, next, true
+}
+
+// Decode the SSE envelope while retaining raw offsets for selective JSON edits.
+// Comments and service fields are carried through verbatim, and repeated data
+// fields are joined with LF exactly as required by the event-stream grammar.
+func parseSSEFrame(frame []byte) parsedSSEFrame {
+	return parseSSEFrameAt(frame, 0, false)
+}
+
+func parseSSEFrameAt(frame []byte, start int, keepOffsets bool) parsedSSEFrame {
+	var parsed parsedSSEFrame
+	ownedData := false
+	for pos := start; pos < len(frame); {
+		end, next, _ := nextSSELine(frame, pos)
+		start := pos
+		line := frame[start:end]
+		colon := bytes.IndexByte(line, ':')
+		field, valueStart := line, end
+		if colon >= 0 {
+			field, valueStart = line[:colon], start+colon+1
+			if valueStart < end && frame[valueStart] == ' ' {
+				valueStart++
+			}
+		}
+		switch string(field) {
+		case "event":
+			parsed.event = string(frame[valueStart:end])
+		case "data":
+			if parsed.hasData {
+				if !ownedData {
+					data := make([]byte, len(parsed.data), len(frame))
+					copy(data, parsed.data)
+					parsed.data, ownedData = data, true
+				}
+				parsed.data = append(parsed.data, '\n')
+			}
+			if keepOffsets && valueStart < end {
+				parsed.parts = append(parsed.parts, sseDataPart{valueStart, end, len(parsed.data)})
+			}
+			if parsed.hasData {
+				parsed.data = append(parsed.data, frame[valueStart:end]...)
+			} else {
+				parsed.data = frame[valueStart:end]
+			}
+			parsed.hasData = true
+		}
+		pos = next
+	}
+	return parsed
+}
+
+func (s *streamUnmasker) emitPayloadEdits(frame []byte, parsed parsedSSEFrame, edits []rawEdit) error {
+	raw := make([]rawEdit, 0, len(edits))
+	for _, edit := range edits {
+		found := false
+		for _, part := range parsed.parts {
+			if edit.start >= part.offset && edit.end <= part.offset+part.end-part.start {
+				raw = append(raw, rawEdit{part.start + edit.start - part.offset, part.start + edit.end - part.offset, edit.data})
+				found = true
+				break
+			}
+		}
+		if !found {
+			return errors.New("SSE JSON edit crosses data lines")
+		}
+	}
+	return s.emit(applyRaw(frame, raw))
+}
+
 type streamUnmasker struct {
-	req    *Request
-	out    io.Writer
-	buf    []byte
-	blocks map[int]blockTail
-	kinds  map[int]string
-	err    error
-	closed bool
+	req        *Request
+	out        io.Writer
+	buf        []byte
+	blocks     map[int]blockTail
+	kinds      map[int]string
+	err        error
+	closed     bool
+	framesSeen bool
 }
 
 func (e *Engine) NewStreamUnmasker(req *Request, w io.Writer) io.WriteCloser {
@@ -45,6 +135,23 @@ func (s *streamUnmasker) Write(p []byte) (int, error) {
 	}
 	s.buf = append(s.buf, p...)
 	for {
+		if s.req.engine.opt.supportedOnly {
+			_, end, complete := nextProtectedFrame(s.buf, 0)
+			if !complete {
+				if len(s.buf) > 16<<20 {
+					return 0, s.fail(errors.New("SSE frame exceeds 16 MiB"))
+				}
+				break
+			}
+			if end > 16<<20 {
+				return 0, s.fail(errors.New("SSE frame exceeds 16 MiB"))
+			}
+			if err := s.frame(s.buf[:end]); err != nil {
+				return 0, s.fail(err)
+			}
+			s.buf = s.buf[end:]
+			continue
+		}
 		a, n := bytes.Index(s.buf, []byte("\n\n")), 2
 		if b := bytes.Index(s.buf, []byte("\r\n\r\n")); b >= 0 && (a < 0 || b < a) {
 			a, n = b, 4
@@ -91,29 +198,47 @@ func (s *streamUnmasker) emit(data []byte) error {
 func (s *streamUnmasker) frame(frame []byte) error {
 	event := ""
 	var payload []byte
+	var parsed parsedSSEFrame
 	start, end := -1, -1
-	for pos := 0; pos < len(frame); {
-		i := bytes.IndexByte(frame[pos:], '\n')
-		if i < 0 {
-			break
+	if s.req.engine.opt.supportedOnly {
+		offset := 0
+		if !s.framesSeen && bytes.HasPrefix(frame, []byte("\xef\xbb\xbf")) {
+			offset = 3
 		}
-		i += pos
-		line := bytes.TrimSuffix(frame[pos:i], []byte{'\r'})
-		if bytes.HasPrefix(line, []byte("event:")) {
-			event = strings.TrimSpace(string(line[6:]))
+		s.framesSeen = true
+		parsed = parseSSEFrameAt(frame, offset, true)
+		event, payload = parsed.event, parsed.data
+		if !parsed.hasData {
+			return s.emit(frame)
 		}
-		if bytes.HasPrefix(line, []byte("data:")) {
-			if start >= 0 {
-				return errors.New("multiple SSE data lines are unsupported")
+		start = 0 // selective parsing uses the offset table instead of a single span
+	} else {
+		for pos := 0; pos < len(frame); {
+			i := bytes.IndexByte(frame[pos:], '\n')
+			if i < 0 {
+				break
 			}
-			a := pos + 5
-			if a < i && frame[a] == ' ' {
-				a++
+			i += pos
+			line := bytes.TrimSuffix(frame[pos:i], []byte{'\r'})
+			if bytes.HasPrefix(line, []byte("event:")) {
+				event = strings.TrimSpace(string(line[6:]))
 			}
-			start, end = a, pos+len(line)
-			payload = frame[start:end]
+			if bytes.HasPrefix(line, []byte("data:")) {
+				if start >= 0 {
+					return errors.New("multiple SSE data lines are unsupported")
+				}
+				a := pos + 5
+				if a < i && frame[a] == ' ' {
+					a++
+				}
+				start, end = a, pos+len(line)
+				payload = frame[start:end]
+			}
+			pos = i + 1
 		}
-		pos = i + 1
+	}
+	if !s.req.engine.opt.supportedOnly && start >= 0 {
+		parsed.parts = []sseDataPart{{start, end, 0}}
 	}
 	// A missing event field uses data.type, as permitted by SSE.
 	if event == "" && len(payload) > 0 {
@@ -195,7 +320,7 @@ func (s *streamUnmasker) frame(frame []byte) error {
 		if len(w.edits) == 0 {
 			return s.emit(frame)
 		}
-		return s.emit(applyRaw(frame, []rawEdit{{start, end, applyRaw(payload, w.edits)}}))
+		return s.emitPayloadEdits(frame, parsed, w.edits)
 	case "content_block_delta":
 		delta := node.get("delta")
 		if delta == nil {
@@ -225,7 +350,7 @@ func (s *streamUnmasker) frame(frame []byte) error {
 		}
 		if typ == "input_json_delta" {
 			s.blocks[index] = blockTail{text: text, typ: typ}
-			return s.emit(applyRaw(frame, []rawEdit{{start + value.start, start + value.end, []byte(`""`)}}))
+			return s.emitPayloadEdits(frame, parsed, []rawEdit{{value.start, value.end, []byte(`""`)}})
 		}
 		s.req.mu.Lock()
 		cut := s.holdFrom(text)
@@ -238,7 +363,7 @@ func (s *streamUnmasker) frame(frame []byte) error {
 		restored := applyText(text[:cut], edits)
 		s.blocks[index] = blockTail{text: text[cut:], typ: typ}
 		encoded, _ := json.Marshal(restored)
-		return s.emit(applyRaw(frame, []rawEdit{{start + value.start, start + value.end, encoded}}))
+		return s.emitPayloadEdits(frame, parsed, []rawEdit{{value.start, value.end, encoded}})
 	}
 	return nil
 }

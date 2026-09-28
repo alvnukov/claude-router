@@ -92,7 +92,7 @@ func NewProtectedHTTP(deps HTTPDeps) http.Handler {
 			deps.Legacy.ServeHTTP(w, r)
 			return
 		}
-		if r.Method != http.MethodPost || r.URL.RawPath != "" || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/messages/count_tokens") || (r.URL.RawQuery != "" && r.URL.RawQuery != "beta=true") {
+		if r.Method != http.MethodPost || r.URL.RawPath != "" || (r.URL.Path != "/v1/messages" && r.URL.Path != "/v1/messages/count_tokens") || !supportedPrivacyQuery(r.URL.RawQuery) {
 			reject(400, "invalid_request_error", "privacy: unsupported endpoint or query")
 			return
 		}
@@ -327,7 +327,7 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		return
 	}
 	beta, version := r.Header.Values("Anthropic-Beta"), r.Header.Values("Anthropic-Version")
-	if len(beta) > 1 || len(version) > 1 {
+	if len(version) > 1 {
 		badInput()
 		return
 	}
@@ -339,11 +339,7 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		badInput()
 		return
 	}
-	var betas []string
-	if len(beta) == 1 {
-		betas = beta
-	}
-	target := Target{Model: route.Model, Provider: "anthropic", Betas: betas, TokenCount: r.URL.Path == "/v1/messages/count_tokens"}
+	target := Target{Model: route.Model, Provider: "anthropic", Betas: beta, TokenCount: r.URL.Path == "/v1/messages/count_tokens"}
 	// Prepare masks supported content according to the resolved profile.
 	// Client controls and opaque content do not prevent preparation.
 	exchange, wire, err := policy.Prepare(target, body)
@@ -415,6 +411,14 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		return
 	}
 	life.gotHeaders(resp.Body)
+	if resp.StatusCode >= 400 && resp.StatusCode <= 599 {
+		if !life.commit(r.Context()) {
+			reject(502, "api_error", "privacy: upstream response rejected")
+			return
+		}
+		writeProtectedProviderError(w, deps, resp)
+		return
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 || resp.Header.Get("Content-Encoding") != "" {
 		reject(502, "api_error", "privacy: upstream response rejected")
 		return
@@ -456,6 +460,49 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	w.Header().Set("Content-Type", media)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result)
+}
+
+func supportedPrivacyQuery(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	values, err := url.ParseQuery(raw)
+	return err == nil && len(values) == 1 && len(values["beta"]) == 1 && values.Get("beta") == "true"
+}
+
+// Preserve provider status semantics without exposing its response body.
+func writeProtectedProviderError(w http.ResponseWriter, deps HTTPDeps, resp *http.Response) {
+	if deps.Runtime != nil {
+		deps.Runtime.Reject()
+	}
+	for key := range w.Header() {
+		if strings.EqualFold(key, "Retry-After") || strings.EqualFold(key, "Content-Length") {
+			delete(w.Header(), key)
+		}
+	}
+	if resp.StatusCode == 429 || resp.StatusCode == 503 || resp.StatusCode == 529 {
+		if values := resp.Header.Values("Retry-After"); len(values) == 1 {
+			value := strings.TrimSpace(values[0])
+			if seconds, err := strconv.ParseUint(value, 10, 32); err == nil && seconds <= 86400 {
+				w.Header().Set("Retry-After", strconv.FormatUint(seconds, 10))
+			} else if date, err := http.ParseTime(value); err == nil && time.Until(date) >= 0 && time.Until(date) <= 24*time.Hour {
+				w.Header().Set("Retry-After", date.UTC().Format(http.TimeFormat))
+			}
+		}
+	}
+	kind := map[int]string{400: "invalid_request_error", 401: "authentication_error", 403: "permission_error", 404: "not_found_error", 413: "request_too_large", 429: "rate_limit_error", 529: "overloaded_error"}[resp.StatusCode]
+	if kind == "" {
+		kind = "api_error"
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	const message = "The upstream service rejected the request."
+	if deps.WriteError != nil {
+		deps.WriteError(w, resp.StatusCode, kind, message)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_ = json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]string{"type": kind, "message": message}})
 }
 
 func validTokenCount(body []byte) bool {

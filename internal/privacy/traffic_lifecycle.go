@@ -227,30 +227,31 @@ func observeProtectedFrame(frame []byte, open map[string]string, life *protected
 }
 
 func nextProtectedFrame(body []byte, start int) ([]byte, int, bool) {
-	plain := bytes.Index(body[start:], []byte("\n\n"))
-	crlf := bytes.Index(body[start:], []byte("\r\n\r\n"))
-	if plain < 0 && crlf < 0 {
-		return nil, 0, false
+	for pos := start; pos < len(body); {
+		end, next, complete := nextSSELine(body, pos)
+		if !complete {
+			return nil, 0, false
+		}
+		if end == pos {
+			frameStart := start
+			if start == 0 && bytes.HasPrefix(body, []byte("\xef\xbb\xbf")) {
+				frameStart += 3
+			}
+			return body[frameStart:pos], next, true
+		}
+		pos = next
 	}
-	if crlf >= 0 && (plain < 0 || crlf < plain) {
-		return body[start : start+crlf], start + crlf + 4, true
-	}
-	return body[start : start+plain], start + plain + 2, true
+	return nil, 0, false
 }
 
 func protectedFrameEvent(frame []byte) (string, *jsonNode, []byte) {
-	frame = bytes.ReplaceAll(frame, []byte("\r\n"), []byte("\n"))
-	var event string
-	var data []byte
-	for _, line := range bytes.Split(frame, []byte("\n")) {
-		switch {
-		case bytes.HasPrefix(line, []byte("event:")) && event == "":
-			event = string(bytes.TrimSpace(line[6:]))
-		case bytes.HasPrefix(line, []byte("data:")) && data == nil:
-			data = bytes.TrimSpace(line[5:])
-		default:
-			return "", nil, nil
-		}
+	return protectedParsedFrameEvent(parseSSEFrame(frame))
+}
+
+func protectedParsedFrameEvent(parsed parsedSSEFrame) (string, *jsonNode, []byte) {
+	event, data := parsed.event, parsed.data
+	if len(data) == 0 {
+		return "", nil, nil
 	}
 	n, err := scanJSON(data)
 	if err != nil || n.kind != '{' {

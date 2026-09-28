@@ -232,7 +232,9 @@ func (w *jsonRewriter) schema(n *jsonNode, path string) error {
 				return err
 			}
 		default:
-			if w.supportedOnly && !strings.Contains(" items additionalProperties contains if then else not anyOf allOf oneOf prefixItems unevaluatedItems unevaluatedProperties propertyNames ", " "+p.key.text+" ") {
+			// propertyNames constrains immutable object keys, so supported-only
+			// traversal preserves that subtree along with unknown schema keywords.
+			if w.supportedOnly && !strings.Contains(" items additionalProperties contains if then else not anyOf allOf oneOf prefixItems unevaluatedItems unevaluatedProperties ", " "+p.key.text+" ") {
 				continue
 			}
 			if err := w.schema(p.value, next); err != nil {

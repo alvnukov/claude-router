@@ -88,7 +88,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		sessionKey = ""
 	}
 	scope := affinityKey(cfg, body, req)
-	if r.URL.Path != "/v1/messages/count_tokens" {
+	if r.URL.Path == "/v1/messages/count_tokens" {
+		cands = hl.applyExistingAffinity(scope, cands)
+	} else {
 		cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
 	}
 	if !cfg.failover && len(cands) > 1 {

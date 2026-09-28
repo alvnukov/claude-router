@@ -80,6 +80,28 @@ func affinityKey(cfg config, body []byte, req anthropicRequest) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// applyExistingAffinity lets token counts use the same selected model without
+// creating or refreshing a binding for a request that performs no inference.
+func (h *health) applyExistingAffinity(scope string, candidates []candidate) []candidate {
+	if scope == "" || len(candidates) == 0 {
+		return candidates
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	binding, exists := h.sessions[scope]
+	if !exists || time.Since(binding.Used) > 24*time.Hour {
+		return candidates
+	}
+	for i, cand := range candidates {
+		if cand.Key == binding.Model && candidateSelection(cand) == binding.Selection {
+			copy(candidates[1:i+1], candidates[:i])
+			candidates[0] = cand
+			break
+		}
+	}
+	return candidates
+}
+
 // bindCandidates atomically chooses the first member for a session. A bound
 // session keeps its member; in a balance pool (poolRoute) a new session goes
 // to the least-loaded connection, chosen under the same lock that records it.

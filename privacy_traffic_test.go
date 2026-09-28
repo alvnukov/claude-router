@@ -506,7 +506,7 @@ func TestPrivacyTrafficInvalidOpenAIStreamDoesNotRepair(t *testing.T) {
 	}
 }
 
-func TestPrivacyTrafficReviewProtocolHeaderLeak(t *testing.T) {
+func TestPrivacyTrafficReviewRejectsMissingDirectAuth(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -523,11 +523,11 @@ func TestPrivacyTrafficReviewProtocolHeaderLeak(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code < 400 {
-			t.Error("sensitive protocol header accepted")
+			t.Error("direct request without authentication accepted")
 		}
 	}
 	if calls.Load() != 0 {
-		t.Fatal("header sent upstream")
+		t.Fatal("unauthenticated request sent upstream")
 	}
 }
 func TestPrivacyTrafficReviewLateErrorDiagnosticsAndTrailingJSON(t *testing.T) {
@@ -586,7 +586,7 @@ func TestPrivacyTrafficReviewStreamDiagnostics(t *testing.T) {
 		t.Fatal("stream diagnostics leaked upstream content")
 	}
 }
-func TestPrivacyTrafficReviewActualModelAndHeaderSecrets(t *testing.T) {
+func TestPrivacyTrafficReviewActualModelAndMissingAuth(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -611,10 +611,10 @@ func TestPrivacyTrafficReviewActualModelAndHeaderSecrets(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		if w.Code < 400 {
-			t.Error("known request secret leaked through protocol header")
+			t.Error("direct request without authentication accepted")
 		}
 	}
 	if calls.Load() != 1 {
-		t.Fatal("invalid header request reached upstream")
+		t.Fatal("unauthenticated direct request reached upstream")
 	}
 }
