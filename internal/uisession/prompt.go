@@ -69,7 +69,7 @@ func FirstPrompt(body []byte) string {
 }
 
 // Facts is what the session list takes from one request body.
-type Facts struct{ Effort, Prompt string }
+type Facts struct{ Effort, Prompt, Preview string }
 
 // ParseFacts reads the requested effort and the first meaningful prompt.
 func ParseFacts(body []byte) Facts {

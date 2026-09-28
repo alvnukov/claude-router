@@ -15,24 +15,31 @@ type Bodies struct {
 	entries map[string]*bodyEntry
 }
 
-// Facts returns the facts of the request id, decoding body on first sight.
-// A request without an id is decoded every time.
-func (c *Bodies) Facts(id string, body []byte) Facts {
+// Facts returns the facts of the request id, decoding body on first sight;
+// preview supplies the request preview. A request without an id is decoded
+// every time.
+func (c *Bodies) Facts(id string, body []byte, preview func([]byte) string) Facts {
+	if id != "" {
+		c.mu.Lock()
+		if e := c.entries[id]; e != nil {
+			e.seen = true
+			c.mu.Unlock()
+			return e.facts
+		}
+		c.mu.Unlock()
+	}
+	facts := ParseFacts(body)
+	facts.Preview = preview(body)
 	if id == "" {
-		return ParseFacts(body)
+		return facts
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e := c.entries[id]; e != nil {
-		e.seen = true
-		return e.facts
-	}
 	if c.entries == nil {
 		c.entries = map[string]*bodyEntry{}
 	}
-	e := &bodyEntry{facts: ParseFacts(body), seen: true}
-	c.entries[id] = e
-	return e.facts
+	c.entries[id] = &bodyEntry{facts: facts, seen: true}
+	return facts
 }
 
 // Sweep forgets requests not asked about since the previous Sweep.

@@ -218,11 +218,11 @@ func TestUIJSONRequestFiltersDetailsAndUTF8(t *testing.T) {
 		writeTrafficConfig(t, filepath.Dir(u.cs.provPath), `{}`)
 		u.st.Add(&history.Record{Start: time.Now(), Model: "claude-sonnet-5", Session: "private-session", Route: "cloud", ReqBody: []byte(`{"messages":[{"role":"user","content":"Секретная задача"}]}`)})
 		body := apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes()
-		var state struct{ Sessions []struct{ ID, Title string } }
+		var state struct{ Sessions []struct{ ID, Title, Preview string } }
 		if err := json.Unmarshal(body, &state); err != nil {
 			t.Fatal(err)
 		}
-		if len(state.Sessions) != 1 || state.Sessions[0].ID != "private-session" || state.Sessions[0].Title != "" {
+		if len(state.Sessions) != 1 || state.Sessions[0].ID != "private-session" || state.Sessions[0].Title != "" || state.Sessions[0].Preview != "" {
 			t.Fatalf("privacy profiles on, title from request text: %+v", state.Sessions)
 		}
 	})

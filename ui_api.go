@@ -204,6 +204,8 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	sessions := map[string]*webui.Session{}
 	routeIndexes := map[string]map[[5]string]int{}
 	sessionPrompts := map[string][]string{}
+	promptTitles := uisession.PromptTitles(u.cs.privacyRuntime())
+	bodyPreview := func(body []byte) string { _, _, p := quickSummary(body); return p }
 	for _, rec := range records {
 		out.Summary.Total++
 		if !rec.Done() {
@@ -219,12 +221,18 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if model == "" {
 			model = rec.Model
 		}
-		facts := u.sessionBodies.Facts(rec.ID, rec.ReqBody)
+		facts := u.sessionBodies.Facts(rec.ID, rec.ReqBody, bodyPreview)
 		connection := uisession.Connection(rec.Route, rec.Served)
 		s := sessions[rec.Session]
 		if s == nil {
-			item := b.requestDTO(rec)
-			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: item.Preview, Connection: connection, Effort: facts.Effort, Route: rec.Route, LastAt: rec.Start, Routes: []webui.SessionRoute{}}
+			preview := ""
+			if promptTitles {
+				preview = facts.Preview
+			}
+			if facts.Preview == "" {
+				preview = b.requestDTO(rec).Preview
+			}
+			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: preview, Connection: connection, Effort: facts.Effort, Route: rec.Route, LastAt: rec.Start, Routes: []webui.SessionRoute{}}
 			sessions[rec.Session] = s
 			routeIndexes[rec.Session] = map[[5]string]int{}
 		}
@@ -267,7 +275,6 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		root = filepath.Join(filepath.Dir(u.claudeProxy.path), "projects")
 	}
 	names := u.sessionNames.Snapshot(root, ids)
-	promptTitles := uisession.PromptTitles(u.cs.privacyRuntime())
 	for i := range out.Sessions {
 		session := &out.Sessions[i]
 		identity := names[session.ID]
