@@ -116,12 +116,7 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 		spans = append(spans, Span{m.start, m.end, m.value.kind, text[m.start:m.end]})
 		lookup[m.start] = m
 	}
-	for _, s := range r.engine.detectors.regex.Detect(text) {
-		switch s.Kind {
-		case KindIPv4, KindIPv6, KindCIDR4, KindCIDR6, KindMAC:
-			spans = append(spans, s)
-		}
-	}
+	spans = append(spans, r.engine.detectors.regex.Network(text)...)
 	for _, p := range secretPlaceholderRE.FindAllStringIndex(text, -1) {
 		spans = append(spans, Span{p[0], p[1], KindSecret, text[p[0]:p[1]]})
 	}

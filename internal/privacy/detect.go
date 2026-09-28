@@ -135,32 +135,7 @@ func (d regexDetector) Detect(text string) []Span {
 	if enabled(d.filters, "secret") {
 		out = p.detectSecrets(text)
 	}
-	for _, re := range []*regexp.Regexp{p.ipv4, p.ipv6} {
-		if re == p.ipv4 && !enabled(d.filters, "ipv4") || re == p.ipv6 && !enabled(d.filters, "ipv6") {
-			continue
-		}
-		for _, v := range re.FindAllStringIndex(text, -1) {
-			start, end := v[0], v[1]
-			if re == p.ipv6 && start > 0 && (wordRune(rune(text[start-1]), true)) {
-				if i := strings.IndexByte(text[start:end], ':'); i >= 0 {
-					start += i + 1
-				}
-			}
-			if !wordBoundary(text, start, end, false) || start > 0 && text[start-1] == '.' || end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
-				continue
-			}
-			value := text[start:end]
-			if _, k, ok := networkSpan(value); ok {
-				out = append(out, Span{start, end, k, value})
-			}
-		}
-	}
-	for _, v := range p.mac.FindAllStringIndex(text, -1) {
-		s := text[v[0]:v[1]]
-		if _, ok := parseMAC(s); ok && wordBoundary(text, v[0], v[1], false) {
-			out = append(out, Span{v[0], v[1], KindMAC, s})
-		}
-	}
+	out = append(out, d.Network(text)...)
 	for _, v := range p.host.FindAllStringIndex(text, -1) {
 		s := text[v[0]:v[1]]
 		if domainOf(s, d.domains) != "" {
@@ -188,6 +163,50 @@ func (d regexDetector) Detect(text string) []Span {
 		}
 		if digits >= 8 && digits <= 15 {
 			out = append(out, Span{v[0], v[1], KindPhone, s})
+		}
+	}
+	filtered := out[:0]
+	for _, span := range out {
+		if enabled(d.filters, string(span.Kind)) {
+			filtered = append(filtered, span)
+		}
+	}
+	return filtered
+}
+
+// Network returns only the address spans (IPv4, IPv6, CIDR, MAC) of Detect.
+// Restoring a response needs no others, and the secret scans dominate the cost
+// on large responses.
+func (d regexDetector) Network(text string) []Span {
+	p := d.policy
+	if p == nil {
+		p = defaultPolicy
+	}
+	var out []Span
+	for _, re := range []*regexp.Regexp{p.ipv4, p.ipv6} {
+		if re == p.ipv4 && !enabled(d.filters, "ipv4") || re == p.ipv6 && !enabled(d.filters, "ipv6") {
+			continue
+		}
+		for _, v := range re.FindAllStringIndex(text, -1) {
+			start, end := v[0], v[1]
+			if re == p.ipv6 && start > 0 && (wordRune(rune(text[start-1]), true)) {
+				if i := strings.IndexByte(text[start:end], ':'); i >= 0 {
+					start += i + 1
+				}
+			}
+			if !wordBoundary(text, start, end, false) || start > 0 && text[start-1] == '.' || end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
+				continue
+			}
+			value := text[start:end]
+			if _, k, ok := networkSpan(value); ok {
+				out = append(out, Span{start, end, k, value})
+			}
+		}
+	}
+	for _, v := range p.mac.FindAllStringIndex(text, -1) {
+		s := text[v[0]:v[1]]
+		if _, ok := parseMAC(s); ok && wordBoundary(text, v[0], v[1], false) {
+			out = append(out, Span{v[0], v[1], KindMAC, s})
 		}
 	}
 	filtered := out[:0]
