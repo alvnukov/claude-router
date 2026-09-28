@@ -271,11 +271,12 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		root = filepath.Join(filepath.Dir(u.claudeProxy.path), "projects")
 	}
 	names := u.sessionNames.Snapshot(root, ids)
+	promptTitles := uisession.PromptTitles(u.cs.privacyRuntime())
 	for i := range out.Sessions {
 		session := &out.Sessions[i]
 		identity := names[session.ID]
 		session.Title, session.Project, session.Branch = identity.Title, identity.Project, identity.Branch
-		if session.Title == "" && session.ID != "" {
+		if session.Title == "" && session.ID != "" && promptTitles {
 			bodies := sessionBodies[session.ID]
 			for j := len(bodies) - 1; j >= 0; j-- {
 				if session.Title = uisession.FirstPrompt(bodies[j]); session.Title != "" {

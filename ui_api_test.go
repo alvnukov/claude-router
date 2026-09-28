@@ -212,6 +212,20 @@ func TestUIJSONRequestFiltersDetailsAndUTF8(t *testing.T) {
 			t.Fatalf("titles=%+v", state.Sessions)
 		}
 	})
+	t.Run("no request-text title under privacy profiles", func(t *testing.T) {
+		u, h := testUI(t)
+		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+		writeTrafficConfig(t, filepath.Dir(u.cs.provPath), `{}`)
+		u.st.Add(&history.Record{Start: time.Now(), Model: "claude-sonnet-5", Session: "private-session", Route: "cloud", ReqBody: []byte(`{"messages":[{"role":"user","content":"Секретная задача"}]}`)})
+		body := apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes()
+		var state struct{ Sessions []struct{ ID, Title string } }
+		if err := json.Unmarshal(body, &state); err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Sessions) != 1 || state.Sessions[0].ID != "private-session" || state.Sessions[0].Title != "" {
+			t.Fatalf("privacy profiles on, title from request text: %+v", state.Sessions)
+		}
+	})
 	u, h := testUI(t, "session-a", "session-b")
 	r := &history.Record{Start: time.Now(), Model: "claude-opus-5", Route: "local", Session: "failed-session", Served: "p/m1", ReqBody: []byte(`{"system":"needle-in-system","messages":[{"role":"user","content":"` + strings.Repeat("Ж", 200) + `"}]}`), Headers: map[string]string{"Authorization": "Bearer PRIVATE", "X-Api-Key": "PRIVATE", "Cookie": "PRIVATE", "Content-Type": "application/json"}}
 	u.st.Add(r)
