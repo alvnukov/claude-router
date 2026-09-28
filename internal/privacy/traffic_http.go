@@ -311,12 +311,6 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		reject(503, "api_error", "privacy: upstream not configured for protected transport")
 		return
 	}
-	for key := range r.Header {
-		if strings.HasPrefix(strings.ToLower(key), "anthropic-") && !strings.EqualFold(key, "Anthropic-Beta") && !strings.EqualFold(key, "Anthropic-Version") {
-			badInput()
-			return
-		}
-	}
 	apiKeys, authorizations := r.Header.Values("X-Api-Key"), r.Header.Values("Authorization")
 	if len(apiKeys)+len(authorizations) != 1 {
 		badInput()
@@ -386,8 +380,12 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	up.Header.Set("User-Agent", "localrouter")
 	up.Header.Set(authName, authValue)
 	up.Header.Set("Anthropic-Version", versionValue)
-	if len(beta) == 1 {
-		up.Header.Set("Anthropic-Beta", beta[0])
+	// Provider protocol controls are opaque to content masking. Preserve new
+	// SDK headers as well as beta/version without forwarding unrelated headers.
+	for key, values := range r.Header {
+		if strings.HasPrefix(strings.ToLower(key), "anthropic-") {
+			up.Header[http.CanonicalHeaderKey(key)] = append([]string(nil), values...)
+		}
 	}
 	client := deps.Client
 	if client == nil {

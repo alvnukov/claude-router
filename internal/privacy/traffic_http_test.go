@@ -476,11 +476,10 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 			{"X-Api-Key": {"first", "second"}},
 			{"X-Api-Key": {" "}},
 			{"X-Api-Key": nil},
-			{"Anthropic-Required-Unknown": {"must-forward-" + compatCanary}},
 		} {
 			w := compatHTTPCallWithHeaders(t, h, "/v1/messages?beta=true", compatHTTPBody(), extra)
 			if w.Code != http.StatusBadRequest || upstreamCalls.Load() != 0 {
-				t.Fatal("mixed, malformed, or unknown client headers sent upstream")
+				t.Fatal("mixed or malformed client authentication sent upstream")
 			}
 		}
 		for _, path := range []string{"/v1/messages?beta=true&extra=1", "/v1/messages?beta=%74rue", "/v1/messages/"} {
