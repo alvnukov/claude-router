@@ -192,27 +192,36 @@ func observeProtectedFrame(frame []byte, open map[string]string, life *protected
 	}
 	switch event {
 	case "content_block_start":
-		if !hasOnly(payload, "type index content_block") || key == "" || open[key] != "" {
+		if key == "" || open[key] != "" {
 			return false
 		}
 		block := payload.get("content_block")
-		if block != nil && (block.str("type") == "text" && hasOnly(block, "type text") || block.str("type") == "tool_use" && hasOnly(block, "type id name input")) {
+		if block != nil && block.kind == '{' && block.str("type") != "" {
 			open[key] = block.str("type")
 		}
 	case "content_block_stop":
-		if hasOnly(payload, "type index") {
-			delete(open, key)
-		}
+		delete(open, key)
 	case "content_block_delta":
-		if !hasOnly(payload, "type index delta") {
+		if open[key] == "" {
 			return false
 		}
 		delta := payload.get("delta")
-		if delta != nil && (open[key] == "text" && hasOnly(delta, "type text") && delta.str("type") == "text_delta" && delta.str("text") != "" || open[key] == "tool_use" && hasOnly(delta, "type partial_json") && delta.str("type") == "input_json_delta" && delta.str("partial_json") != "") {
-			life.useful()
+		if delta != nil && delta.kind == '{' {
+			if field := supportedDeltaField(open[key], delta.str("type")); field != "" {
+				if delta.str(field) != "" {
+					life.useful()
+				}
+			} else if open[key] != "text" && open[key] != "tool_use" && open[key] != "thinking" {
+				for _, pair := range delta.pairs {
+					if pair.key.text != "type" && pair.value.kind == '"' && pair.value.text != "" {
+						life.useful()
+						break
+					}
+				}
+			}
 		}
 	case "message_stop":
-		return hasOnly(payload, "type") && len(open) == 0 && !life.expired.Load()
+		return len(open) == 0 && !life.expired.Load()
 	}
 	return false
 }
@@ -244,8 +253,20 @@ func protectedFrameEvent(frame []byte) (string, *jsonNode, []byte) {
 		}
 	}
 	n, err := scanJSON(data)
-	if err != nil || n.kind != '{' || n.str("type") != event {
+	if err != nil || n.kind != '{' {
 		return "", nil, nil
+	}
+	if event == "" {
+		event = n.str("type")
+	}
+	if event == "" || n.str("type") != "" && n.str("type") != event {
+		return "", nil, nil
+	}
+	switch event {
+	case "message_start", "message_delta", "message_stop", "content_block_start", "content_block_delta", "content_block_stop", "error":
+		if n.str("type") != event {
+			return "", nil, nil
+		}
 	}
 	return event, n, data
 }

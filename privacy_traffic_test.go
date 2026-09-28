@@ -91,8 +91,16 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				seen.Add(1)
 				b, _ := io.ReadAll(r.Body)
-				if bytes.Contains(b, []byte(trafficCanary)) || bytes.Contains(b, []byte("private-session")) {
-					t.Error("input or metadata leaked")
+				var payload, original map[string]json.RawMessage
+				if err := json.Unmarshal(b, &payload); err != nil {
+					t.Error(err)
+				}
+				_ = json.Unmarshal([]byte(trafficBody), &original)
+				if bytes.Contains(payload["messages"], []byte(trafficCanary)) {
+					t.Error("supported text leaked")
+				}
+				if !local && !bytes.Equal(payload["metadata"], original["metadata"]) {
+					t.Error("service metadata changed")
 				}
 				if strings.Contains(fmtHeader(r.Header), trafficCanary) {
 					t.Error("header leak")
@@ -183,6 +191,7 @@ func TestPrivacyTrafficFailClosedRoutesAndConfig(t *testing.T) {
 	var seen atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen.Add(1)
+		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"content":"ok"}`)
 	}))
 	defer up.Close()
@@ -192,10 +201,10 @@ func TestPrivacyTrafficFailClosedRoutesAndConfig(t *testing.T) {
 			t.Fatal("unsafe route accepted")
 		}
 	}
-	if w := trafficCall(h, "/v1/messages", `{"model":"test","system":"safe","unknown":"`+trafficCanary+`"}`); w.Code < 400 {
-		t.Fatal("unknown field accepted")
+	if w := trafficCall(h, "/v1/messages", `{"model":"test","system":"safe","unknown":"`+trafficCanary+`"}`); w.Code != http.StatusOK {
+		t.Fatal("unknown field blocked supported text")
 	}
-	if seen.Load() != 0 || len(st.List()) != 0 {
+	if seen.Load() != 1 || len(st.List()) != 0 {
 		t.Fatal("rejected input escaped")
 	}
 	if err := os.WriteFile(filepath.Join(home, "privacy-profiles.json"), []byte(`{"enabled":false,`), 0600); err != nil {
@@ -210,7 +219,7 @@ func TestPrivacyTrafficFailClosedRoutesAndConfig(t *testing.T) {
 	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code < 400 {
 		t.Fatal("deleted policy bypass")
 	}
-	if seen.Load() != 0 {
+	if seen.Load() != 1 {
 		t.Fatal("sent after configuration failure")
 	}
 }
@@ -232,8 +241,15 @@ func TestPrivacyTrafficCountTokensAndErrors(t *testing.T) {
 	}))
 	defer up.Close()
 	h, _, _ := trafficFixture(t, up, true)
-	if w := trafficCall(h, "/v1/messages/count_tokens", trafficBody); w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "12") {
-		t.Fatalf("unsupported protected count: %d %s", w.Code, w.Body.String())
+	countResponse := trafficCall(h, "/v1/messages/count_tokens", trafficBody)
+	var estimate struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(countResponse.Body.Bytes(), &estimate); err != nil {
+		t.Fatal(err)
+	}
+	if countResponse.Code != http.StatusOK || estimate.InputTokens != len(trafficBody)/4 || count.Load() != 0 {
+		t.Fatalf("local count failed: %d %s", countResponse.Code, countResponse.Body.String())
 	}
 	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code != http.StatusBadGateway || strings.Contains(w.Body.String(), trafficCanary) {
 		t.Fatal("unsafe local upstream error")
@@ -345,19 +361,23 @@ func TestPrivacyTrafficRedirectNeverFollowed(t *testing.T) {
 func TestPrivacyTrafficUnknownNestedAndDuplicateArguments(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
+		n := calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
+		if n <= 2 {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+			return
+		}
 		_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"id":"call","type":"function","function":{"name":"run","arguments":"{\"cmd\":\"safe\",\"cmd\":\"dangerous\"}"}}]},"finish_reason":"tool_calls"}]}`)
 	}))
 	defer up.Close()
 	h, _, _ := trafficFixture(t, up, true)
 	for _, body := range []string{`{"model":"test","messages":[{"role":"user","content":[{"type":"text","text":"safe","unknown":"hidden content"}]}]}`, `{"model":"test","tools":[{"name":"search","type":"web_search_20250101"}],"messages":[{"role":"user","content":"safe"}]}`} {
-		if w := trafficCall(h, "/v1/messages", body); w.Code < 400 {
-			t.Fatal("unknown structure accepted")
+		if w := trafficCall(h, "/v1/messages", body); w.Code != http.StatusOK {
+			t.Fatalf("unknown structure blocked route: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if calls.Load() != 0 {
-		t.Fatal("uncovered nested input escaped")
+	if calls.Load() != 2 {
+		t.Fatal("unknown input did not reach normal translator")
 	}
 	w := trafficCall(h, "/v1/messages", trafficBody)
 	if w.Code < 400 || strings.Contains(w.Body.String(), "tool_use") {
@@ -460,15 +480,15 @@ func TestPrivacyTrafficCapacityAndCancellation(t *testing.T) {
 		}
 	}
 }
-func TestPrivacyTrafficCountTokensRejectsUnexpectedResponse(t *testing.T) {
+func TestPrivacyTrafficCountTokensPreservesExtraResponseFields(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"input_tokens":12,"content":"unexpected"}`)
 	}))
 	defer up.Close()
 	h, _, _ := trafficFixture(t, up, false)
-	if w := trafficCall(h, "/v1/messages/count_tokens", trafficBody); w.Code < 400 {
-		t.Fatal("unexpected count-token payload released")
+	if w := trafficCall(h, "/v1/messages/count_tokens", trafficBody); w.Code != http.StatusOK || w.Body.String() != `{"input_tokens":12,"content":"unexpected"}` {
+		t.Fatal("valid count with extra fields changed or blocked")
 	}
 }
 
@@ -571,13 +591,17 @@ func TestPrivacyTrafficReviewActualModelAndHeaderSecrets(t *testing.T) {
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"content":"ok"}`)
+		wire, _ := io.ReadAll(r.Body)
+		if !bytes.Contains(wire, []byte(`"model":"good"`)) {
+			t.Error("structural model identifier changed")
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
 	}))
 	defer up.Close()
 	h, _, home := trafficFixture(t, up, true)
 	writeTrafficConfig(t, home, `{"entries":[{"kind":"org","forms":["good"]}]}`)
-	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code < 400 {
-		t.Error("actual model identifier bypassed profile")
+	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code != http.StatusOK {
+		t.Error("structural model identifier blocked request")
 	}
 	h, _, _ = trafficFixture(t, up, false)
 	for _, value := range []string{trafficCanary, base64.StdEncoding.EncodeToString([]byte(trafficCanary))} {
@@ -590,7 +614,7 @@ func TestPrivacyTrafficReviewActualModelAndHeaderSecrets(t *testing.T) {
 			t.Error("known request secret leaked through protocol header")
 		}
 	}
-	if calls.Load() != 0 {
-		t.Fatal("sensitive structural value reached upstream")
+	if calls.Load() != 1 {
+		t.Fatal("invalid header request reached upstream")
 	}
 }

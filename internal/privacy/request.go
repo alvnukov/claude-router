@@ -87,7 +87,8 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 	if r.engine.allowedPath(field.path) || r.engine.detectors.allowed(text) {
 		return nil, nil
 	}
-	if field.toolInput {
+	supportedOnly := r.engine.opt.supportedOnly
+	if field.toolInput && !supportedOnly {
 		if expected := r.engine.fieldKind(field); expected != "" {
 			valid := false
 			for _, match := range r.undo.matches(text) {
@@ -132,17 +133,20 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 		var value string
 		if m, ok := lookup[s.Start]; ok && m.end == s.End {
 			if !m.value.secret && !wordBoundary(text, s.Start, s.End, m.value.kind == KindHost) && !pathBoundary(text, s.Start, s.End) {
-				if field.toolInput {
+				if field.toolInput && !supportedOnly {
 					return nil, correctionError()
 				}
 				continue
 			}
-			if kind := r.engine.fieldKind(field); field.toolInput && kind != "" && kind != m.value.kind {
+			if kind := r.engine.fieldKind(field); field.toolInput && !supportedOnly && kind != "" && kind != m.value.kind {
 				return nil, correctionError()
 			}
 			if m.value.foreign || s.Value != m.value.pseudo {
+				if supportedOnly {
+					continue
+				}
 				r.stats.Unexpected++
-				if field.toolInput {
+				if field.toolInput && !supportedOnly {
 					return nil, correctionError()
 				}
 				continue
@@ -153,12 +157,18 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 				value = m.value.real
 			}
 		} else if s.Kind == KindSecret {
+			if supportedOnly {
+				continue
+			}
 			r.stats.Unexpected++
 			if field.toolInput {
 				return nil, correctionError()
 			}
 			continue
 		} else {
+			if _, seen := r.spellings[s.Value]; supportedOnly && !seen {
+				continue
+			}
 			value = mapNetwork(r.ip, s.Value, true)
 			if _, seen := r.spellings[s.Value]; field.toolInput && !seen && value != s.Value {
 				return nil, correctionError()

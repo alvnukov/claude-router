@@ -91,7 +91,7 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 			}
 			sum := sha256.Sum256(append([]byte("transport-v1\x00"), profile.Rules...))
 			namespace := filepath.Join(r.home, "privacy-runtime", profile.ID+"-"+hex.EncodeToString(sum[:]))
-			opt := Options{}
+			opt := Options{supportedOnly: true}
 			if effectiveMode(profile.Mode) == ModeDetect {
 				namespace = ""
 				opt.ephemeral = true
@@ -118,20 +118,7 @@ func (r *Runtime) State() RuntimeState {
 	return state
 }
 func (r *Runtime) Reject() { r.mu.Lock(); r.stats.Rejected++; r.mu.Unlock() }
-func hasClientControls(body []byte) bool {
-	n, err := scanJSON(body)
-	if err != nil || n.kind != '{' {
-		return false
-	}
-	thinking := n.get("thinking")
-	return n.get("context_management") != nil || thinking != nil && thinking.str("type") == "enabled"
-}
-
 func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) {
-	controls := hasClientControls(body)
-	if target.Translated && controls {
-		return nil, nil, errTraffic
-	}
 	resolution := p.config.Resolve(target)
 	if !resolution.Enabled {
 		p.runtime.mu.Lock()
@@ -141,9 +128,6 @@ func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) 
 	}
 	e := p.engines[resolution.Profile]
 	if e == nil || len(body) > TrafficInputLimit {
-		return nil, nil, errTraffic
-	}
-	if resolution.Mode != ModeDetect && controls && !p.clientControls.allows(target, body) {
 		return nil, nil, errTraffic
 	}
 	if resolution.Mode == ModeDetect {
@@ -166,16 +150,11 @@ func (p *Policy) Prepare(target Target, body []byte) (*Exchange, []byte, error) 
 	if err != nil {
 		return nil, nil, errTraffic
 	}
-	wire, err := withoutMetadata(masked)
-	if err != nil {
-		req.Close()
-		return nil, nil, errTraffic
-	}
 	p.runtime.mu.Lock()
 	p.runtime.stats.Protected++
 	p.runtime.stats.Active++
 	p.runtime.mu.Unlock()
-	return &Exchange{engine: e, request: req, runtime: p.runtime}, wire, nil
+	return &Exchange{engine: e, request: req, runtime: p.runtime}, masked, nil
 }
 func (x *Exchange) Close() {
 	if x == nil {
@@ -212,7 +191,7 @@ func (x *Exchange) Restore(body []byte, stream bool) ([]byte, error) {
 			out, err = x.engine.UnmaskJSON(x.request, body)
 		}
 	}
-	if err != nil || x.request.Stats().Unexpected > 0 || len(out) > TrafficOutputLimit {
+	if err != nil || !x.engine.opt.supportedOnly && x.request.Stats().Unexpected > 0 || len(out) > TrafficOutputLimit {
 		return nil, errRestore
 	}
 	x.runtime.mu.Lock()

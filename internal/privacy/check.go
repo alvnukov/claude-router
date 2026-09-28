@@ -34,7 +34,10 @@ func (e *Engine) Check(body []byte) error {
 	if err != nil {
 		return err
 	}
-	if tools := n.get("tools"); tools != nil {
+	if e.opt.supportedOnly && ValidateObject(body) != nil {
+		return errTraffic
+	}
+	if tools := n.get("tools"); tools != nil && !e.opt.supportedOnly {
 		for _, tool := range tools.items {
 			name := tool.str("name")
 			if strings.HasPrefix(name, "mcp__claude_ai_") {
@@ -65,7 +68,7 @@ func (e *Engine) Check(body []byte) error {
 			}
 		}
 	}
-	if visitNodes(n, func(v *jsonNode) bool {
+	if !e.opt.supportedOnly && visitNodes(n, func(v *jsonNode) bool {
 		if v.str("type") == "thinking" {
 			for _, s := range e.detectors.dict.Detect(v.str("thinking")) {
 				if !e.detectors.allowed(s.Value) {
@@ -77,7 +80,7 @@ func (e *Engine) Check(body []byte) error {
 	}) {
 		return &RejectError{Reason: "thinking содержит реальные значения; начните новую сессию под профилем"}
 	}
-	_, err = rewriteRequest(body, func(text string, f fieldKind) ([]textEdit, error) {
+	_, err = rewriteRecordedMode(body, func(text string, f fieldKind) ([]textEdit, error) {
 		if e.allowedPath(f.path) {
 			return nil, nil
 		}
@@ -92,7 +95,7 @@ func (e *Engine) Check(body []byte) error {
 			}
 		}
 		return nil, nil
-	})
+	}, nil, nil, e.opt.supportedOnly)
 	return err
 }
 func (e *Engine) dictionaryCollision(s string) bool {

@@ -2,6 +2,7 @@ package privacy
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -27,7 +28,7 @@ func TestTransportClientControlsCompilingRED(t *testing.T) {
 	}
 }
 
-func TestClientControlsUnapprovedModelCompilingRED(t *testing.T) {
+func TestClientControlsUnapprovedModelPreservesControls(t *testing.T) {
 	home := t.TempDir()
 	profiles := []byte(`{"version":1,"enabled":true,"default":"safe","profiles":[{"id":"safe","name":"Safe","enabled":true,"mode":"mask","rules":{"entries":[]}}],"bindings":[]}`)
 	if err := os.WriteFile(filepath.Join(home, "privacy-profiles.json"), profiles, 0600); err != nil {
@@ -41,8 +42,8 @@ func TestClientControlsUnapprovedModelCompilingRED(t *testing.T) {
 	if x != nil {
 		x.Close()
 	}
-	if err == nil || x != nil || wire != nil {
-		t.Fatalf("unapproved controls reached direct transport: exchange=%t wire=%d", x != nil, len(wire))
+	if err != nil || x == nil || !bytes.Contains(wire, []byte(`"budget_tokens":31999`)) {
+		t.Fatalf("unapproved controls blocked: exchange=%t wire=%d err=%v", x != nil, len(wire), err)
 	}
 }
 
@@ -52,7 +53,13 @@ func TestProtectedLocalCountCompilingRED(t *testing.T) {
 		Runtime: clientCompatRuntime(t, "mask"),
 		Resolve: func([]byte) (HTTPRoute, error) {
 			return HTTPRoute{Mode: "openai", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, effort string) {
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true, TokenCount: true}, body); err != nil {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
 				localCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4})
 			}}, nil
 		},
 	}
@@ -69,7 +76,7 @@ func TestProtectedLocalCountCompilingRED(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != http.StatusBadRequest || localCalls.Load() != 0 {
+	if resp.StatusCode != http.StatusOK || localCalls.Load() != 1 {
 		t.Fatalf("unverified protected local count: status=%d calls=%d", resp.StatusCode, localCalls.Load())
 	}
 }

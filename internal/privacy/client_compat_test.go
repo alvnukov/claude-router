@@ -2,6 +2,7 @@ package privacy
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,8 +95,32 @@ func TestTransportClientControls(t *testing.T) {
 			if x != nil {
 				x.Close()
 			}
-			if err == nil || x != nil || len(wire) != 0 {
-				t.Fatalf("invalid %s reached transport: exchange=%t wire=%d", tc.name, x != nil, len(wire))
+			if tc.name == "duplicate-key" {
+				if err == nil || x != nil || len(wire) != 0 {
+					t.Fatal("duplicate JSON key accepted")
+				}
+				return
+			}
+			if err != nil || x == nil {
+				t.Fatalf("supported text blocked by %s: %v", tc.name, err)
+			}
+			var before, after map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(tc.body), &before); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(wire, &after); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Equal(before["system"], after["system"]) || bytes.Contains(after["system"], []byte(compatCanary)) {
+				t.Fatal("supported system text was not masked")
+			}
+			for _, key := range []string{"thinking", "context_management", "unknown", "model", "max_tokens"} {
+				if !bytes.Equal(before[key], after[key]) {
+					t.Fatalf("opaque/control field %s changed", key)
+				}
+			}
+			if tc.name == "historical-signed-thinking" && !bytes.Contains(wire, []byte(`{"type":"thinking","thinking":"synthetic","signature":"opaque-synthetic"}`)) {
+				t.Fatal("signed thinking changed")
 			}
 		})
 	}
@@ -118,8 +143,8 @@ func TestClientControlsPolicyRoutes(t *testing.T) {
 					t.Fatal("mask has no restoration exchange")
 				}
 				defer x.Close()
-				if bytes.Contains(wire, []byte(compatCanary)) || bytes.Contains(wire, []byte(`"metadata"`)) {
-					t.Fatal("masked request leaked content or metadata")
+				if bytes.Contains(wire, []byte(compatCanary)) || !bytes.Contains(wire, []byte(`"metadata":{"user_id":"synthetic-session-only"}`)) {
+					t.Fatal("masked request leaked text or changed service metadata")
 				}
 				for _, unchanged := range []string{`"budget_tokens":31999`, `"display":"omitted"`, `"clear_thinking_20251015"`, `"keep":"all"`, `"run_synthetic"`, `"input_schema"`} {
 					if !bytes.Contains(wire, []byte(unchanged)) {
@@ -134,17 +159,35 @@ func TestClientControlsPolicyRoutes(t *testing.T) {
 			}
 			target := clientCompatTarget()
 			target.Translated = true
-			if x, wire, err := p.Prepare(target, body); err == nil || x != nil || len(wire) != 0 {
-				if x != nil {
-					x.Close()
-				}
-				t.Fatal("translated controls passed candidate guard")
+			x, wire, err = p.Prepare(target, body)
+			if err != nil {
+				t.Fatal("translated controls rejected", err)
 			}
+			if mode == "mask" {
+				if x == nil || bytes.Contains(wire, []byte(compatCanary)) {
+					t.Fatal("translated supported text not masked")
+				}
+				defer x.Close()
+				var request struct {
+					System string `json:"system"`
+				}
+				if err := json.Unmarshal(wire, &request); err != nil {
+					t.Fatal(err)
+				}
+				response, _ := json.Marshal(map[string]any{"content": []any{map[string]string{"type": "text", "text": request.System}}})
+				restored, err := x.Restore(response, false)
+				if err != nil || !bytes.Contains(restored, []byte(compatCanary)) {
+					t.Fatal("translated text not restored", err)
+				}
+			} else if x != nil || !bytes.Equal(wire, body) {
+				t.Fatal("translated detect/bypass changed original body")
+			}
+
 		})
 	}
 }
 
-func TestClientControlsOpaqueResponseIsNotReleased(t *testing.T) {
+func TestClientControlsOpaqueResponsePreserved(t *testing.T) {
 	p, err := clientCompatRuntime(t, "mask").Snapshot()
 	if err != nil {
 		t.Fatal(err)
@@ -159,8 +202,8 @@ func TestClientControlsOpaqueResponseIsNotReleased(t *testing.T) {
 		`{"content":[{"type":"redacted_thinking","data":"opaque-synthetic"}]}`,
 	} {
 		out, err := x.Restore([]byte(response), false)
-		if err == nil || len(out) != 0 {
-			t.Fatal("opaque or signed response released")
+		if err != nil || !bytes.Equal(out, []byte(response)) {
+			t.Fatal("opaque or signed response changed", err)
 		}
 	}
 }

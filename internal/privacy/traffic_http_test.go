@@ -126,8 +126,8 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			if bytes.Contains(body, []byte(compatCanary)) || bytes.Contains(body, []byte(`"metadata"`)) || bytes.Contains(body, []byte("synthetic-session-only")) {
-				t.Error("private text or metadata reached upstream")
+			if bytes.Contains(body, []byte(compatCanary)) || !bytes.Contains(body, []byte(`"metadata":{"user_id":"synthetic-session-only"}`)) {
+				t.Error("supported text leaked or service metadata changed")
 			}
 			for _, want := range []string{`"budget_tokens":31999`, `"display":"omitted"`, `"clear_thinking_20251015"`, `"keep":"all"`, `"run_synthetic"`, `"input_schema"`} {
 				if !bytes.Contains(body, []byte(want)) {
@@ -311,7 +311,8 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 							return
 						}
 						if _, err := attempt.Prepare(Target{Model: compatModel, Provider: "openai", Translated: true}, body); err != nil {
-							t.Error("controls-free translated candidate rejected:", err)
+							t.Error("translated candidate rejected:", err)
+							w.WriteHeader(http.StatusBadRequest)
 							return
 						}
 						if err := attempt.CheckControl("synthetic-selected"); err != nil {
@@ -328,13 +329,16 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 					if w.Code != 200 || legacyCalls.Load() != 2 || localCalls.Load() != 0 {
 						t.Fatal("global-off entered protected translated guard")
 					}
-				} else if w.Code != http.StatusBadRequest || localCalls.Load() != 0 || upstreamCalls.Load() != 1 {
-					t.Fatalf("translated %s controls reached local handler: %d", mode, w.Code)
+				} else {
+					want := http.StatusOK
+					if w.Code != want || localCalls.Load() != 1 || upstreamCalls.Load() != 1 {
+						t.Fatalf("translated %s selected-profile guard: %d", mode, w.Code)
+					}
 				}
 				if mode != "off" {
 					plain := []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)
 					w = compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages", plain)
-					if w.Code != http.StatusOK || localCalls.Load() != 1 {
+					if w.Code != http.StatusOK || localCalls.Load() != 2 {
 						t.Fatal("translated Messages without controls lost its old route")
 					}
 				}
@@ -378,7 +382,7 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 				{"opaque", "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\n" +
 					"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"opaque-synthetic\"}}\n\n" +
 					"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n" +
-					"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", http.StatusBadGateway},
+					"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", http.StatusOK},
 				{"terminal-suffix", compatSSE("safe") + "event: error\ndata: {\"type\":\"error\",\"error\":{\"message\":\"not-part-of-response\"}}\n\n", http.StatusOK},
 			} {
 				t.Run(mode+"/"+tc.name, func(t *testing.T) {
@@ -411,20 +415,52 @@ func TestProtectedHTTPClientFirst(t *testing.T) {
 		var upstreamCalls, localCalls, legacyCalls atomic.Int32
 		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			upstreamCalls.Add(1)
+			wire, err := io.ReadAll(r.Body)
+			if err != nil || bytes.Contains(wire, []byte(compatCanary)) {
+				t.Error("count text not masked", err)
+			}
+			if r.URL.Path != "/v1/messages/count_tokens" || !bytes.Contains(wire, []byte(`"budget_tokens":31999`)) {
+				t.Error("count route or controls changed")
+			}
+			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"input_tokens":12}`)
 		}))
 		defer up.Close()
 		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "openai", &localCalls, &legacyCalls)
-		for _, body := range [][]byte{compatHTTPBody(), []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)} {
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "openai", Model: compatModel, Local: func(w http.ResponseWriter, r *http.Request, body []byte, _ string) {
+				if _, err := FromRequest(r).Prepare(Target{Model: compatModel, Provider: "openai", Translated: true, TokenCount: true}, body); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				localCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4})
+			}}, nil
+		}
+		for i, body := range [][]byte{compatHTTPBody(), []byte(`{"model":"synthetic-supported","max_tokens":100,"messages":[{"role":"user","content":"plain"}]}`)} {
 			w := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages/count_tokens", body)
-			if w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), "input_tokens") || upstreamCalls.Load() != 0 || localCalls.Load() != 0 {
-				t.Fatalf("unsupported protected local count estimated or sent: %d", w.Code)
+			var count struct {
+				InputTokens int `json:"input_tokens"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &count); err != nil {
+				t.Fatal(err)
+			}
+			if w.Code != http.StatusOK || count.InputTokens != len(body)/4 || upstreamCalls.Load() != 0 || localCalls.Load() != int32(i+1) {
+				t.Fatalf("local count status=%d body=%s", w.Code, w.Body.String())
 			}
 		}
-		deps.Resolve = func([]byte) (HTTPRoute, error) { return HTTPRoute{Mode: "anthropic", Model: compatModel}, nil }
+		endpoint, err := url.Parse(up.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deps.Resolve = func([]byte) (HTTPRoute, error) {
+			return HTTPRoute{Mode: "anthropic", Model: compatModel, Upstream: endpoint}, nil
+		}
 		w := compatHTTPCall(t, NewProtectedHTTP(deps), "/v1/messages/count_tokens", compatHTTPBody())
-		if w.Code != http.StatusBadRequest || upstreamCalls.Load() != 0 {
-			t.Fatal("unproved direct count sent before support gate")
+		if w.Code != http.StatusOK || upstreamCalls.Load() != 1 || w.Body.String() != `{"input_tokens":12}` {
+			t.Fatalf("direct count failed: %d %s", w.Code, w.Body.String())
 		}
 	})
 

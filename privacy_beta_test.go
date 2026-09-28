@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +31,11 @@ func TestPrivacyTrafficClaudeBetaQuery(t *testing.T) {
 							t.Errorf("query = %q, want %q", r.URL.RawQuery, wantQuery)
 						}
 						body, _ := io.ReadAll(r.Body)
-						if strings.Contains(string(body), trafficCanary) != (mode == "detect") {
+						var payload map[string]json.RawMessage
+						if err := json.Unmarshal(body, &payload); err != nil {
+							t.Error(err)
+						}
+						if strings.Contains(string(payload["messages"]), trafficCanary) != (mode == "detect") {
 							t.Errorf("wrong protection mode %s", mode)
 						}
 						w.Header().Set("Content-Type", "application/json")
@@ -58,13 +63,13 @@ func TestPrivacyTrafficClaudeBetaQuery(t *testing.T) {
 					}
 					body := trafficBody
 					if mode == "detect" {
-						// Direct detection preserves controls; translated routes still reject them.
+						// Detection preserves content and uses the normal route translator.
 						body = strings.TrimSuffix(body, "}") + `,"thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`
 					}
 					response := trafficCall(h, path+"?beta=true", body)
-					wantStatus, wantCalls := http.StatusBadRequest, int32(0)
-					if path == "/v1/messages" && (mode == "mask" || !local) {
-						wantStatus, wantCalls = http.StatusOK, 1
+					wantStatus, wantCalls := http.StatusOK, int32(1)
+					if local && path == "/v1/messages/count_tokens" {
+						wantCalls = 0
 					}
 					if response.Code != wantStatus || calls.Load() != wantCalls {
 						t.Fatalf("status=%d calls=%d, want %d/%d; response=%s", response.Code, calls.Load(), wantStatus, wantCalls, response.Body)

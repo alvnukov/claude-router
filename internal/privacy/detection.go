@@ -18,7 +18,7 @@ func (e *Engine) Detect(body []byte) (map[Kind]int, error) {
 	session := &sessionData{key: key}
 	m := &mapper{e: e, req: &Request{ip: ip}, view: &sessionView{session: session}}
 	// Discover plaintext secrets first so encoded occurrences can precede them.
-	_, err = rewriteRequest(body, func(text string, f fieldKind) ([]textEdit, error) {
+	_, err = rewriteRecordedMode(body, func(text string, f fieldKind) ([]textEdit, error) {
 		if e.allowedPath(f.path) {
 			return nil, nil
 		}
@@ -28,16 +28,16 @@ func (e *Engine) Detect(body []byte) (map[Kind]int, error) {
 			}
 		}
 		return nil, nil
-	})
+	}, nil, nil, e.opt.supportedOnly)
 	if err != nil {
 		return nil, errTraffic
 	}
 	counts := map[Kind]int{}
 	var source func()
-	if e.rules.Sources == "withhold" {
+	if e.rules.Sources == "withhold" && !e.opt.supportedOnly {
 		source = func() { counts[KindSource]++ }
 	}
-	_, err = rewriteJSON(body, func(text string, f fieldKind) ([]textEdit, error) {
+	_, err = rewriteRecordedMode(body, func(text string, f fieldKind) ([]textEdit, error) {
 		if e.allowedPath(f.path) {
 			return nil, nil
 		}
@@ -51,7 +51,7 @@ func (e *Engine) Detect(body []byte) (map[Kind]int, error) {
 			counts[span.Kind]++
 		}
 		return nil, nil
-	}, source)
+	}, source, nil, e.opt.supportedOnly)
 	if err != nil {
 		return nil, errTraffic
 	}

@@ -23,6 +23,7 @@ type Attempt struct {
 	hasFailure   bool
 	maskExpected bool
 	prepared     bool
+	rejected     bool
 }
 
 func NewAttempt(policy *Policy) *Attempt { return &Attempt{policy: policy} }
@@ -51,6 +52,7 @@ func (a *Attempt) Prepare(target Target, body []byte) ([]byte, error) {
 	x, wire, err := a.policy.Prepare(target, body)
 	a.exchange = x
 	a.prepared = err == nil
+	a.rejected = err != nil
 	a.protocol = ""
 	if a.prepared {
 		a.protocol = target.Protocol

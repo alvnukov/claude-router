@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,14 +128,6 @@ func NewProtectedHTTP(deps HTTPDeps) http.Handler {
 			reject(400, "invalid_request_error", "privacy: route unavailable")
 			return
 		}
-		if route.Mode != "anthropic" && hasClientControls(body) {
-			reject(400, "invalid_request_error", "privacy: unsupported translated client controls")
-			return
-		}
-		if r.URL.Path == "/v1/messages/count_tokens" {
-			reject(400, "invalid_request_error", "privacy: protected token count unsupported")
-			return
-		}
 		if route.Mode == "anthropic" {
 			serveProtectedDirect(w, r, body, route, policy, deps, limits, controller, reject)
 			return
@@ -249,6 +242,10 @@ func serveProtectedLocal(w http.ResponseWriter, r *http.Request, body []byte, ro
 		return
 	}
 	life.headers.Stop()
+	if attempt.rejected {
+		reject(400, "invalid_request_error", "privacy: request rejected by selected profile")
+		return
+	}
 	if output.status < 200 || output.status >= 300 {
 		failure := FailureForResponse(r, nil, output.status)
 		if (route.Mode == "codex" || attempt.Protocol() == "codex") && failure.Status == http.StatusTooManyRequests && failure.HTTPStatus == http.StatusTooManyRequests && failure.Category != anthropicerror.UpstreamFailure {
@@ -263,6 +260,11 @@ func serveProtectedLocal(w http.ResponseWriter, r *http.Request, body []byte, ro
 		return
 	}
 	mode := policy.config.Resolve(Target{Model: route.Model})
+	count := r.URL.Path == "/v1/messages/count_tokens"
+	if count && !attempt.Prepared() {
+		reject(400, "invalid_request_error", "privacy: unverified token count")
+		return
+	}
 	if !attempt.Prepared() && mode.Enabled && mode.Mode == ModeMask || attempt.MaskExpected() && !attempt.HasExchange() {
 		reject(502, "api_error", "privacy: unverified local response")
 		return
@@ -274,10 +276,14 @@ func serveProtectedLocal(w http.ResponseWriter, r *http.Request, body []byte, ro
 	}
 	stream := media == "text/event-stream"
 	result := output.body.Bytes()
+	if count && (stream || !validTokenCount(result)) {
+		reject(502, "api_error", "privacy: invalid token count response")
+		return
+	}
 	if stream {
 		result, err = readProtectedBody(bytes.NewReader(result), true, life)
 		if err == nil && !attempt.HasExchange() {
-			err = (*Exchange)(nil).checkTrafficSSE(result)
+			err = checkUnmaskedTrafficSSE(result)
 		}
 	}
 	if err == nil && attempt.HasExchange() {
@@ -300,7 +306,7 @@ func serveProtectedLocal(w http.ResponseWriter, r *http.Request, body []byte, ro
 }
 
 func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, route HTTPRoute, policy *Policy, deps HTTPDeps, limits LifecycleLimits, controller *http.ResponseController, reject func(int, string, string)) {
-	badInput := func() { reject(400, "invalid_request_error", "privacy: unsupported client controls") }
+	badInput := func() { reject(400, "invalid_request_error", "privacy: invalid protocol headers") }
 	if route.Upstream == nil || (route.Upstream.Scheme != "https" && route.Upstream.Scheme != "http") || route.Upstream.Host == "" || route.Upstream.User != nil || route.Upstream.Opaque != "" {
 		reject(503, "api_error", "privacy: upstream not configured for protected transport")
 		return
@@ -343,12 +349,12 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	if len(beta) == 1 {
 		betas = beta
 	}
-	target := Target{Model: route.Model, Provider: "anthropic", Betas: betas}
-	// Prepare applies client-control approval only to the resolved mask policy.
-	// Detection and disabled profiles preserve the original direct request.
+	target := Target{Model: route.Model, Provider: "anthropic", Betas: betas, TokenCount: r.URL.Path == "/v1/messages/count_tokens"}
+	// Prepare masks supported content according to the resolved profile.
+	// Client controls and opaque content do not prevent preparation.
 	exchange, wire, err := policy.Prepare(target, body)
 	if err != nil {
-		badInput()
+		reject(400, "invalid_request_error", "privacy: request preparation failed")
 		return
 	}
 	if exchange != nil {
@@ -421,6 +427,10 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		return
 	}
 	stream := media == "text/event-stream"
+	if target.TokenCount && stream {
+		reject(502, "api_error", "privacy: invalid token count response")
+		return
+	}
 	result, err := readProtectedBody(resp.Body, stream, life)
 	if err != nil || r.Context().Err() != nil || life.expired.Load() {
 		reject(502, "api_error", "privacy: upstream response rejected")
@@ -429,9 +439,12 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	if exchange != nil {
 		result, err = exchange.Restore(result, stream)
 	} else if stream {
-		err = (*Exchange)(nil).checkTrafficSSE(result)
+		err = checkUnmaskedTrafficSSE(result)
 	} else {
 		err = ValidateObject(result)
+	}
+	if err == nil && target.TokenCount && !validTokenCount(result) {
+		err = errTraffic
 	}
 	if err != nil || life.expired.Load() || r.Context().Err() != nil {
 		reject(502, "api_error", "privacy: upstream response rejected")
@@ -445,6 +458,19 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	w.Header().Set("Content-Type", media)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result)
+}
+
+func validTokenCount(body []byte) bool {
+	n, err := scanJSON(body)
+	if err != nil || n.kind != '{' {
+		return false
+	}
+	count := n.get("input_tokens")
+	if count == nil {
+		return false
+	}
+	value, err := strconv.ParseInt(string(body[count.start:count.end]), 10, 64)
+	return err == nil && value >= 0
 }
 
 func (limits LifecycleLimits) valid() bool {

@@ -16,6 +16,7 @@ import (
 // router configuration. Empty fields use the current user's machine.
 type Options struct {
 	ephemeral      bool
+	supportedOnly  bool
 	Home, Hostname string
 	Now            func() time.Time
 	newKey         func() ([]byte, error)
@@ -199,7 +200,7 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 		m := &mapper{e: e, view: view, req: req}
 		m.init()
 		// Reserve every detected real value before issuing any pseudonym.
-		_, err = rewriteRequest(body, func(text string, f fieldKind) ([]textEdit, error) {
+		_, err = rewriteRecordedMode(body, func(text string, f fieldKind) ([]textEdit, error) {
 			for _, s := range m.plainSpans(text, f) {
 				m.names.reserved[strings.ToLower(s.Value)] = true
 				if s.Kind == KindSecret && !e.allowedPath(f.path) {
@@ -207,15 +208,15 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 				}
 			}
 			return nil, nil
-		})
+		}, nil, nil, e.opt.supportedOnly)
 		if err != nil {
 			return err
 		}
 		var source func()
-		if e.rules.Sources == "withhold" {
+		if e.rules.Sources == "withhold" && !e.opt.supportedOnly {
 			source = func() { req.stats.Masked[KindSource]++ }
 		}
-		masked, err = rewriteRecorded(body, m.maskText, source, req.rememberRaw)
+		masked, err = rewriteRecordedMode(body, m.maskText, source, req.rememberRaw, e.opt.supportedOnly)
 		if err != nil {
 			return err
 		}
@@ -238,9 +239,9 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 	var err error
 	if id != "" {
 		req.stats.Scope = "session"
-		err = e.store.transaction(id, hasThinking(body), transform)
+		err = e.store.transaction(id, !e.opt.supportedOnly && hasThinking(body), transform)
 	} else {
-		if hasThinking(body) {
+		if !e.opt.supportedOnly && hasThinking(body) {
 			return nil, nil, &RejectError{Reason: "словарь сессии отсутствует; начните новую сессию"}
 		}
 		key, keyErr := e.store.newKey()
@@ -265,7 +266,7 @@ func (e *Engine) UnmaskJSON(req *Request, body []byte) ([]byte, error) {
 	if req.closed {
 		return nil, &RejectError{Reason: "request dictionary is closed"}
 	}
-	return rewriteResponse(body, req.unmaskText)
+	return rewriteRecordedMode(body, req.unmaskText, nil, nil, e.opt.supportedOnly)
 }
 func (e *Engine) Prune(now time.Time) (int, error) { return e.store.prune(now, e.rules.RetainDays) }
 func (e *Engine) Forget(session string) error {

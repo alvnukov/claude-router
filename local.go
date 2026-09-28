@@ -88,7 +88,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		sessionKey = ""
 	}
 	scope := affinityKey(cfg, body, req)
-	cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
+	if r.URL.Path != "/v1/messages/count_tokens" {
+		cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
+	}
 	if !cfg.failover && len(cands) > 1 {
 		cands = cands[:1]
 	}
@@ -100,7 +102,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	for i, cand := range cands {
 		input := req
 		if p := privacy.FromRequest(r); p != nil {
-			masked, maskErr := p.Prepare(privacy.Target{Model: cand.Key, Pool: p.Pool(), Provider: cand.Provider.Name, Translated: true, Protocol: cand.Provider.Type}, body)
+			masked, maskErr := p.Prepare(privacy.Target{Model: cand.Key, Pool: p.Pool(), Provider: cand.Provider.Name, Translated: true, Protocol: cand.Provider.Type, TokenCount: r.URL.Path == "/v1/messages/count_tokens"}, body)
 			if maskErr == nil {
 				maskErr = p.CheckControl(cand.Model)
 			}
@@ -112,6 +114,12 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 				writeAnthropicError(w, 400, "invalid_request_error", "privacy: unsupported request")
 				return
 			}
+		}
+		if r.URL.Path == "/v1/messages/count_tokens" {
+			// Match the existing local estimate without generating a completion.
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]int{"input_tokens": len(body) / 4})
+			return
 		}
 		oreq, err = toOpenAIWithToolImages(input, cand.Model, cand.Provider.Type == "codex")
 		if err != nil {

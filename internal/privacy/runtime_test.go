@@ -30,7 +30,7 @@ func TestRuntimeSnapshotAndSessionIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	if bytes.Contains(masked, []byte("10.2.3.4")) || bytes.Contains(masked, []byte("Canary")) || bytes.Contains(masked, []byte("metadata")) {
+	if bytes.Contains(masked, []byte("10.2.3.4")) || bytes.Contains(masked, []byte("Canary")) || !bytes.Contains(masked, []byte("metadata")) {
 		t.Fatalf("wire leak: %s", masked)
 	}
 	b, again, err := policy.Prepare(Target{}, body)
@@ -97,7 +97,7 @@ func TestRuntimeInvalidAndMissingNeverDisable(t *testing.T) {
 		}
 	}
 }
-func TestTransportRejectsUncoveredValues(t *testing.T) {
+func TestTransportPreservesUncoveredValues(t *testing.T) {
 	home := t.TempDir()
 	runtimeConfig(t, home, `{"entries":[{"kind":"org","forms":["PrivateCanary"]}]}`)
 	p, err := NewRuntime(home).Snapshot()
@@ -112,16 +112,21 @@ func TestTransportRejectsUncoveredValues(t *testing.T) {
 		`{"system":"ok","stop_sequences":["10.2.3.4"]}`,
 		`{"system":"x-anthropic-billing-header: PrivateCanary"}`,
 	} {
-		x, _, err := p.Prepare(Target{}, []byte(body))
-		if x != nil {
-			x.Close()
+		x, wire, err := p.Prepare(Target{}, []byte(body))
+		if err != nil || x == nil {
+			t.Fatalf("unsupported content blocked supported text: %v", err)
 		}
-		if err == nil {
-			t.Errorf("accepted unsafe envelope: %s", body)
+		x.Close()
+		if strings.Contains(body, "x-anthropic-billing-header") {
+			if bytes.Contains(wire, []byte("PrivateCanary")) {
+				t.Fatal("supported system text not masked")
+			}
+		} else if !bytes.Equal(wire, []byte(body)) {
+			t.Fatalf("uncovered values changed: %s", wire)
 		}
 	}
 }
-func TestTransportSSEAtomicAndUnknownAlias(t *testing.T) {
+func TestTransportSSEAtomicAndUnknownAliasPreserved(t *testing.T) {
 	home := t.TempDir()
 	runtimeConfig(t, home, `{}`)
 	p, err := NewRuntime(home).Snapshot()
@@ -137,17 +142,21 @@ func TestTransportSSEAtomicAndUnknownAlias(t *testing.T) {
 	_ = json.Unmarshal(masked, &obj)
 	pseudo := strings.TrimPrefix(obj["system"], "password=")
 	delta, _ := json.Marshal(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": pseudo}})
-	sse := []byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: " + string(delta) + "\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+	sse := []byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"content\":[]}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\nevent: content_block_delta\ndata: " + string(delta) + "\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	out, err := x.Restore(sse, true)
 	if err != nil || !bytes.Contains(out, []byte("Canary-password-123")) {
 		t.Fatal("stream failed", err)
 	}
-	for _, bad := range [][]byte{sse[:bytes.Index(sse, []byte("event: message_stop"))], []byte(`{"content":"<secret:credential:deadbeef>"}`)} {
-		out, err = x.Restore(bad, bytes.HasPrefix(bad, []byte("event:")))
-		if err == nil || len(out) != 0 {
-			t.Fatal("partial or unknown alias accepted")
-		}
+	out, err = x.Restore(sse[:bytes.Index(sse, []byte("event: message_stop"))], true)
+	if err == nil || len(out) != 0 {
+		t.Fatal("partial stream accepted")
 	}
+	unknown := []byte(`{"content":"<secret:credential:deadbeef>"}`)
+	out, err = x.Restore(unknown, false)
+	if err != nil || !bytes.Equal(out, unknown) {
+		t.Fatal("unknown alias changed or rejected", err)
+	}
+
 }
 
 func TestTransportResponseIdentifiersAndOpaqueBlocks(t *testing.T) {
@@ -171,8 +180,8 @@ func TestTransportResponseIdentifiersAndOpaqueBlocks(t *testing.T) {
 		`{"content":[{"type":"text","text":"safe","extra":"` + pseudo + `"}]}`,
 	} {
 		out, err := x.Restore([]byte(bad), false)
-		if err == nil || len(out) > 0 {
-			t.Error("uncovered response accepted")
+		if err != nil || !bytes.Equal(out, []byte(bad)) {
+			t.Error("opaque block, structural ID or unknown field changed", err)
 		}
 	}
 }

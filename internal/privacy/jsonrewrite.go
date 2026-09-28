@@ -32,11 +32,12 @@ type rawEdit struct {
 	data       []byte
 }
 type jsonRewriter struct {
-	body   []byte
-	f      textFunc
-	edits  []rawEdit
-	source func()
-	record func([]byte, []byte) error
+	supportedOnly bool
+	body          []byte
+	f             textFunc
+	edits         []rawEdit
+	source        func()
+	record        func([]byte, []byte) error
 }
 
 func rewriteRequest(body []byte, f textFunc) ([]byte, error)  { return rewriteJSON(body, f, nil) }
@@ -45,6 +46,14 @@ func rewriteJSON(body []byte, f textFunc, source func()) ([]byte, error) {
 	return rewriteRecorded(body, f, source, nil)
 }
 func rewriteRecorded(body []byte, f textFunc, source func(), record func([]byte, []byte) error) ([]byte, error) {
+	return rewriteRecordedMode(body, f, source, record, false)
+}
+
+// supportedOnly limits edits to known text positions and preserves opaque data.
+func rewriteRecordedMode(body []byte, f textFunc, source func(), record func([]byte, []byte) error, supportedOnly bool) ([]byte, error) {
+	if supportedOnly && !utf8.Valid(body) {
+		return nil, errors.New("privacy: invalid UTF-8")
+	}
 	n, err := scanJSON(body)
 	if err != nil {
 		return nil, err
@@ -52,7 +61,7 @@ func rewriteRecorded(body []byte, f textFunc, source func(), record func([]byte,
 	if n.kind != '{' {
 		return nil, errors.New("privacy: expected JSON object")
 	}
-	w := jsonRewriter{body: body, f: f, source: source, record: record}
+	w := jsonRewriter{body: body, f: f, source: source, record: record, supportedOnly: supportedOnly}
 	for _, p := range n.pairs {
 		switch p.key.text {
 		case "system":
@@ -136,13 +145,16 @@ func (w *jsonRewriter) block(n *jsonNode, path string, system bool) error {
 	switch typ {
 	case "thinking", "redacted_thinking", "image", "document", "text", "tool_use", "tool_result":
 	default:
+		if w.supportedOnly {
+			return nil
+		}
 		return &RejectError{Reason: "unsupported content block type"}
 	}
 	if typ == "thinking" || typ == "redacted_thinking" {
 		return nil
 	}
 	if (typ == "image" || typ == "document") && n.get("source") != nil {
-		if w.source != nil {
+		if w.source != nil && !w.supportedOnly {
 			w.edits = append(w.edits, rawEdit{n.start, n.end, []byte(`{"type":"text","text":"[privacy: изображение или документ не отправлен — профиль privacy: on]"}`)})
 			w.source()
 		}
@@ -169,6 +181,9 @@ func (w *jsonRewriter) block(n *jsonNode, path string, system bool) error {
 }
 func (w *jsonRewriter) allStrings(n *jsonNode, path string, tool bool) error {
 	if n.kind != '{' && n.kind != '[' && n.kind != '"' {
+		if w.supportedOnly {
+			return nil
+		}
 		edits, err := w.f(string(w.body[n.start:n.end]), fieldKind{path: path, property: path[strings.LastIndexByte(path, '.')+1:], toolInput: tool})
 		if err != nil {
 			return err
@@ -182,8 +197,10 @@ func (w *jsonRewriter) allStrings(n *jsonNode, path string, tool bool) error {
 		return w.literal(n, fieldKind{path: path, property: path[strings.LastIndexByte(path, '.')+1:], toolInput: tool})
 	}
 	for _, p := range n.pairs {
-		if err := w.literal(p.key, fieldKind{path: path + "." + p.key.text, toolInput: tool, objectKey: true}); err != nil {
-			return err
+		if !w.supportedOnly {
+			if err := w.literal(p.key, fieldKind{path: path + "." + p.key.text, toolInput: tool, objectKey: true}); err != nil {
+				return err
+			}
 		}
 		if err := w.allStrings(p.value, path+"."+p.key.text, tool); err != nil {
 			return err
@@ -204,7 +221,7 @@ func (w *jsonRewriter) schema(n *jsonNode, path string) error {
 			if err := w.literal(p.value, fieldKind{path: next}); err != nil {
 				return err
 			}
-		case "properties", "$defs", "definitions", "patternProperties":
+		case "properties", "$defs", "definitions", "patternProperties", "dependentSchemas":
 			for _, property := range p.value.pairs {
 				if err := w.schema(property.value, next+"."+property.key.text); err != nil {
 					return err
@@ -215,6 +232,9 @@ func (w *jsonRewriter) schema(n *jsonNode, path string) error {
 				return err
 			}
 		default:
+			if w.supportedOnly && !strings.Contains(" items additionalProperties contains if then else not anyOf allOf oneOf prefixItems unevaluatedItems unevaluatedProperties propertyNames ", " "+p.key.text+" ") {
+				continue
+			}
 			if err := w.schema(p.value, next); err != nil {
 				return err
 			}
@@ -252,7 +272,7 @@ func (w *jsonRewriter) literal(n *jsonNode, field fieldKind) error {
 	}
 	last := 0
 	billingEnd := 0
-	if field.system && strings.HasPrefix(n.text, "x-anthropic-billing-header:") {
+	if !w.supportedOnly && field.system && strings.HasPrefix(n.text, "x-anthropic-billing-header:") {
 		billingEnd = strings.IndexByte(n.text, '\n')
 		if billingEnd < 0 {
 			billingEnd = len(n.text)

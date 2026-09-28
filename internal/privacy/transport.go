@@ -2,20 +2,11 @@ package privacy
 
 import (
 	"bytes"
-	"encoding/json"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
-func withoutMetadata(body []byte) ([]byte, error) {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(body, &fields); err != nil {
-		return nil, err
-	}
-	delete(fields, "metadata")
-	return json.Marshal(fields)
-}
 func hasOnly(n *jsonNode, keys string) bool {
 	if n == nil || n.kind != '{' {
 		return false
@@ -59,6 +50,12 @@ func clientControlsShape(n *jsonNode, body []byte) bool {
 }
 
 func (e *Engine) checkTransport(body []byte) error {
+	if e.opt.supportedOnly {
+		if len(body) > TrafficInputLimit {
+			return errTraffic
+		}
+		return ValidateObject(body)
+	}
 	n, err := scanJSON(body)
 	if !utf8.Valid(body) || err != nil || n.kind != '{' {
 		return errTraffic
@@ -160,6 +157,134 @@ func (e *Engine) sensitiveStructural(text string) bool {
 // Full-buffer admission precedes any response bytes. SSE without a terminal
 // event, unknown event, upstream error or opaque reasoning is not releasable.
 func (x *Exchange) checkTrafficSSE(body []byte) error {
+	if x != nil && x.engine.opt.supportedOnly {
+		return checkSupportedTrafficSSE(body)
+	}
+	return x.checkStrictTrafficSSE(body)
+}
+
+// Unmasked traffic preserves opaque reasoning, but still requires a complete,
+// well-formed stream. Masked exchanges must use checkTrafficSSE instead.
+func checkUnmaskedTrafficSSE(body []byte) error {
+	return checkSupportedTrafficSSE(body)
+}
+
+// Admission checks framing and block lifetimes, not the provider's evolving
+// content schema. Unsupported payloads remain opaque to the privacy filter.
+func checkSupportedTrafficSSE(body []byte) error {
+	if len(body) > TrafficOutputLimit || !utf8.Valid(body) {
+		return errRestore
+	}
+	normalized := bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
+	if !bytes.HasSuffix(normalized, []byte("\n\n")) {
+		return errRestore
+	}
+	started, stopped := false, false
+	open, seen := map[string]string{}, map[string]bool{}
+	for _, frame := range bytes.Split(normalized, []byte("\n\n")) {
+		if len(bytes.TrimSpace(frame)) == 0 {
+			continue
+		}
+		event, n, data := protectedFrameEvent(frame)
+		if n == nil || stopped || event == "error" {
+			return errRestore
+		}
+		key := ""
+		switch event {
+		case "content_block_start", "content_block_delta", "content_block_stop":
+			index := n.get("index")
+			if !started || index == nil {
+				return errRestore
+			}
+			key = string(data[index.start:index.end])
+			if _, err := strconv.ParseUint(key, 10, 64); err != nil {
+				return errRestore
+			}
+		}
+		switch event {
+		case "message_start":
+			message := n.get("message")
+			if started || message == nil || message.kind != '{' {
+				return errRestore
+			}
+			if content := message.get("content"); content != nil && (content.kind != '[' || len(content.items) != 0) {
+				return errRestore
+			}
+			started = true
+		case "content_block_start":
+			block := n.get("content_block")
+			if seen[key] || block == nil || block.kind != '{' || block.str("type") == "" {
+				return errRestore
+			}
+			// Recognized reasoning values retain their protocol types; extra
+			// fields and future block types do not require privacy approval.
+			if typ := block.str("type"); typ == "thinking" || typ == "redacted_thinking" {
+				field := "thinking"
+				if typ == "redacted_thinking" {
+					field = "data"
+				}
+				if value := block.get(field); value == nil || value.kind != '"' {
+					return errRestore
+				}
+				if value := block.get("signature"); value != nil && value.kind != '"' {
+					return errRestore
+				}
+			}
+			open[key], seen[key] = block.str("type"), true
+		case "content_block_delta":
+			delta := n.get("delta")
+			if open[key] == "" || delta == nil || delta.kind != '{' || delta.str("type") == "" {
+				return errRestore
+			}
+			field := supportedDeltaField(open[key], delta.str("type"))
+			if field == "" && (open[key] == "text" || open[key] == "tool_use" || open[key] == "thinking") {
+				switch delta.str("type") {
+				case "text_delta", "input_json_delta", "thinking_delta", "signature_delta":
+					return errRestore
+				}
+			}
+			if field != "" {
+				if value := delta.get(field); value == nil || value.kind != '"' {
+					return errRestore
+				}
+			}
+		case "content_block_stop":
+			if open[key] == "" {
+				return errRestore
+			}
+			delete(open, key)
+		case "message_delta":
+			if !started || n.get("delta") == nil || n.get("delta").kind != '{' {
+				return errRestore
+			}
+		case "message_stop":
+			if !started || len(open) != 0 {
+				return errRestore
+			}
+			stopped = true
+		}
+	}
+	if !stopped {
+		return errRestore
+	}
+	return nil
+}
+
+func supportedDeltaField(block, delta string) string {
+	switch {
+	case block == "text" && delta == "text_delta":
+		return "text"
+	case block == "tool_use" && delta == "input_json_delta":
+		return "partial_json"
+	case block == "thinking" && delta == "thinking_delta":
+		return "thinking"
+	case block == "thinking" && delta == "signature_delta":
+		return "signature"
+	}
+	return ""
+}
+
+func (x *Exchange) checkStrictTrafficSSE(body []byte) error {
 	normalized := bytes.ReplaceAll(body, []byte("\r\n"), []byte("\n"))
 	if !bytes.HasSuffix(normalized, []byte("\n\n")) {
 		return errRestore
@@ -385,6 +510,12 @@ func transportShape(n *jsonNode, response bool) bool {
 	return true
 }
 func (x *Exchange) checkResponse(body []byte) error {
+	if x.engine.opt.supportedOnly {
+		if len(body) > TrafficOutputLimit {
+			return errRestore
+		}
+		return ValidateObject(body)
+	}
 	n, err := scanJSON(body)
 	if !utf8.Valid(body) || err != nil || n.kind != '{' || !transportShape(n, true) {
 		return errRestore
@@ -456,13 +587,16 @@ func (x *Exchange) CheckControl(value string) error {
 	if x == nil {
 		return nil
 	}
-	if x.engine.sensitiveStructural(value) {
+	if !x.engine.opt.supportedOnly && x.engine.sensitiveStructural(value) {
 		return errTraffic
 	}
 	x.request.mu.Lock()
 	defer x.request.mu.Unlock()
 	if x.request.closed {
 		return errTraffic
+	}
+	if x.engine.opt.supportedOnly {
+		return nil
 	}
 	known := func(text string) bool {
 		for _, real := range x.request.spellings {

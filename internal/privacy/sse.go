@@ -18,12 +18,13 @@ type streamUnmasker struct {
 	out    io.Writer
 	buf    []byte
 	blocks map[int]blockTail
+	kinds  map[int]string
 	err    error
 	closed bool
 }
 
 func (e *Engine) NewStreamUnmasker(req *Request, w io.Writer) io.WriteCloser {
-	s := &streamUnmasker{req: req, out: w, blocks: make(map[int]blockTail)}
+	s := &streamUnmasker{req: req, out: w, blocks: make(map[int]blockTail), kinds: make(map[int]string)}
 	if req == nil || req.engine != e {
 		s.err = errors.New("privacy: foreign or missing request")
 	} else {
@@ -75,6 +76,7 @@ func (s *streamUnmasker) fail(err error) error {
 	s.err = err
 	s.buf = nil
 	clear(s.blocks)
+	clear(s.kinds)
 	message, _ := json.Marshal("privacy: unmask: " + err.Error())
 	_, _ = fmt.Fprintf(s.out, "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":%s}}\n\n", message)
 	return err
@@ -144,6 +146,7 @@ func (s *streamUnmasker) frame(frame []byte) error {
 	}
 	switch event {
 	case "content_block_stop":
+		delete(s.kinds, index)
 		if err := s.flush(index); err != nil {
 			return err
 		}
@@ -158,14 +161,18 @@ func (s *streamUnmasker) frame(frame []byte) error {
 		if block == nil {
 			return errors.New("missing SSE content block")
 		}
-		if block.str("type") == "tool_use" {
+		s.kinds[index] = block.str("type")
+		if s.req.engine.opt.supportedOnly && block.str("type") != "text" && block.str("type") != "tool_use" {
+			return s.emit(frame)
+		}
+		if !s.req.engine.opt.supportedOnly && block.str("type") == "tool_use" {
 			input := block.get("input")
 			if input != nil && (input.kind != '{' || len(input.pairs) > 0) {
 				return errors.New("non-empty SSE initial tool input is unsupported")
 			}
 		}
 		s.req.mu.Lock()
-		w := jsonRewriter{body: payload, f: s.req.unmaskText}
+		w := jsonRewriter{body: payload, f: s.req.unmaskText, supportedOnly: s.req.engine.opt.supportedOnly}
 		if block.str("type") == "text" {
 			w.f = func(text string, field fieldKind) ([]textEdit, error) {
 				cut := s.holdFrom(text)
@@ -195,6 +202,9 @@ func (s *streamUnmasker) frame(frame []byte) error {
 			return errors.New("missing SSE delta")
 		}
 		typ := delta.str("type")
+		if s.req.engine.opt.supportedOnly && !((s.kinds[index] == "text" && typ == "text_delta") || (s.kinds[index] == "tool_use" && typ == "input_json_delta")) {
+			return s.emit(frame)
+		}
 		field := "text"
 		if typ == "input_json_delta" {
 			field = "partial_json"
@@ -300,7 +310,7 @@ func (s *streamUnmasker) flush(index int) error {
 			err = correctionError()
 		}
 		if err == nil {
-			w := jsonRewriter{body: []byte(tail.text), f: s.req.unmaskText}
+			w := jsonRewriter{body: []byte(tail.text), f: s.req.unmaskText, supportedOnly: s.req.engine.opt.supportedOnly}
 			err = w.allStrings(node, fmt.Sprintf("content[%d].input", index), true)
 			if err == nil {
 				restored = string(applyRaw(w.body, w.edits))

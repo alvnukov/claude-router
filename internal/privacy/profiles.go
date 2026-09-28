@@ -51,6 +51,7 @@ type Target struct {
 	Provider   string   `json:"provider"`
 	Betas      []string `json:"-"`
 	Translated bool     `json:"-"`
+	TokenCount bool     `json:"-"`
 	Protocol   string   `json:"-"`
 }
 type Resolution struct {
