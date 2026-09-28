@@ -58,12 +58,12 @@ func TestPrivacyTrafficClaudeBetaQuery(t *testing.T) {
 					}
 					body := trafficBody
 					if mode == "detect" {
-						// Unapproved controls remain unsupported even with direct client auth.
+						// Direct detection preserves controls; translated routes still reject them.
 						body = strings.TrimSuffix(body, "}") + `,"thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}}`
 					}
 					response := trafficCall(h, path+"?beta=true", body)
 					wantStatus, wantCalls := http.StatusBadRequest, int32(0)
-					if mode == "mask" && path == "/v1/messages" {
+					if path == "/v1/messages" && (mode == "mask" || !local) {
 						wantStatus, wantCalls = http.StatusOK, 1
 					}
 					if response.Code != wantStatus || calls.Load() != wantCalls {

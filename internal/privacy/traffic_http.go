@@ -344,10 +344,8 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 		betas = beta
 	}
 	target := Target{Model: route.Model, Provider: "anthropic", Betas: betas}
-	if hasClientControls(body) && !policy.clientControls.allows(target, body) {
-		badInput()
-		return
-	}
+	// Prepare applies client-control approval only to the resolved mask policy.
+	// Detection and disabled profiles preserve the original direct request.
 	exchange, wire, err := policy.Prepare(target, body)
 	if err != nil {
 		badInput()
