@@ -13,6 +13,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -400,6 +401,11 @@ func boundDebugRequest(rec *history.Record) {
 
 func main() {
 	serve := cli.Entry{Name: "serve", Run: func(context.Context, []string, io.Writer, io.Writer) error {
+		// GOMEMLIMIT is read by Go before main, not from the router env file.
+		// Use a soft GC target without rejecting parallel requests.
+		if os.Getenv("GOMEMLIMIT") == "" {
+			debug.SetMemoryLimit(512 << 20)
+		}
 		loadEnvFile()
 		catalog, err := catalogstartup.ForProcess(anthropicCatalogURL, codexBaseURL)
 		if err != nil {

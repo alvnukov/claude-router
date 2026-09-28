@@ -424,8 +424,9 @@ func TestPrivacyTrafficCodexJSONAndStream(t *testing.T) {
 		}
 	}
 }
-func TestPrivacyTrafficCapacityAndCancellation(t *testing.T) {
-	entered := make(chan struct{}, 4)
+func TestPrivacyTrafficConcurrencyAndCancellation(t *testing.T) {
+	const concurrent = 12
+	entered := make(chan struct{}, concurrent)
 	release := make(chan struct{})
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
@@ -446,8 +447,8 @@ func TestPrivacyTrafficCapacityAndCancellation(t *testing.T) {
 	defer client.CloseIdleConnections()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	done := make(chan struct{}, 4)
-	for range 4 {
+	done := make(chan struct{}, concurrent)
+	for range concurrent {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			r, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/messages", strings.NewReader(trafficBody))
@@ -461,18 +462,15 @@ func TestPrivacyTrafficCapacityAndCancellation(t *testing.T) {
 			}
 		}()
 	}
-	for range 4 {
+	for range concurrent {
 		select {
 		case <-entered:
 		case <-time.After(10 * time.Second):
 			t.Fatal("requests not admitted")
 		}
 	}
-	if w := trafficCall(h, "/v1/messages", trafficBody); w.Code != 503 {
-		t.Fatal("capacity limit not enforced")
-	}
 	cancel()
-	for range 4 {
+	for range concurrent {
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):

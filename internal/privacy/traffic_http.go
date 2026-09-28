@@ -52,7 +52,6 @@ func NewProtectedHTTP(deps HTTPDeps) http.Handler {
 	if limits == (LifecycleLimits{}) {
 		limits = LifecycleLimits{Inbound: 120 * time.Second, Headers: 120 * time.Second, Idle: 90 * time.Second, Total: 900 * time.Second, Cleanup: 3 * time.Second}
 	}
-	slots := make(chan struct{}, 4)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/profiles/") && strings.HasSuffix(r.URL.Path, "/activate") {
 			if deps.Legacy != nil {
@@ -111,13 +110,6 @@ func NewProtectedHTTP(deps HTTPDeps) http.Handler {
 		controller := http.NewResponseController(w)
 		if controller.SetReadDeadline(time.Now().Add(limits.Inbound)) != nil || controller.SetWriteDeadline(time.Now().Add(limits.Inbound+limits.Total)) != nil {
 			reject(503, "api_error", "privacy: client transport cannot be bounded")
-			return
-		}
-		select {
-		case slots <- struct{}{}:
-			defer func() { <-slots }()
-		default:
-			reject(503, "overloaded_error", "privacy: capacity reached")
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, TrafficInputLimit+1))

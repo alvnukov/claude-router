@@ -1306,45 +1306,63 @@ func TestProtectedHTTPClientIO(t *testing.T) {
 		}
 	})
 
-	t.Run("four-slots-release-only-after-cancel", func(t *testing.T) {
-		var localCalls, legacyCalls, dispatched atomic.Int32
-		entered := make(chan struct{}, 4)
-		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = io.Copy(io.Discard, r.Body)
-			dispatched.Add(1)
-			entered <- struct{}{}
-			<-r.Context().Done()
-		}))
-		defer up.Close()
-		deps := compatHTTPDeps(t, clientCompatRuntime(t, "mask"), up.URL, "anthropic", &localCalls, &legacyCalls)
-		h := NewProtectedHTTP(deps)
-		var pending []<-chan compatAsyncResult
-		var cancels []context.CancelFunc
-		for i := 0; i < 4; i++ {
-			ch, cancel := compatStartCall(t, h, "/v1/messages?beta=true", compatHTTPBody())
-			pending, cancels = append(pending, ch), append(cancels, cancel)
-			compatWaitSignal(t, entered)
-		}
-		w := compatHTTPCall(t, h, "/v1/messages?beta=true", compatHTTPBody())
-		if w.Code != http.StatusServiceUnavailable || dispatched.Load() != 4 {
-			t.Fatal("fifth request was queued or dispatched instead of fast 503")
-		}
-		for _, cancel := range cancels {
-			cancel()
-		}
-		for _, ch := range pending {
-			select {
-			case <-ch: // cancellation may close transport without an HTTP response
-			case <-time.After(3 * time.Second):
-				t.Fatal("cancel failed to finish protected work")
+	for _, mode := range []string{"mask", "detect"} {
+		t.Run("concurrent-requests-release-after-cancel/"+mode, func(t *testing.T) {
+			var localCalls, legacyCalls, dispatched atomic.Int32
+			const concurrent = 12
+			entered := make(chan struct{}, concurrent)
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				dispatched.Add(1)
+				entered <- struct{}{}
+				<-r.Context().Done()
+			}))
+			defer up.Close()
+			deps := compatHTTPDeps(t, clientCompatRuntime(t, mode), up.URL, "anthropic", &localCalls, &legacyCalls)
+			// Load the dictionaries before timing concurrent HTTP dispatch.
+			if _, err := deps.Runtime.Snapshot(); err != nil {
+				t.Fatal(err)
 			}
-		}
-		compatWaitInactive(t, deps.Runtime)
-		next, cancel := compatStartCall(t, h, "/v1/messages?beta=true", compatHTTPBody())
-		compatWaitSignal(t, entered) // an actual fifth dispatch proves a freed slot
-		cancel()
-		compatWaitSignal(t, next)
-	})
+			h := NewProtectedHTTP(deps)
+			var pending []<-chan compatAsyncResult
+			var cancels []context.CancelFunc
+			defer func() {
+				for _, cancel := range cancels {
+					cancel()
+				}
+			}()
+			for i := 0; i < concurrent; i++ {
+				ch, cancel := compatStartCall(t, h, "/v1/messages?beta=true", compatHTTPBody())
+				pending, cancels = append(pending, ch), append(cancels, cancel)
+				select {
+				case <-entered:
+				case result := <-ch:
+					t.Fatalf("request %d finished before reaching upstream: response=%+v err=%v", i+1, result.response, result.err)
+				case <-time.After(3 * time.Second):
+					t.Fatalf("request %d did not reach upstream", i+1)
+				}
+			}
+			if dispatched.Load() != concurrent {
+				t.Fatal("parallel requests did not all reach upstream")
+			}
+			for _, cancel := range cancels {
+				cancel()
+			}
+			for _, ch := range pending {
+				select {
+				case <-ch: // cancellation may close transport without an HTTP response
+				case <-time.After(3 * time.Second):
+					t.Fatal("cancel failed to finish protected work")
+				}
+			}
+			compatWaitInactive(t, deps.Runtime)
+			next, cancel := compatStartCall(t, h, "/v1/messages?beta=true", compatHTTPBody())
+			compatWaitSignal(t, entered)
+			cancel()
+			compatWaitSignal(t, next)
+			compatWaitInactive(t, deps.Runtime)
+		})
+	}
 
 	t.Run("partial-postcommit-write-never-starts-second-json", func(t *testing.T) {
 		var localCalls, legacyCalls atomic.Int32
