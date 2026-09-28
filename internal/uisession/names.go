@@ -1,4 +1,6 @@
-package main
+// Package uisession derives the session facts the UI shows: readable names from
+// local Claude journals, a title from the first request, and the routes taken.
+package uisession
 
 import (
 	"bufio"
@@ -13,38 +15,48 @@ import (
 	"unicode"
 )
 
-type sessionIdentity struct{ Title, Project, Branch string }
-type sessionNameEntry struct {
-	identity sessionIdentity
+// Identity is what a Claude journal says about a session. Only customTitle,
+// cwd and gitBranch are decoded; message text is never read into it.
+type Identity struct{ Title, Project, Branch string }
+
+type nameEntry struct {
+	identity Identity
 	path     string
 	stat     os.FileInfo
 }
 
-// The UI never waits for local Claude journals. Only metadata is cached; no
-// transcript is retained or changed. Missing files are retried for new sessions.
-type sessionNameCache struct {
+// Names caches session identities. The UI never waits for local Claude
+// journals: Snapshot returns what is cached and refreshes in the background.
+// Only metadata is cached; no transcript is retained or changed. Missing files
+// are retried for new sessions. The zero value is ready to use.
+type Names struct {
 	mu      sync.Mutex
 	root    string
-	entries map[string]sessionNameEntry
+	entries map[string]nameEntry
 	next    time.Time
 	loading bool
+	wg      sync.WaitGroup
 }
 
-func (c *sessionNameCache) snapshot(root string, ids []string) map[string]sessionIdentity {
+// Snapshot returns the cached identities of ids under the projects directory
+// root and starts a background refresh when the cache is due.
+func (c *Names) Snapshot(root string, ids []string) map[string]Identity {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.root != root {
 		c.root, c.entries, c.next, c.loading = root, nil, time.Time{}, false
 	}
-	out := make(map[string]sessionIdentity, len(ids))
+	out := make(map[string]Identity, len(ids))
 	for _, id := range ids {
 		out[id] = c.entries[id].identity
 	}
 	if root != "" && !c.loading && time.Now().After(c.next) {
 		c.loading = true
 		previous := c.entries
+		c.wg.Add(1)
 		go func() {
-			entries := loadSessionNames(root, ids, previous)
+			defer c.wg.Done()
+			entries := loadNames(root, ids, previous)
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			if c.root == root {
@@ -54,6 +66,9 @@ func (c *sessionNameCache) snapshot(root string, ids []string) map[string]sessio
 	}
 	return out
 }
+
+// Wait blocks until background refreshes started so far have finished.
+func (c *Names) Wait() { c.wg.Wait() }
 
 func safeSessionID(id string) bool {
 	if id == "" || len(id) > 128 {
@@ -67,8 +82,8 @@ func safeSessionID(id string) bool {
 	return true
 }
 
-func loadSessionNames(dir string, ids []string, previous map[string]sessionNameEntry) map[string]sessionNameEntry {
-	out := make(map[string]sessionNameEntry, len(ids))
+func loadNames(dir string, ids []string, previous map[string]nameEntry) map[string]nameEntry {
+	out := make(map[string]nameEntry, len(ids))
 	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return out
@@ -105,17 +120,17 @@ func loadSessionNames(dir string, ids []string, previous map[string]sessionNameE
 			if err != nil {
 				continue
 			}
-			identity := readSessionIdentity(io.LimitReader(f, stat.Size()), id)
+			identity := readIdentity(io.LimitReader(f, stat.Size()), id)
 			f.Close()
-			out[id] = sessionNameEntry{identity: identity, path: name, stat: stat}
+			out[id] = nameEntry{identity: identity, path: name, stat: stat}
 			break
 		}
 	}
 	return out
 }
 
-func readSessionIdentity(input io.Reader, id string) sessionIdentity {
-	var out sessionIdentity
+func readIdentity(input io.Reader, id string) Identity {
+	var out Identity
 	reader := bufio.NewReader(input)
 	var line []byte
 	oversized := false
@@ -143,11 +158,11 @@ func readSessionIdentity(input io.Reader, id string) sessionIdentity {
 			}
 			if json.Unmarshal(line, &record) == nil && record.SessionID == id {
 				if record.Type == "custom-title" {
-					out.Title = compactSessionText(record.CustomTitle, 120)
+					out.Title = compact(record.CustomTitle, 120)
 				}
 				if record.CWD != "" {
-					out.Project = compactSessionText(path.Base(strings.ReplaceAll(record.CWD, `\`, "/")), 80)
-					out.Branch = compactSessionText(record.GitBranch, 100)
+					out.Project = compact(path.Base(strings.ReplaceAll(record.CWD, `\`, "/")), 80)
+					out.Branch = compact(record.GitBranch, 100)
 				}
 			}
 		}
@@ -160,7 +175,7 @@ func readSessionIdentity(input io.Reader, id string) sessionIdentity {
 	return out
 }
 
-func compactSessionText(text string, limit int) string {
+func compact(text string, limit int) string {
 	text = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			return ' '
@@ -173,45 +188,4 @@ func compactSessionText(text string, limit int) string {
 		return string(runes[:limit]) + "…"
 	}
 	return text
-}
-
-func firstSessionPrompt(body []byte) string {
-	var request struct {
-		Messages []anthropicMsg `json:"messages"`
-	}
-	if json.Unmarshal(body, &request) != nil {
-		return ""
-	}
-	for _, message := range request.Messages {
-		if message.Role != "user" {
-			continue
-		}
-		blocks, _ := decodeBlocks(message.Content)
-		for _, block := range blocks {
-			if block.Type != "text" {
-				continue
-			}
-			text := strings.TrimSpace(block.Text)
-			for {
-				previous := text
-				for _, tag := range []string{"system-reminder", "local-command-caveat", "local-command-stdout", "command-name", "command-message", "command-args", "ide_opened_file", "ide_selection"} {
-					if strings.HasPrefix(text, "<"+tag+">") {
-						_, rest, found := strings.Cut(text, "</"+tag+">")
-						if !found {
-							text = ""
-						} else {
-							text = strings.TrimSpace(rest)
-						}
-					}
-				}
-				if text == previous {
-					break
-				}
-			}
-			if title := compactSessionText(text, 120); title != "" {
-				return title
-			}
-		}
-	}
-	return ""
 }

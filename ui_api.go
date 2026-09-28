@@ -15,6 +15,7 @@ import (
 
 	"localrouter/internal/history"
 	webui "localrouter/internal/ui"
+	"localrouter/internal/uisession"
 )
 
 // uiBackend is the seam between private runtime/config types and the public,
@@ -224,7 +225,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 			} `json:"output_config"`
 		}
 		_ = json.Unmarshal(rec.ReqBody, &request)
-		connection := requestConnection(rec)
+		connection := uisession.Connection(rec.Route, rec.Served)
 		s := sessions[rec.Session]
 		if s == nil {
 			item := b.requestDTO(rec)
@@ -269,7 +270,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	if u.claudeProxy != nil && u.claudeProxy.path != "" {
 		root = filepath.Join(filepath.Dir(u.claudeProxy.path), "projects")
 	}
-	names := u.sessionNames.snapshot(root, ids)
+	names := u.sessionNames.Snapshot(root, ids)
 	for i := range out.Sessions {
 		session := &out.Sessions[i]
 		identity := names[session.ID]
@@ -277,7 +278,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if session.Title == "" && session.ID != "" {
 			bodies := sessionBodies[session.ID]
 			for j := len(bodies) - 1; j >= 0; j-- {
-				if session.Title = firstSessionPrompt(bodies[j]); session.Title != "" {
+				if session.Title = uisession.FirstPrompt(bodies[j]); session.Title != "" {
 					break
 				}
 			}
@@ -294,14 +295,6 @@ func requestError(r *history.Record) string {
 	}
 	return ""
 }
-func requestConnection(r *history.Record) string {
-	if r.Route == "cloud" || r.Route == "passthrough" {
-		return "anthropic"
-	}
-	connection, _, _ := strings.Cut(r.Served, "/")
-	return connection
-}
-
 func (b uiBackend) requestDTO(r *history.Record) webui.Request {
 	_, _, preview := quickSummary(r.ReqBody)
 	method, path := r.Method, r.Path
@@ -321,7 +314,7 @@ func (b uiBackend) requestDTO(r *history.Record) webui.Request {
 	if preview == "" && reason != "" {
 		preview = reason
 	}
-	connection := requestConnection(r)
+	connection := uisession.Connection(r.Route, r.Served)
 	return webui.Request{ID: r.ID, Method: method, Path: path, Unrecognized: reason, FallbackPool: r.FallbackPool, Session: r.Session, Start: r.Start, End: r.End, Model: r.Model, Served: r.Served, Connection: connection, Route: r.Route, Status: r.Status, Pending: !r.Done(), Failed: r.Failed(), DurationMs: r.Duration().Milliseconds(), Preview: preview, Error: b.u.publicUIMessage(requestError(r))}
 }
 func (b uiBackend) Requests(q url.Values) webui.RequestList {
@@ -348,7 +341,7 @@ func (b uiBackend) Requests(q url.Values) webui.RequestList {
 		if q.Get("model") != "" && !strings.Contains(strings.ToLower(r.Model+" "+r.Served), strings.ToLower(q.Get("model"))) {
 			continue
 		}
-		if q.Get("connection") != "" && requestConnection(r) != q.Get("connection") {
+		if q.Get("connection") != "" && uisession.Connection(r.Route, r.Served) != q.Get("connection") {
 			continue
 		}
 		if q.Get("errors") == "1" && !r.Failed() {
