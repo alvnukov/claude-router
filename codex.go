@@ -27,8 +27,8 @@ type codexRequest struct {
 }
 
 // Summary "auto" makes Codex send reasoning summaries while it thinks. They
-// are not shown to the client, but they are bytes from a live model: without
-// them a long think is indistinguishable from a dead connection.
+// reach the client as thinking blocks, and they are bytes from a live model:
+// without them a long think is indistinguishable from a dead connection.
 type codexReasoning struct {
 	Effort  any    `json:"effort,omitempty"`
 	Summary string `json:"summary"`
