@@ -97,6 +97,8 @@ func loadConfigChecked() (config, error) {
 	c.MaxInputChars = atoiOr(env("ROUTER_LOCAL_MAX_INPUT_CHARS", "0"), 0)
 	c.Failover = env("ROUTER_LOCAL_FAILOVER", "1") != "0"
 	c.FirstByte = time.Duration(atoiOr(env("ROUTER_LOCAL_FIRST_BYTE_TIMEOUT", "45"), 45)) * time.Second
+	c.StartTimeout = time.Duration(atoiOr(env("ROUTER_UPSTREAM_START_TIMEOUT", "30"), 30)) * time.Second
+	c.IdleTimeout = time.Duration(atoiOr(env("ROUTER_UPSTREAM_IDLE_TIMEOUT", "300"), 300)) * time.Second
 	c.Balance = atoiOr(env("ROUTER_LOCAL_BALANCE", "3"), 3)
 	c.ProbeEvery = time.Duration(atoiOr(env("ROUTER_LOCAL_PROBE_INTERVAL", "30"), 30)) * time.Second
 	c.PublicListen = env("ROUTER_PUBLIC_LISTEN", c.Listen)
@@ -163,14 +165,34 @@ func annotateMessageRecord(rec *history.Record, setup localSetup, target modelRo
 
 func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health, u *uiServer, life *lifecycle) http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
+	proxy.Transport = upstreamHTTP
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Printf("upstream error: %v", err)
 		http.Error(w, "upstream unreachable", http.StatusBadGateway)
 	}
 	// FlushInterval -1 streams SSE through without buffering.
 	proxy.FlushInterval = -1
-	if u != nil {
-		proxy.ModifyResponse = u.limits.ObserveResponse
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		if u != nil {
+			if err := u.limits.ObserveResponse(resp); err != nil {
+				return err
+			}
+		}
+		// Only a streamed answer is watched: a whole one may keep quiet until
+		// it is done.
+		if resp.Request == nil || !streamed(resp.Request.Context()) {
+			return nil
+		}
+		// An upgraded connection may keep quiet, and the proxy needs its
+		// read-write body as is.
+		if resp.StatusCode == http.StatusSwitchingProtocols {
+			return nil
+		}
+		// A silent upstream is cut off; the copy to the client then fails and
+		// net/http drops the client's connection without an event.
+		orig := resp.Body
+		resp.Body = watchBody(orig, cfg.StartTimeout, cfg.IdleTimeout, func(error) { orig.Close() })
+		return nil
 	}
 
 	pass := func(w http.ResponseWriter, r *http.Request, body []byte) {
@@ -234,7 +256,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 			if cfg.UIListen != "" {
 				r.Header.Del("Accept-Encoding")
 			}
-			pass(rw, r, body)
+			pass(rw, r.WithContext(markStream(r.Context(), probe.Stream)), body)
 			return
 		}
 		handleLocal(rw, r, cfg.ForModel(probe.Model, probe.OutputConfig.Effort), body, tr, hl, st)

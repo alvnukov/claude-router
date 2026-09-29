@@ -104,6 +104,10 @@ type Attempt struct {
 	Model string
 	Err   string // empty on success
 	Dur   time.Duration
+	// Omitted when unset, so records written before these fields read and
+	// write back unchanged.
+	Outcome string        `json:",omitempty"` // ok, upstream_idle, upstream_closed, upstream_error or client_closed
+	MaxGap  time.Duration `json:",omitempty"` // longest silence of the upstream body
 }
 
 type Block struct {

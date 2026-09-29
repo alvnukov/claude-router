@@ -578,7 +578,7 @@ func TestPrivacyTrafficReviewStreamDiagnostics(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(before)
 	r := io.MultiReader(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"prefix\"}}]}\n\n"), privacyBrokenStream{errors.New("decode Codex event: " + trafficCanary)})
-	if err := streamResponse(&privacyBuffer{header: make(http.Header)}, r, "test"); err == nil {
+	if err := streamResponse(&privacyBuffer{header: make(http.Header)}, r, "test", "local/test"); err == nil {
 		t.Fatal("expected stream failure")
 	}
 	if strings.Contains(logs.String(), trafficCanary) {

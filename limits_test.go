@@ -64,12 +64,15 @@ func limitsRouter(t *testing.T, upstream, local string) (*uiServer, http.Handler
 	return limitsRouterStore(t, upstream, local, history.New(10, ""))
 }
 
-func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store) (*uiServer, http.Handler) {
+func limitsRouterStore(t *testing.T, upstream, local string, st *history.Store, tune ...func(*config)) (*uiServer, http.Handler) {
 	t.Helper()
 	cs, h, path := profileFixture(t)
 	up, _ := url.Parse(upstream)
 	c := cs.Get()
 	c.Upstream = up
+	for _, f := range tune {
+		f(&c)
+	}
 	cs = conf.NewStore(c, path)
 	l := cs.Get().Local.Clone()
 	l.FamilyRoutes["sonnet"] = map[string]modelRoute{"default": {Mode: "anthropic"}}

@@ -23,9 +23,15 @@ type codexRequest struct {
 	Include           []string         `json:"include"`
 	PromptCacheKey    string           `json:"prompt_cache_key,omitempty"`
 	ParallelToolCalls bool             `json:"parallel_tool_calls"`
-	Reasoning         *struct {
-		Effort any `json:"effort"`
-	} `json:"reasoning,omitempty"`
+	Reasoning         *codexReasoning  `json:"reasoning,omitempty"`
+}
+
+// Summary "auto" makes Codex send reasoning summaries while it thinks. They
+// are not shown to the client, but they are bytes from a live model: without
+// them a long think is indistinguishable from a dead connection.
+type codexReasoning struct {
+	Effort  any    `json:"effort,omitempty"`
+	Summary string `json:"summary"`
 }
 
 // Same stateless Responses mapping used by CozyPhi. Tool call IDs survive the
@@ -38,14 +44,13 @@ func toCodex(req openaiRequest) (codexRequest, error) {
 	out := codexRequest{Model: req.Model, Store: false, Stream: true, ParallelToolCalls: true, ToolChoice: "auto",
 		Include: []string{"reasoning.encrypted_content"},
 		Input:   make([]any, 0, len(req.Messages))}
+	out.Reasoning = &codexReasoning{Summary: "auto"}
 	if req.ReasoningEffort != "" {
 		var effort any = req.ReasoningEffort
 		if number, err := strconv.ParseUint(req.ReasoningEffort, 10, 64); err == nil {
 			effort = number
 		}
-		out.Reasoning = &struct {
-			Effort any `json:"effort"`
-		}{Effort: effort}
+		out.Reasoning.Effort = effort
 	}
 	if req.ParallelToolCalls != nil {
 		out.ParallelToolCalls = *req.ParallelToolCalls

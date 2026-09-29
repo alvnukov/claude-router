@@ -76,11 +76,16 @@ func TestPoolRequestEffortMixedWithFixedAndCodex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Reasoning itself is always sent: its summary keeps a long think
+			// from looking like a dead upstream.
+			if converted.Reasoning == nil {
+				t.Fatal("Codex request without reasoning")
+			}
 			if expected == "" {
-				if converted.Reasoning != nil {
+				if converted.Reasoning.Effort != nil {
 					t.Fatal("absent effort was added to Codex request")
 				}
-			} else if converted.Reasoning == nil || converted.Reasoning.Effort != expected {
+			} else if converted.Reasoning.Effort != expected {
 				t.Fatalf("Codex effort lost: %+v", converted.Reasoning)
 			}
 		}

@@ -20,6 +20,8 @@ type Config struct {
 	MaxInputChars int
 	Failover      bool
 	FirstByte     time.Duration // give up on a model that has not answered by then
+	StartTimeout  time.Duration // upstream silent after its headers this long is dead; 0 disables
+	IdleTimeout   time.Duration // upstream silent between bytes this long is dead; 0 disables
 	Balance       int           // spread requests over this many best-rated models; <2 sends everything to the first
 	ProbeEvery    time.Duration // ping idle models this often; 0 disables
 	PoolType      string        // PoolFailover or PoolBalance for a pool route: pool order, no rating; "" keeps the rating order
