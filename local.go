@@ -356,8 +356,10 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 	t0 := time.Now()
 	client := http.DefaultClient
 	if cand.Provider.Type == "codex" || privacy.FromRequest(r) != nil {
+		// Only Codex is held to upstreamHTTP's bounds; a local model keeps
+		// the default transport, headers as late as it needs.
 		transport := codextesttransport.Transport()
-		if transport == nil {
+		if transport == nil && cand.Provider.Type == "codex" {
 			transport = upstreamHTTP
 		}
 		client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

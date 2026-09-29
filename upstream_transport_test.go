@@ -149,6 +149,26 @@ X-Stainless-Retry-Count: 0
 }
 
 func TestCodexUsesUpstreamTransport(t *testing.T) {
+	// A local OpenAI model may think for minutes before its headers, so under
+	// privacy it keeps http.DefaultTransport and no 30s header bound.
+	t.Run("local OpenAI under privacy stays off it", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+		}))
+		defer up.Close()
+		var through atomic.Int32
+		useUpstreamHTTP(t, usageTransport(func(r *http.Request) (*http.Response, error) {
+			through.Add(1)
+			return followDefault{}.RoundTrip(r)
+		}))
+		h, _, _ := trafficFixture(t, up, true)
+		w := trafficCall(h, "/v1/messages", `{"model":"test","max_tokens":100,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+		if w.Code != http.StatusOK || through.Load() != 0 {
+			t.Fatalf("status %d, %d requests through upstreamHTTP:\n%s", w.Code, through.Load(), w.Body.String())
+		}
+	})
+
 	seedTwoConnections(t)
 	old := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = old })
