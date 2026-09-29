@@ -113,6 +113,121 @@ func TestUIJSONDistinguishesDisabledAndAbsentRoutes(t *testing.T) {
 	}
 }
 func TestUIJSONRequestFiltersDetailsAndUTF8(t *testing.T) {
+	t.Run("session lists every distinct route", func(t *testing.T) {
+		u, h := testUI(t)
+		for i, entry := range []struct{ model, served, route, effort, session string }{
+			{"claude-opus-5", "p/m1", "local", "high", "multi"},
+			{"claude-sonnet-5", "", "cloud", "", "multi"},
+			{"claude-opus-5", "p/m1", "local", "high", "multi"},
+			{"claude-opus-5", "p/m1", "local", "low", "multi"},
+			{"claude-opus-5", "p/m2", "local", "high", "multi"},
+			{"claude-haiku-5", "p/m1", "local", "", "other"},
+		} {
+			body, err := json.Marshal(map[string]any{"output_config": map[string]string{"effort": entry.effort}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			u.st.Add(&history.Record{Start: time.Now().Add(time.Duration(i) * time.Second), Session: entry.session, Model: entry.model, Served: entry.served, Route: entry.route, ReqBody: body})
+		}
+		var state struct {
+			Sessions []struct {
+				ID       string `json:"id"`
+				Requests int    `json:"requests"`
+				Routes   []struct {
+					RequestedModel string `json:"requestedModel"`
+					Model          string `json:"model"`
+					Connection     string `json:"connection"`
+					Effort         string `json:"effort"`
+					Requests       int    `json:"requests"`
+					Pending        int    `json:"pending"`
+				} `json:"routes"`
+			} `json:"sessions"`
+		}
+		if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Sessions) != 2 {
+			t.Fatalf("sessions=%+v", state.Sessions)
+		}
+		s := state.Sessions[1]
+		if s.ID != "multi" || s.Requests != 5 || len(s.Routes) != 4 {
+			t.Fatalf("lost session routes: %+v", s)
+		}
+		if r := s.Routes[0]; r.Model != "p/m2" || r.RequestedModel != "claude-opus-5" {
+			t.Fatalf("newest route=%+v", r)
+		}
+		if r := s.Routes[2]; r.Model != "p/m1" || r.Effort != "high" || r.Requests != 2 || r.Pending != 2 {
+			t.Fatalf("repeated route=%+v", r)
+		}
+		if r := s.Routes[3]; r.RequestedModel != "claude-sonnet-5" || r.Connection != "anthropic" {
+			t.Fatalf("classifier route=%+v", r)
+		}
+		var list webui.RequestList
+		if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/requests?session=multi", nil).Body.Bytes(), &list); err != nil {
+			t.Fatal(err)
+		}
+		if list.Total != 5 || len(list.Items) != 5 {
+			t.Fatalf("session history=%+v", list)
+		}
+
+	})
+	t.Run("session names from Claude journal", func(t *testing.T) {
+		u, h := testUI(t, "session-a")
+		project := filepath.Join(filepath.Dir(u.claudeProxy.path), "projects", "project")
+		if err := os.MkdirAll(project, 0700); err != nil {
+			t.Fatal(err)
+		}
+		data := `{"type":"custom-title","sessionId":"session-a","customTitle":"Разобрать кеш"}
+{"type":"user","sessionId":"session-a","cwd":"/work/router","gitBranch":"main"}
+`
+		if err := os.WriteFile(filepath.Join(project, "session-a.jsonl"), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		apiCall(t, h, "GET", "/api/ui/state", nil)
+		u.sessionNames.Wait()
+		var state struct {
+			Sessions []struct{ Title, Project, Branch string }
+		}
+		if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Sessions) != 1 || state.Sessions[0].Title != "Разобрать кеш" || state.Sessions[0].Project != "router" || state.Sessions[0].Branch != "main" {
+			t.Fatalf("identity=%+v", state.Sessions)
+		}
+	})
+	t.Run("session title from first meaningful request", func(t *testing.T) {
+		u, h := testUI(t)
+		for _, body := range []string{
+			`{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"service"}]}]}`,
+			`{"messages":[{"role":"user","content":"Первая задача"}]}`,
+			`{"messages":[{"role":"user","content":"Поздний вопрос"}]}`,
+		} {
+			u.st.Add(&history.Record{Start: time.Now(), Model: "claude-sonnet-5", Session: "prompt-session", Route: "cloud", ReqBody: []byte(body)})
+		}
+		var state struct{ Sessions []struct{ Title string } }
+		if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Sessions) != 1 || state.Sessions[0].Title != "Первая задача" {
+			t.Fatalf("titles=%+v", state.Sessions)
+		}
+	})
+	t.Run("no request-text title under privacy profiles", func(t *testing.T) {
+		u, h := testUI(t)
+		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+		writeTrafficConfig(t, filepath.Dir(u.cs.provPath), `{}`)
+		u.st.Add(&history.Record{Start: time.Now(), Model: "claude-sonnet-5", Session: "private-session", Route: "cloud", ReqBody: []byte(`{"messages":[{"role":"user","content":"Секретная задача"}]}`)})
+		body := apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes()
+		var state struct {
+			Sessions []struct{ ID, Title, Preview string }
+		}
+		if err := json.Unmarshal(body, &state); err != nil {
+			t.Fatal(err)
+		}
+		if len(state.Sessions) != 1 || state.Sessions[0].ID != "private-session" || state.Sessions[0].Title != "" || state.Sessions[0].Preview != "" {
+			t.Fatalf("privacy profiles on, title from request text: %+v", state.Sessions)
+		}
+	})
 	u, h := testUI(t, "session-a", "session-b")
 	r := &history.Record{Start: time.Now(), Model: "claude-opus-5", Route: "local", Session: "failed-session", Served: "p/m1", ReqBody: []byte(`{"system":"needle-in-system","messages":[{"role":"user","content":"` + strings.Repeat("Ж", 200) + `"}]}`), Headers: map[string]string{"Authorization": "Bearer PRIVATE", "X-Api-Key": "PRIVATE", "Cookie": "PRIVATE", "Content-Type": "application/json"}}
 	u.st.Add(r)

@@ -129,7 +129,21 @@ type Summary struct {
 	Errors5m int `json:"errors5m"`
 	Pending  int `json:"pending"`
 }
+type SessionRoute struct {
+	Model          string `json:"model"`
+	RequestedModel string `json:"requestedModel"`
+	Connection     string `json:"connection"`
+	Effort         string `json:"effort"`
+	Route          string `json:"route"`
+	Requests       int    `json:"requests"`
+	Pending        int    `json:"pending"`
+}
+
 type Session struct {
+	Title          string          `json:"title"`
+	Project        string          `json:"project"`
+	Branch         string          `json:"branch"`
+	Routes         []SessionRoute  `json:"routes"`
 	ID             string          `json:"id"`
 	Model          string          `json:"model"`
 	RequestedModel string          `json:"requestedModel"`

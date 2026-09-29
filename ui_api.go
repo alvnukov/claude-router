@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"localrouter/internal/history"
 	webui "localrouter/internal/ui"
+	"localrouter/internal/uisession"
 )
 
 // uiBackend is the seam between private runtime/config types and the public,
@@ -200,6 +202,10 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	}
 	sort.Slice(out.Pools, func(i, j int) bool { return out.Pools[i].Name < out.Pools[j].Name })
 	sessions := map[string]*webui.Session{}
+	routeIndexes := map[string]map[[5]string]int{}
+	sessionPrompts := map[string][]string{}
+	promptTitles := uisession.PromptTitles(u.cs.privacyRuntime())
+	bodyPreview := func(body []byte) string { _, _, p := quickSummary(body); return p }
 	for _, rec := range records {
 		out.Summary.Total++
 		if !rec.Done() {
@@ -211,22 +217,37 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if (rec.UnrecognizedReason != "" && rec.FallbackPool == "") || (rec.Path != "" && rec.Path != "/v1/messages") {
 			continue
 		}
+		model := rec.Served
+		if model == "" {
+			model = rec.Model
+		}
+		facts := u.sessionBodies.Facts(rec.ID, rec.ReqBody, bodyPreview)
+		connection := uisession.Connection(rec.Route, rec.Served)
 		s := sessions[rec.Session]
 		if s == nil {
-			model := rec.Served
-			if model == "" {
-				model = rec.Model
+			preview := ""
+			if promptTitles {
+				preview = facts.Preview
 			}
-			item := b.requestDTO(rec)
-			var request struct {
-				OutputConfig struct {
-					Effort string `json:"effort"`
-				} `json:"output_config"`
+			if facts.Preview == "" {
+				preview = b.requestDTO(rec).Preview
 			}
-			_ = json.Unmarshal(rec.ReqBody, &request)
-			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: item.Preview, Connection: item.Connection, Effort: request.OutputConfig.Effort, Route: rec.Route, LastAt: rec.Start}
+			s = &webui.Session{ID: rec.Session, Model: model, RequestedModel: rec.Model, Preview: preview, Connection: connection, Effort: facts.Effort, Route: rec.Route, LastAt: rec.Start, Routes: []webui.SessionRoute{}}
 			sessions[rec.Session] = s
+			routeIndexes[rec.Session] = map[[5]string]int{}
 		}
+		key := [5]string{rec.Model, model, connection, facts.Effort, rec.Route}
+		index, exists := routeIndexes[rec.Session][key]
+		if !exists {
+			index = len(s.Routes)
+			routeIndexes[rec.Session][key] = index
+			s.Routes = append(s.Routes, webui.SessionRoute{RequestedModel: rec.Model, Model: model, Connection: connection, Effort: facts.Effort, Route: rec.Route})
+		}
+		s.Routes[index].Requests++
+		if !rec.Done() {
+			s.Routes[index].Pending++
+		}
+		sessionPrompts[rec.Session] = append(sessionPrompts[rec.Session], facts.Prompt)
 		s.Requests++
 		if !rec.Done() {
 			s.Pending++
@@ -235,6 +256,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 			s.Error = u.publicUIMessage(requestError(rec))
 		}
 	}
+	u.sessionBodies.Sweep()
 	for _, s := range sessions {
 		s.Usage = usage.sessions[s.ID]
 		s.Usage.Since = now.Add(-24 * time.Hour)
@@ -243,6 +265,28 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].LastAt.After(out.Sessions[j].LastAt) })
 	if len(out.Sessions) > 100 {
 		out.Sessions = out.Sessions[:100]
+	}
+	ids := make([]string, 0, len(out.Sessions))
+	for _, session := range out.Sessions {
+		ids = append(ids, session.ID)
+	}
+	root := ""
+	if u.claudeProxy != nil && u.claudeProxy.path != "" {
+		root = filepath.Join(filepath.Dir(u.claudeProxy.path), "projects")
+	}
+	names := u.sessionNames.Snapshot(root, ids)
+	for i := range out.Sessions {
+		session := &out.Sessions[i]
+		identity := names[session.ID]
+		session.Title, session.Project, session.Branch = identity.Title, identity.Project, identity.Branch
+		if session.Title == "" && session.ID != "" && promptTitles {
+			prompts := sessionPrompts[session.ID]
+			for j := len(prompts) - 1; j >= 0; j-- {
+				if session.Title = prompts[j]; session.Title != "" {
+					break
+				}
+			}
+		}
 	}
 	return out
 }
@@ -274,10 +318,7 @@ func (b uiBackend) requestDTO(r *history.Record) webui.Request {
 	if preview == "" && reason != "" {
 		preview = reason
 	}
-	connection, _, _ := strings.Cut(r.Served, "/")
-	if r.Route == "cloud" || r.Route == "passthrough" {
-		connection = "anthropic"
-	}
+	connection := uisession.Connection(r.Route, r.Served)
 	return webui.Request{ID: r.ID, Method: method, Path: path, Unrecognized: reason, FallbackPool: r.FallbackPool, Session: r.Session, Start: r.Start, End: r.End, Model: r.Model, Served: r.Served, Connection: connection, Route: r.Route, Status: r.Status, Pending: !r.Done(), Failed: r.Failed(), DurationMs: r.Duration().Milliseconds(), Preview: preview, Error: b.u.publicUIMessage(requestError(r))}
 }
 func (b uiBackend) Requests(q url.Values) webui.RequestList {
@@ -298,20 +339,20 @@ func (b uiBackend) Requests(q url.Values) webui.RequestList {
 	}
 	needle := strings.ToLower(q.Get("q"))
 	for _, r := range records {
-		item := b.requestDTO(r)
-		if q.Get("unrecognized") == "1" && item.Unrecognized == "" {
-			continue
-		}
 		if q.Get("session") != "" && r.Session != q.Get("session") {
 			continue
 		}
 		if q.Get("model") != "" && !strings.Contains(strings.ToLower(r.Model+" "+r.Served), strings.ToLower(q.Get("model"))) {
 			continue
 		}
-		if q.Get("connection") != "" && item.Connection != q.Get("connection") {
+		if q.Get("connection") != "" && uisession.Connection(r.Route, r.Served) != q.Get("connection") {
 			continue
 		}
 		if q.Get("errors") == "1" && !r.Failed() {
+			continue
+		}
+		item := b.requestDTO(r)
+		if q.Get("unrecognized") == "1" && item.Unrecognized == "" {
 			continue
 		}
 		if needle != "" {

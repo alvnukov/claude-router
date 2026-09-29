@@ -26,6 +26,7 @@ import (
 	"localrouter/internal/limits"
 	"localrouter/internal/privacy"
 	webui "localrouter/internal/ui"
+	"localrouter/internal/uisession"
 )
 
 //go:embed ui/*
@@ -47,6 +48,8 @@ type uiServer struct {
 	fetchAnthropic    func(context.Context) ([]string, error)
 	st                *history.Store
 	connectionMetrics connectionUsageCache
+	sessionNames      uisession.Names
+	sessionBodies     uisession.Bodies
 	cs                *configStore
 	hl                *health
 	life              *lifecycle

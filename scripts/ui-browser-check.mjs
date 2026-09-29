@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { spawn, execFileSync } from 'node:child_process';
 import { once } from 'node:events';
+import { runSessionChecks } from './ui-session-check.mjs';
 import { runReviewRegressions } from './ui-review-regressions.mjs';
 import { runCodexLoginChecks } from './ui-codex-login-check.mjs';
 import { runPrivacyChecks } from './ui-privacy-check.mjs';
@@ -140,6 +141,7 @@ try {
     browser=await (isWebkit?webkit:chromium).launch({headless:true});
     await runPrivacyChecks(browser,base,expect,shots,isWebkit,`http://127.0.0.1:${apiPort}`,upstreamRequests);
     await runReviewRegressions(browser, base);
+    await runSessionChecks(browser, base);
     await runCodexLoginChecks(browser, base);
     const page=await browser.newPage({viewport:{width:1440,height:1000},locale:'ru-RU',colorScheme:'light'});
     async function capture(path){

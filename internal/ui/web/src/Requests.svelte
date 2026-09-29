@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import type { UIState, RequestList, RequestDetail } from "./types";
   import { get, fail, time, revision } from "./api";
   import ActionForm from "./ActionForm.svelte";
   import Transcript from "./Transcript.svelte";
+  import SessionIdentity from "./SessionIdentity.svelte";
+  import { sessionOption } from "./session";
   import ConnectionUsage from "./ConnectionUsage.svelte";
   let { data }: { data: UIState } = $props();
+  const sessionMap = $derived(new Map(data.sessions.map(s => [s.id, s])));
   let params = new URLSearchParams(location.hash.split("?")[1] || "");
   let q = $state(params.get("q") || "");
   let model = $state(params.get("model") || "");
@@ -21,9 +24,8 @@
   let tab = $state("response");
   let dialog: HTMLDialogElement;
   let generation = 0;
-  async function refresh() {
-    const gen = ++generation;
-    loading = true;
+  let activeQuery = "";
+  async function refresh(invalidate = false) {
     const p = new URLSearchParams({
       q,
       model,
@@ -34,11 +36,17 @@
     });
     if (errors) p.set("errors", "1");
     if (unrecognized) p.set("unrecognized", "1");
+    const query = p.toString();
+    // State updates must not invalidate an identical request still in flight.
+    if (!invalidate && loading && activeQuery === query) return;
+    const gen = ++generation;
+    activeQuery = query;
+    loading = true;
     try {
-      const result = await get<RequestList>("/api/ui/requests?" + p);
+      const result = await get<RequestList>("/api/ui/requests?" + query);
       if (gen === generation) list = result;
     } catch (e) {
-      fail(e);
+      if (gen === generation) fail(e);
     } finally {
       if (gen === generation) loading = false;
     }
@@ -74,12 +82,11 @@
     }
   }
   onMount(() => {
-    void refresh();
-    return revision.subscribe(() => void refresh());
+    return revision.subscribe(() => void refresh(true));
   });
   $effect(() => {
     data.now;
-    void refresh();
+    untrack(() => void refresh());
   });
 </script>
 
@@ -120,7 +127,7 @@
     >Сессия<select bind:value={session} onchange={() => filter()}
       ><option value="">Все сессии</option
       >{#each data.sessions.filter((s) => s.id) as s}<option value={s.id}
-          >{s.id.slice(0, 12)}</option
+          >{sessionOption(s)}</option
         >{/each}</select
     ></label
   ><label class="check"
@@ -133,7 +140,7 @@
   ><button type="submit" class="primary">Найти</button>
 </form>
 {#if session && list.sessionUsage}<div class="panel session-usage-panel">
-    <div class="spread"><h2>Сессия · {session.slice(0, 12)}</h2><button class="text-button" onclick={() => { session = ""; filter(); }}>Все сессии</button></div>
+    <div class="spread"><h2><SessionIdentity session={sessionMap.get(session)} id={session} /></h2><button class="text-button" onclick={() => { session = ""; filter(); }}>Все сессии</button></div>
     <ConnectionUsage usage={list.sessionUsage} scope="session" />
   </div>{/if}
 <div class="section-head">
@@ -146,7 +153,7 @@
   {#each list.items as item, index}{#if index === 0 || list.items[index - 1].session !== item.session}<div
         class="request-session"
       >
-        {#if item.session}<button class="text-button" onclick={() => { session = item.session; filter(); }}>Сессия · {item.session.slice(0, 12)} <span aria-hidden="true">↗</span></button>{:else}Сессия · Без сессии{/if}
+        {#if item.session}<button class="text-button" onclick={() => { session = item.session; filter(); }}><SessionIdentity session={sessionMap.get(item.session)} id={item.session} /> <span aria-hidden="true">↗</span></button>{:else}Сессия · Без сессии{/if}
       </div>{/if}<button
       class="request-row"
       onclick={() => void select(item.id)}
@@ -169,12 +176,12 @@
       ><span aria-hidden="true">↗</span></button
     >{/each}{#if !list.items.length}<div class="empty">
       <h3>
-        {q || model || connection || errors || unrecognized || session
+        {loading ? "Загружаем запросы…" : q || model || connection || errors || unrecognized || session
           ? "Ничего не найдено"
           : "Пока нет запросов"}
       </h3>
       <p>
-        {q || model || connection || errors || unrecognized || session
+        {loading ? "Получаем историю сессии." : q || model || connection || errors || unrecognized || session
           ? "Попробуйте изменить фильтры."
           : "Отправьте первый запрос через роутер — он появится здесь."}
       </p>

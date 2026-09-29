@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import type { UIState, Session } from "./types";
+  import type { UIState } from "./types";
+  import SessionIdentity from "./SessionIdentity.svelte";
+  import { modelDestinations } from "./destinations";
   import LimitMeter from "./LimitMeter.svelte";
   let { data }: { data: UIState } = $props();
   let host: HTMLDivElement;
@@ -8,18 +10,9 @@
   let width = $state(1);
   let height = $state(1);
   const sessions = $derived(data.sessions.slice(0, 4));
-  function connection(s: Session): string {
-    return (
-      s.connection ||
-      (s.model.includes("/")
-        ? s.model.split("/")[0]
-        : s.route === "cloud"
-          ? "anthropic"
-          : "")
-    );
-  }
-  function requested(s: Session): string {
-    return s.requestedModel || s.model || "Модель не определена";
+  const destinations = $derived(modelDestinations(sessions));
+  function connectionName(name: string): string {
+    return data.connections.find(c => c.name === name)?.displayName || name || "Подключение неизвестно";
   }
   function measure() {
     if (!host) return;
@@ -36,12 +29,11 @@
       ),
     );
     const next: { d: string; color: number }[] = [];
-    for (const [i, s] of sessions.entries()) {
-      const c = connection(s);
+    for (const [i, destination] of destinations.entries()) {
+      const c = destination.connection;
       const index = data.connections.findIndex((x) => x.name === c);
-      if (index < 0) continue;
       for (const [from, to] of [
-        ["session-" + i, "route-" + i],
+        ...destination.sessionIndices.map(sessionIndex => ["session-" + sessionIndex, "route-" + i]),
         ["route-" + i, "connection-" + c],
       ]) {
         const a = rects.get(from);
@@ -53,7 +45,7 @@
           y2 = b.top + b.height / 2 - box.top;
         next.push({
           d: `M${x1} ${y1} C${x1 + (x2 - x1) / 2} ${y1},${x1 + (x2 - x1) / 2} ${y2},${x2} ${y2}`,
-          color: index % 5,
+          color: Math.max(0, index) % 5,
         });
       }
     }
@@ -61,7 +53,7 @@
   }
   $effect(() => {
     data;
-    sessions;
+    destinations;
     void tick().then(measure);
   });
   onMount(() => {
@@ -93,8 +85,8 @@
           data-node={"session-" + i}
           href={"#/requests?session=" + encodeURIComponent(session.id)}
           ><div class="spread">
-            <strong>{session.id ? session.id.slice(0, 8) : "Без сессии"}</strong
-            ><span class="badge"
+            <SessionIdentity {session} />
+            <span class="badge"
               >{session.pending
                 ? "В полёте: " + session.pending
                 : "Завершено"}</span
@@ -109,18 +101,15 @@
         </div>{/if}
     </div>
     <div class="map-column routes-column">
-      <h3>Маршрут запроса</h3>
-      {#each sessions as session, i}<a
+      <h3>Модели назначения</h3>
+      {#each destinations as destination, i}<a
           class="map-node route-node"
           data-node={"route-" + i}
           href="#/routes"
-          ><strong>{requested(session)}</strong>
-          <p>
-            {session.effort
-              ? "Усилие: " + session.effort
-              : "Усилие по умолчанию"}
-          </p>
-          <small>→ {session.model || "Назначение не записано"}</small></a
+          ><strong>{destination.model || "Назначение не записано"}</strong>
+          <p>{connectionName(destination.connection)}</p>
+          {#if destination.requestedModels.length}<small>Запрошено: {destination.requestedModels.join(", ")}</small>{/if}
+          <p>{destination.requests} запр. · Сессий: {destination.sessionIndices.length}{destination.pending ? " · В полёте: " + destination.pending : ""}</p></a
         >{/each}{#if !sessions.length}<a class="map-node" href="#/routes"
           ><strong>{data.families.length} семейств моделей</strong>
           <p>Настроить маршруты →</p></a
@@ -153,7 +142,7 @@
     </div>
   </div>
   <p class="map-caption">
-    Линии показывают фактический путь последнего запроса сессии.{data.sessions
+    Линии показывают, в какие модели обращались сессии. Одинаковые назначения объединены по модели и подключению.{data.sessions
       .length > 4
       ? " Показаны 4 последние сессии."
       : ""}

@@ -81,7 +81,20 @@ export interface Pool {
     cooling: boolean;
   }[];
 }
+export interface SessionRoute {
+  requestedModel: string;
+  model: string;
+  connection: string;
+  effort: string;
+  route: string;
+  requests: number;
+  pending: number;
+}
 export interface Session {
+  title?: string;
+  project?: string;
+  branch?: string;
+  routes?: SessionRoute[];
   usage?: ConnectionUsage;
   requestedModel: string;
   preview: string;
