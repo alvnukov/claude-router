@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 )
@@ -76,7 +77,7 @@ func TestPrivacyReasoningResponsesAcrossRoutes(t *testing.T) {
 				defer up.Close()
 				providerName, baseURL := "p", up.URL
 				if protocol == "codex" {
-					providerName, baseURL = "codex", codexBaseURL
+					providerName, baseURL = "codex", conf.CodexBaseURL
 					old := http.DefaultTransport
 					t.Cleanup(func() { http.DefaultTransport = old })
 					http.DefaultTransport = usageTransport(func(r *http.Request) (*http.Response, error) {
@@ -113,8 +114,8 @@ func TestPrivacyReasoningResponsesAcrossRoutes(t *testing.T) {
 				if protocol == "codex" {
 					providerType = "codex"
 				}
-				cfg := config{upstream: base, firstByte: time.Second, local: localSetup{Providers: []provider{{Name: providerName, Type: providerType, BaseURL: baseURL}}, Models: []localModel{{Provider: providerName, Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": route}}}}
-				cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+				cfg := config{Upstream: base, FirstByte: time.Second, Local: localSetup{Providers: []provider{{Name: providerName, Type: providerType, BaseURL: baseURL}}, Models: []localModel{{Provider: providerName, Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": route}}}}
+				cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 				st, hl := history.New(10, ""), newHealth("")
 				h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
 				body := strings.Replace(trafficBody, `"max_tokens":100`, `"max_tokens":100,"stream":true`, 1)

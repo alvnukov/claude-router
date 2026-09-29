@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"localrouter/internal/codextesttransport"
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 	"localrouter/internal/providers"
@@ -80,7 +81,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	// the response belongs to that model, and a later failure only counts
 	// against its score.
 	pickCfg := cfg
-	pickCfg.failover = true
+	pickCfg.Failover = true
 	cands := withoutSignedOut(hl.pick(pickCfg))
 	sessionKey := codexprovider.SessionKey(history.SessionOf(body))
 	if privacy.FromRequest(r) != nil {
@@ -91,9 +92,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	if r.URL.Path == "/v1/messages/count_tokens" {
 		cands = hl.applyExistingAffinity(scope, cands)
 	} else {
-		cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
+		cands = hl.bindCandidates(scope, poolRoute{cfg.PoolName, cfg.PoolType}, cands)
 	}
-	if !cfg.failover && len(cands) > 1 {
+	if !cfg.Failover && len(cands) > 1 {
 		cands = cands[:1]
 	}
 	if len(cands) == 0 {
@@ -128,9 +129,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
-		if cfg.maxInputChars > 0 {
-			if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after && privacy.FromRequest(r) == nil {
-				log.Printf("trimmed prompt %d -> %d chars (budget %d): %s", before, after, cfg.maxInputChars, strings.Join(notes, "; "))
+		if cfg.MaxInputChars > 0 {
+			if before, after, notes := fitToBudget(&oreq, cfg.MaxInputChars); before != after && privacy.FromRequest(r) == nil {
+				log.Printf("trimmed prompt %d -> %d chars (budget %d): %s", before, after, cfg.MaxInputChars, strings.Join(notes, "; "))
 				if tr != nil {
 					tr.TrimBefore, tr.TrimAfter, tr.TrimNotes = before, after, notes
 				}
@@ -250,7 +251,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 				return
 			}
 			hl.record(cand.Key, false, 0, werr.Error())
-			if cfg.failover && i+1 < len(cands) {
+			if cfg.Failover && i+1 < len(cands) {
 				hl.moveSession(scope, cand.Key, cands[i+1])
 			}
 			return
@@ -283,13 +284,13 @@ func (a attemptResult) errMsg() string {
 }
 
 // tryModel waits for the first usable response event (not just headers), at most
-// cfg.firstByte. On success the caller owns resp.Body and must call cancel.
+// cfg.FirstByte. On success the caller owns resp.Body and must call cancel.
 func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, stream bool, sessionKey string) attemptResult {
 	model := cand.Key
 	ctx, cancel := context.WithCancel(r.Context())
 	endpoint := cand.Provider.BaseURL + "/chat/completions"
 	if cand.Provider.Type == "codex" {
-		endpoint = codexBaseURL + "/responses"
+		endpoint = conf.CodexBaseURL + "/responses"
 	}
 	up, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -319,8 +320,8 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 
 	var slow atomic.Bool
 	var timer *time.Timer
-	if cfg.firstByte > 0 {
-		timer = time.AfterFunc(cfg.firstByte, func() { slow.Store(true); cancel() })
+	if cfg.FirstByte > 0 {
+		timer = time.AfterFunc(cfg.FirstByte, func() { slow.Store(true); cancel() })
 		defer timer.Stop()
 	}
 	t0 := time.Now()
@@ -344,7 +345,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 			return attemptResult{err: err, clientGone: true}
 		}
 		if slow.Load() {
-			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+			err = fmt.Errorf("%s: no response within %s", model, cfg.FirstByte)
 		}
 		if errors.Is(err, errCodexSignIn) {
 			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb, retryable: true}
@@ -401,7 +402,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		ready = reader
 	}
 	if timer != nil && !timer.Stop() {
-		err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+		err = fmt.Errorf("%s: no response within %s", model, cfg.FirstByte)
 	}
 	if err != nil {
 		body.Close()
@@ -411,7 +412,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 			return attemptResult{err: err, clientGone: true}
 		}
 		if slow.Load() {
-			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+			err = fmt.Errorf("%s: no response within %s", model, cfg.FirstByte)
 		}
 		return attemptResult{err: err, ttfb: time.Since(t0), retryable: true}
 	}

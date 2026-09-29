@@ -18,7 +18,7 @@ func keys(cs []candidate) string {
 // rating order so a failure moves to the best-rated one.
 func TestPickBalances(t *testing.T) {
 	hl := newHealth("")
-	cfg := config{local: oneProvider("http://h/v1", "a", "b", "c", "d"), failover: true, balance: 3}
+	cfg := config{Local: oneProvider("http://h/v1", "a", "b", "c", "d"), Failover: true, Balance: 3}
 	for key, score := range map[string]float64{"p/a": 1, "p/b": 0.9, "p/c": 0.8, "p/d": 0.7} {
 		hl.stat(key).Score = score
 	}
@@ -42,7 +42,7 @@ func TestPickBalances(t *testing.T) {
 	if got := keys(hl.pick(cfg)); got != "p/d,p/a,p/c,p/b" {
 		t.Fatalf("cooling b leaves the group, idle d takes its place: %s", got)
 	}
-	cfg.balance = 1
+	cfg.Balance = 1
 	if got := keys(hl.pick(cfg)); got != "p/a,p/c,p/d,p/b" {
 		t.Fatalf("balance off: %s", got)
 	}
@@ -62,7 +62,7 @@ func TestCheckModels(t *testing.T) {
 	defer srv.Close()
 	hl := newHealth("")
 	hl.record("p/good", true, time.Second, "") // just used: not probed
-	cfg := config{local: oneProvider(srv.URL, "good", "bad", "slow", "other"), probeEvery: 10 * time.Second, firstByte: time.Second}
+	cfg := config{Local: oneProvider(srv.URL, "good", "bad", "slow", "other"), ProbeEvery: 10 * time.Second, FirstByte: time.Second}
 	t0 := time.Now()
 	checkModels(cfg, hl)
 	if took := time.Since(t0); took > 1400*time.Millisecond {
@@ -94,7 +94,7 @@ func TestInFlightReleased(t *testing.T) {
 	srv := fakeEndpoint(t, &calls)
 	defer srv.Close()
 	hl := newHealth("")
-	cfg := config{local: oneProvider(srv.URL, "bad", "good"), failover: true, firstByte: 5 * time.Second}
+	cfg := config{Local: oneProvider(srv.URL, "bad", "good"), Failover: true, FirstByte: 5 * time.Second}
 	if w, _ := runLocal(t, cfg, hl); w.Code != 200 {
 		t.Fatal(w.Code)
 	}

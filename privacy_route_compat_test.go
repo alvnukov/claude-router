@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 )
@@ -23,7 +24,7 @@ func routeCompatRequest(t *testing.T, protocol, routeKind, mode, controls string
 	t.Helper()
 	providerName, baseURL := "p", "http://privacy-route.invalid/v1"
 	if protocol == "codex" {
-		providerName, baseURL = "codex", codexBaseURL
+		providerName, baseURL = "codex", conf.CodexBaseURL
 	}
 	var models []string
 	oldTransport := http.DefaultTransport
@@ -108,8 +109,8 @@ func routeCompatRequest(t *testing.T, protocol, routeKind, mode, controls string
 	default:
 		setup.Routes = map[string]map[string]modelRoute{model: {"default": route}}
 	}
-	cfg := config{upstream: base, firstByte: time.Second, failover: true, local: setup}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	cfg := config{Upstream: base, FirstByte: time.Second, Failover: true, Local: setup}
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st, hl := history.New(10, ""), newHealth("")
 	handler := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
 	body := strings.Replace(trafficBody, `"model":"test"`, `"model":"`+model+`"`, 1)
@@ -135,7 +136,7 @@ func routeCompatRequest(t *testing.T, protocol, routeKind, mode, controls string
 		if selected, ok := bindings["chosen"]; ok {
 			selectedMode = selected
 		}
-		state := cs.privacyRuntime().State()
+		state := cs.PrivacyRuntime().State()
 		var protected, detected, bypassed int
 		switch selectedMode {
 		case "mask":

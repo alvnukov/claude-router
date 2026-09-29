@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	webui "localrouter/internal/ui"
 	"localrouter/internal/uisession"
@@ -35,12 +36,12 @@ func uiRoutes(in map[string]map[string]modelRoute) map[string]map[string]webui.R
 	}
 	return out
 }
-func uiProfile(name string, p routingProfile) webui.Profile {
+func uiProfile(name string, p conf.Profile) webui.Profile {
 	out := webui.Profile{Name: name, DefaultPool: p.DefaultPool, FamilyRoutes: uiRoutes(p.FamilyRoutes), Routes: uiRoutes(p.Routes), ModelPools: map[string][]webui.Target{}}
 	for name, targets := range p.ModelPools {
 		v := []webui.Target{}
 		for _, t := range targets {
-			v = append(v, webui.Target{Model: t.Model, Effort: t.Effort, EffortMap: t.clone().EffortMap})
+			v = append(v, webui.Target{Model: t.Model, Effort: t.Effort, EffortMap: t.Clone().EffortMap})
 		}
 		out.ModelPools[name] = v
 	}
@@ -58,29 +59,29 @@ func safeBaseURL(raw string) string {
 }
 func (b uiBackend) State(ctx context.Context) webui.State {
 	u := b.u
-	c := u.cs.get()
+	c := u.cs.Get()
 	now := time.Now()
 	records := u.st.List()
-	usage := u.connectionMetrics.view(records, now, c.local.Providers)
-	out := webui.State{Now: now, Started: u.started, Lifecycle: "active", ActiveProfile: c.local.ActiveProfile, Profiles: []webui.Profile{}, Connections: []webui.Connection{}, Models: []webui.Model{}, Families: []webui.RouteRow{}, Routes: []webui.RouteRow{}, Pools: []webui.Pool{}, Efforts: append([]string{}, claudeEfforts...), Sessions: []webui.Session{}, ReloadErrors: []string{}}
-	out.DefaultPool = c.local.DefaultPool
+	usage := u.connectionMetrics.view(records, now, c.Local.Providers)
+	out := webui.State{Now: now, Started: u.started, Lifecycle: "active", ActiveProfile: c.Local.ActiveProfile, Profiles: []webui.Profile{}, Connections: []webui.Connection{}, Models: []webui.Model{}, Families: []webui.RouteRow{}, Routes: []webui.RouteRow{}, Pools: []webui.Pool{}, Efforts: append([]string{}, conf.ClaudeEfforts...), Sessions: []webui.Session{}, ReloadErrors: []string{}}
+	out.DefaultPool = c.Local.DefaultPool
 	if u.life != nil {
 		out.Lifecycle = string(u.life.mode())
 	}
-	for name, p := range c.local.Profiles {
-		if name == c.local.ActiveProfile {
-			p = c.local.routing()
+	for name, p := range c.Local.Profiles {
+		if name == c.Local.ActiveProfile {
+			p = c.Local.Routing()
 		}
 		out.Profiles = append(out.Profiles, uiProfile(name, p))
 	}
 	sort.Slice(out.Profiles, func(i, j int) bool { return out.Profiles[i].Name < out.Profiles[j].Name })
 	cp := u.claudeProxyView()
 	out.Interception = webui.Interception{Enabled: cp.Enabled, CanRestore: cp.CanRestore, Error: u.publicUIMessage(cp.Error)}
-	for _, failure := range u.cs.reloadFailures() {
+	for _, failure := range u.cs.ReloadFailures() {
 		out.ReloadErrors = append(out.ReloadErrors, u.publicUIMessage(failure.Err))
 	}
 	observed := u.limits.View(now)
-	cloud := webui.Connection{Name: "anthropic", DisplayName: "Anthropic", Type: "anthropic", Connected: true, Models: append([]string{}, c.local.Catalog.Anthropic...), Limits: []webui.Limit{}, Updated: observed.ObservedAt}
+	cloud := webui.Connection{Name: "anthropic", DisplayName: "Anthropic", Type: "anthropic", Connected: true, Models: append([]string{}, c.Local.Catalog.Anthropic...), Limits: []webui.Limit{}, Updated: observed.ObservedAt}
 	for _, w := range observed.Windows {
 		v := webui.Limit{ID: w.Name, Label: w.Name, Known: w.RemainingPercent != nil, Reset: w.ResetAt, Blocked: w.Status == "rejected"}
 		if w.RemainingPercent != nil {
@@ -96,7 +97,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		probes[name] = p
 	}
 	u.probeMu.Unlock()
-	for _, p := range c.local.Providers {
+	for _, p := range c.Local.Providers {
 		v := webui.Connection{Name: p.Name, DisplayName: p.DisplayName, Type: p.Type, BaseURL: safeBaseURL(p.BaseURL), KeySet: p.APIKey != "", Models: []string{}, Limits: []webui.Limit{}}
 		if v.DisplayName == "" {
 			v.DisplayName = p.Name
@@ -104,7 +105,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		if v.Type == "" {
 			v.Type = "openai"
 		}
-		catalog := c.local.Catalog.Providers[p.Name]
+		catalog := c.Local.Catalog.Providers[p.Name]
 		v.Updated = catalog.UpdatedAt
 		v.Error = catalog.Error
 		for _, m := range catalog.Models {
@@ -131,18 +132,18 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		out.Connections[i].Usage = usage.connections[out.Connections[i].Name]
 		out.Connections[i].Usage.Since = now.Add(-24 * time.Hour)
 	}
-	for _, m := range c.local.Models {
-		out.Models = append(out.Models, webui.Model{Key: m.Key(), Provider: m.Provider, Model: m.Model, Efforts: append([]string{}, modelEffortOptions(c.local, m.Key(), infos)...)})
+	for _, m := range c.Local.Models {
+		out.Models = append(out.Models, webui.Model{Key: m.Key(), Provider: m.Provider, Model: m.Model, Efforts: append([]string{}, modelEffortOptions(c.Local, m.Key(), infos)...)})
 	}
 	families := map[string]bool{"opus": true, "sonnet": true, "haiku": true, "fable": true}
 	models := map[string]bool{}
-	for f := range c.local.FamilyRoutes {
+	for f := range c.Local.FamilyRoutes {
 		families[f] = true
 	}
-	for m := range c.local.Routes {
+	for m := range c.Local.Routes {
 		models[m] = true
 	}
-	for _, m := range c.local.Catalog.Anthropic {
+	for _, m := range c.Local.Catalog.Anthropic {
 		models[m] = true
 	}
 	if len(models) == 0 {
@@ -152,27 +153,27 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	}
 	row := func(name string, family bool) webui.RouteRow {
 		r := webui.RouteRow{Model: name, Label: name, Choices: []webui.Choice{}}
-		rules := c.local.Routes[name]
+		rules := c.Local.Routes[name]
 		if family {
-			rules = c.local.FamilyRoutes[name]
+			rules = c.Local.FamilyRoutes[name]
 			r.Label = strings.ToUpper(name[:1]) + name[1:]
 		}
-		for _, e := range claudeEfforts {
+		for _, e := range conf.ClaudeEfforts {
 			route, ok := rules[e]
 			dest := "disabled"
 			if ok {
 				dest = routeDestination(route)
-			} else if family && len(rules) == 0 && c.local.DefaultPool != "" {
+			} else if family && len(rules) == 0 && c.Local.DefaultPool != "" {
 				dest = "inherit"
-			} else if !family && claudeFamily(name) != "" {
+			} else if !family && conf.ClaudeFamily(name) != "" {
 				dest = "inherit"
 			}
-			inherited := routeDestination(c.local.FamilyRoutes[claudeFamily(name)][e])
+			inherited := routeDestination(c.Local.FamilyRoutes[conf.ClaudeFamily(name)][e])
 			if inherited == "" {
 				inherited = "disabled"
 			}
-			if c.local.defaultPoolFor(name) != "" {
-				inherited = "pool:" + c.local.DefaultPool
+			if c.Local.DefaultPoolFor(name) != "" {
+				inherited = "pool:" + c.Local.DefaultPool
 			}
 			r.Choices = append(r.Choices, webui.Choice{Effort: e, Destination: dest, Inherited: inherited, Configured: ok})
 		}
@@ -188,15 +189,15 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 		out.Routes = append(out.Routes, row(name, false))
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Model < out.Routes[j].Model })
-	for name, targets := range c.local.ModelPools {
-		settings := c.poolSettings(name)
+	for name, targets := range c.Local.ModelPools {
+		settings := c.PoolSettings(name)
 		p := webui.Pool{Name: name, Type: settings.Type, MaxInputChars: settings.MaxInputChars, Failover: settings.Failover, FirstByte: settings.FirstByteSec, ProbeEvery: settings.ProbeSec, Members: []webui.Member{}}
 		for _, t := range targets {
 			mapping := map[string]string{}
 			for source, effort := range t.EffortMap {
 				mapping[source] = effort
 			}
-			p.Members = append(p.Members, webui.Member{Model: t.Model, Effort: t.Effort, EffortMap: mapping, Efforts: append([]string{}, modelEffortOptions(c.local, t.Model, infos)...), Cooling: u.hl.snapshot(t.Model).Cooling()})
+			p.Members = append(p.Members, webui.Member{Model: t.Model, Effort: t.Effort, EffortMap: mapping, Efforts: append([]string{}, modelEffortOptions(c.Local, t.Model, infos)...), Cooling: u.hl.snapshot(t.Model).Cooling()})
 		}
 		out.Pools = append(out.Pools, p)
 	}
@@ -204,7 +205,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	sessions := map[string]*webui.Session{}
 	routeIndexes := map[string]map[[5]string]int{}
 	sessionPrompts := map[string][]string{}
-	promptTitles := uisession.PromptTitles(u.cs.privacyRuntime())
+	promptTitles := uisession.PromptTitles(u.cs.PrivacyRuntime())
 	bodyPreview := func(body []byte) string { _, _, p := quickSummary(body); return p }
 	for _, rec := range records {
 		out.Summary.Total++
@@ -333,7 +334,7 @@ func (b uiBackend) Requests(q url.Values) webui.RequestList {
 	records := b.u.st.List()
 	if session := q.Get("session"); session != "" {
 		now := time.Now()
-		usage := b.u.connectionMetrics.view(records, now, b.u.cs.get().local.Providers).sessions[session]
+		usage := b.u.connectionMetrics.view(records, now, b.u.cs.Get().Local.Providers).sessions[session]
 		usage.Since = now.Add(-24 * time.Hour)
 		out.SessionUsage = &usage
 	}
@@ -484,7 +485,7 @@ func (b uiBackend) Action(ctx context.Context, a webui.Action) (result webui.Res
 			return webui.Result{}, fmt.Errorf("Укажите модель и область маршрута")
 		}
 		if a.Fields["all"] == "" {
-			for _, effort := range claudeEfforts {
+			for _, effort := range conf.ClaudeEfforts {
 				if a.Fields[effort] == "" {
 					return webui.Result{}, fmt.Errorf("Не указано назначение для %s; маршруты не изменены", effort)
 				}
@@ -492,7 +493,7 @@ func (b uiBackend) Action(ctx context.Context, a webui.Action) (result webui.Res
 		}
 	}
 	if a.Action == "route.save" || a.Action == "pool.edit" || a.Action == "pool.settings" {
-		if _, ok := a.Fields["profile"]; !ok || a.Fields["profile"] != u.cs.get().local.ActiveProfile {
+		if _, ok := a.Fields["profile"]; !ok || a.Fields["profile"] != u.cs.Get().Local.ActiveProfile {
 			return webui.Result{}, fmt.Errorf("Активный профиль изменился; обновите страницу")
 		}
 	}
@@ -503,7 +504,7 @@ func (b uiBackend) Action(ctx context.Context, a webui.Action) (result webui.Res
 		return u.removeUIModelOrConnection("", a.Fields["key"])
 	}
 	if a.Action == "connection.probe" {
-		if _, ok := u.cs.get().local.provider(a.Fields["provider"]); !ok {
+		if _, ok := u.cs.Get().Local.Provider(a.Fields["provider"]); !ok {
 			return webui.Result{}, fmt.Errorf("Подключение не найдено")
 		}
 	}
@@ -536,7 +537,7 @@ func (u *uiServer) publicUIMessage(message string) string {
 	if message == "" {
 		return ""
 	}
-	for _, p := range u.cs.get().local.Providers {
+	for _, p := range u.cs.Get().Local.Providers {
 		if p.BaseURL != "" {
 			message = strings.ReplaceAll(message, p.BaseURL, safeBaseURL(p.BaseURL))
 		}
@@ -563,11 +564,11 @@ func (u *uiServer) publicUIMessage(message string) string {
 	return message
 }
 func rejectReferencedModel(l localSetup, matches func(string) bool) error {
-	profiles := map[string]routingProfile{}
+	profiles := map[string]conf.Profile{}
 	for name, p := range l.Profiles {
 		profiles[name] = p
 	}
-	profiles[l.ActiveProfile] = l.routing()
+	profiles[l.ActiveProfile] = l.Routing()
 	for name, p := range profiles {
 		for pool, targets := range p.ModelPools {
 			for _, t := range targets {
@@ -592,43 +593,43 @@ func rejectReferencedModel(l localSetup, matches func(string) bool) error {
 // The reference check and write share the config lock. A parallel profile
 // activation or manual reload cannot introduce references between them.
 func (u *uiServer) removeUIModelOrConnection(name, key string) (webui.Result, error) {
-	u.cs.mu.Lock()
-	defer u.cs.mu.Unlock()
-	l := u.cs.c.local.clone()
-	matches := func(k string) bool { return k == key }
-	if name != "" {
-		matches = func(k string) bool { return strings.HasPrefix(k, name+"/") }
-	}
-	if err := rejectReferencedModel(l, matches); err != nil {
-		return webui.Result{}, err
-	}
-	if name != "" {
-		found := false
-		providers := []provider{}
-		for _, p := range l.Providers {
-			if p.Name == name {
-				found = true
-			} else {
-				providers = append(providers, p)
+	err := u.cs.Update(func(l *localSetup) error {
+		matches := func(k string) bool { return k == key }
+		if name != "" {
+			matches = func(k string) bool { return strings.HasPrefix(k, name+"/") }
+		}
+		if err := rejectReferencedModel(*l, matches); err != nil {
+			return err
+		}
+		if name != "" {
+			found := false
+			providers := []provider{}
+			for _, p := range l.Providers {
+				if p.Name == name {
+					found = true
+				} else {
+					providers = append(providers, p)
+				}
+			}
+			if !found {
+				return fmt.Errorf("Подключение не найдено")
+			}
+			l.Providers = providers
+			delete(l.Catalog.Providers, name)
+			delete(l.Catalog.CodexSeen, name)
+		} else if key == "" || !l.HasModel(key) {
+			return fmt.Errorf("Модель не найдена")
+		}
+		models := []localModel{}
+		for _, m := range l.Models {
+			if !matches(m.Key()) {
+				models = append(models, m)
 			}
 		}
-		if !found {
-			return webui.Result{}, fmt.Errorf("Подключение не найдено")
-		}
-		l.Providers = providers
-		delete(l.Catalog.Providers, name)
-		delete(l.Catalog.CodexSeen, name)
-	} else if key == "" || !l.hasModel(key) {
-		return webui.Result{}, fmt.Errorf("Модель не найдена")
-	}
-	models := []localModel{}
-	for _, m := range l.Models {
-		if !matches(m.Key()) {
-			models = append(models, m)
-		}
-	}
-	l.Models = models
-	if err := u.cs.applyLocalLocked(l, true); err != nil {
+		l.Models = models
+		return nil
+	})
+	if err != nil {
 		return webui.Result{}, err
 	}
 	return webui.Result{Message: "Удалено; маршруты и пулы сохранены"}, nil

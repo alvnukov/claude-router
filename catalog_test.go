@@ -19,52 +19,9 @@ import (
 	"time"
 
 	"localrouter/internal/catalogstartup"
-)
 
-func TestFamiliesInheritPerEffortWithVersionOverrides(t *testing.T) {
-	l := oneProvider("http://h/v1", "a", "b")
-	l.ModelPools = map[string][]poolTarget{"deep": {{Model: "p/a", Effort: "high"}}, "fast": {{Model: "p/b", Effort: "low"}}}
-	l.Routes = map[string]map[string]modelRoute{
-		"claude-opus-5":   {"high": {Mode: "pool", Pool: "deep"}, "low": {Mode: "anthropic"}},
-		"claude-opus-4":   {"high": {Mode: "pool", Pool: "fast"}},
-		"claude-sonnet-5": {"high": {Mode: "pool", Pool: "fast"}},
-	}
-	migrated, changed := migrateFamilyRoutes(l)
-	if !changed {
-		t.Fatal("not migrated")
-	}
-	if err := migrated.validate(); err != nil {
-		t.Fatal(err)
-	}
-	for _, id := range []string{"claude-opus-5-5", "claude-opus-6", "opus"} {
-		if migrated.routeFor(id, "high").Pool != "deep" || migrated.routeFor(id, "low").Mode != "anthropic" || migrated.routeFor(id, "").Mode != "disabled" {
-			t.Fatalf("incorrect inherited routes for %s", id)
-		}
-	}
-	if migrated.routeFor("claude-sonnet-6", "high").Pool != "fast" {
-		t.Fatal("Sonnet inherited Opus")
-	}
-	if migrated.routeFor("claude-opus-5-other", "high").Mode != "disabled" || migrated.routeFor("claude-newfamily-1", "high").Mode != "disabled" {
-		t.Fatal("unconfigured family enabled")
-	}
-	migrated.FamilyRoutes["opus"]["high"] = modelRoute{Mode: "anthropic"}
-	if migrated.routeFor("claude-opus-5", "high").Mode != "anthropic" || migrated.routeFor("claude-opus-5-5", "high").Mode != "anthropic" {
-		t.Fatal("inherited route did not follow family edit")
-	}
-	if migrated.routeFor("claude-opus-4", "high").Pool != "fast" {
-		t.Fatal("version override lost")
-	}
-	migrated.Routes["claude-opus-5-5"] = map[string]modelRoute{"high": {Mode: "disabled"}}
-	if migrated.routeFor("claude-opus-5-5", "high").Mode != "disabled" || migrated.routeFor("claude-opus-5-5", "low").Mode != "anthropic" {
-		t.Fatal("per-effort overrides not respected")
-	}
-	if _, changed := migrateFamilyRoutes(migrated); changed {
-		t.Fatal("family migration repeats")
-	}
-	if l.FamilyRoutes != nil || len(l.Routes) != 3 {
-		t.Fatal("original mutated")
-	}
-}
+	conf "localrouter/internal/config"
+)
 
 func TestParseOfficialAnthropicCatalog(t *testing.T) {
 	body := []byte(`<a href="/models/claude-opus-99">old documentation slug</a><button><span>claude-opus-5-5</span><svg></svg></button><button>claude-fable-5-1</button><button>claude-opus-5-5</button><button>anthropic.claude-opus-5-5</button><button>claude-haiku-4-5@20251001</button><script>claude-sonnet-99</script>`)
@@ -74,36 +31,6 @@ func TestParseOfficialAnthropicCatalog(t *testing.T) {
 	}
 	if _, err := parseAnthropicCatalog([]byte(`<html>upstream unavailable</html>`)); err == nil {
 		t.Fatal("empty/error page accepted")
-	}
-}
-
-func TestCodexNewVersionsInheritPoolAndSupportedEfforts(t *testing.T) {
-	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{
-		"high": {{Model: "codex/gpt-6-sol", Effort: "high"}}, "max": {{Model: "codex/gpt-6-sol", Effort: "max"}},
-	}}
-	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high", "max"}}, {ID: "gpt-6.1-sol", Efforts: []string{"low", "high"}}, {ID: "gpt-6.1-luna", Efforts: []string{"high"}}, {ID: "gpt-5.6-sol", Efforts: []string{"high"}}}
-	notes := inheritCodexModels(&l, "codex", models)
-	if len(l.Models) != 4 {
-		t.Fatalf("catalog not imported: %v", l.Models)
-	}
-	want := []poolTarget{{Model: "codex/gpt-6-sol", Effort: "high"}, {Model: "codex/gpt-6.1-sol", Effort: "high"}}
-	if !reflect.DeepEqual(l.ModelPools["high"], want) {
-		t.Fatalf("wrong pool inheritance: %+v", l.ModelPools["high"])
-	}
-	if len(l.ModelPools["max"]) != 1 || len(notes) != 1 || !strings.Contains(notes[0], "max") {
-		t.Fatalf("unsupported effort inherited: %v %v", l.ModelPools, notes)
-	}
-	inheritCodexModels(&l, "codex", models)
-	if len(l.ModelPools["high"]) != 2 || len(l.Models) != 4 {
-		t.Fatal("duplicate import")
-	}
-	l.ModelPools["high"] = l.ModelPools["high"][:1]
-	inheritCodexModels(&l, "codex", models)
-	if len(l.ModelPools["high"]) != 1 {
-		t.Fatal("manually removed member re-added")
-	}
-	if !newerModel("gpt-5.10-sol", "gpt-5.9-sol") || codexFamily("gpt-6-sol") == codexFamily("gpt-6-luna") {
-		t.Fatal("version/family matching")
 	}
 }
 
@@ -189,19 +116,20 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		}
 		t.Setenv("ROUTER_CATALOG_SYNTHETIC_MANIFEST", manifestPath)
 		u, _ := testUI(t)
-		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-		u.cs.c.local.Providers[0].BaseURL = fixture.URL + "/v1"
-		codex := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
-		u.cs.c.local.Providers = append(u.cs.c.local.Providers, codex)
-		deps, err := catalogstartup.ForProcess(fixture.URL+"/overview", codexBaseURL)
+		c := u.cs.Get()
+		c.Local.Providers[0].BaseURL = fixture.URL + "/v1"
+		codex := provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}
+		c.Local.Providers = append(c.Local.Providers, codex)
+		u.cs = conf.NewStore(c, filepath.Join(t.TempDir(), "providers.json"))
+		deps, err := catalogstartup.ForProcess(fixture.URL+"/overview", conf.CodexBaseURL)
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer deps.Close()
 		if deps.SyntheticAuthClient(time.Second) != nil {
 			t.Run("synthetic startup does not fetch unrelated Codex usage", func(t *testing.T) {
-				server := newRouterServer(config{local: localSetup{Providers: []provider{codex}}}, newLifecycle(false), filepath.Join(t.TempDir(), "state.json"), &deps)
-				server.cs.provPath = ""
+				t.Setenv("ROUTER_PROVIDERS_FILE", "")
+				server := newRouterServer(config{Local: localSetup{Providers: []provider{codex}}}, newLifecycle(false), filepath.Join(t.TempDir(), "state.json"), &deps)
 				t.Run("manual Codex usage remains isolated", func(t *testing.T) {
 					client := server.ui.codexUsage.client
 					if client == nil {
@@ -256,12 +184,12 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 				t.Errorf("catalog probe missing: %s", want)
 			}
 		}
-		current := u.cs.get().local.Catalog
-		persisted, err := readProviders(u.cs.provPath)
+		current := u.cs.Get().Local.Catalog
+		persisted, err := conf.ReadProviders(u.cs.Path())
 		if err != nil || len(current.Anthropic) != 1 || len(current.Providers["p"].Models) != 2 || len(current.Providers["codex"].Models) != 1 || len(persisted.Catalog.Providers["codex"].Models) != 1 || current.CheckedAt.IsZero() {
 			t.Fatalf("real catalog merge/persistence: in-memory=%+v, disk=%+v, err=%v", current, persisted.Catalog, err)
 		}
-		if err := os.WriteFile(u.cs.provPath, []byte("unchanged"), 0600); err != nil {
+		if err := os.WriteFile(u.cs.Path(), []byte("unchanged"), 0600); err != nil {
 			t.Fatal(err)
 		}
 		close(blockCodex)
@@ -288,7 +216,7 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Error("Codex refresh did not join after cancellation")
 		}
-		data, err := os.ReadFile(u.cs.provPath)
+		data, err := os.ReadFile(u.cs.Path())
 		if err != nil || string(data) != "unchanged" {
 			t.Errorf("late Codex providers.json write: %q, %v", data, err)
 		}
@@ -296,18 +224,19 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 
 	t.Run("failed persistence retains last-good in memory", func(t *testing.T) {
 		u, _ := testUI(t)
-		before := u.cs.c.local.clone()
+		c := u.cs.Get()
+		before := c.Local.Clone()
 		before.Catalog.Anthropic = []string{"claude-opus-4-1"}
-		u.cs.c.local = before
-		u.cs.provPath = filepath.Join(t.TempDir(), "blocked-directory")
-		if err := os.Mkdir(u.cs.provPath, 0700); err != nil {
+		c.Local = before
+		u.cs = conf.NewStore(c, filepath.Join(t.TempDir(), "blocked-directory"))
+		if err := os.Mkdir(u.cs.Path(), 0700); err != nil {
 			t.Fatal(err)
 		}
 		u.fetchAnthropic = func(context.Context) ([]string, error) { return []string{"claude-opus-5-5"}, nil }
 		if err := u.refreshModels(context.Background()); err == nil {
 			t.Fatal("failed providers.json write was reported as success")
 		}
-		if got := u.cs.get().local; !reflect.DeepEqual(got, before) {
+		if got := u.cs.Get().Local; !reflect.DeepEqual(got, before) {
 			t.Fatalf("persistence failure replaced in-memory last-good catalog: %+v", got.Catalog)
 		}
 	})
@@ -321,11 +250,11 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		}))
 		defer fixture.Close()
 		u, _ := testUI(t)
-		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-		if err := os.WriteFile(u.cs.provPath, []byte("unchanged"), 0600); err != nil {
+		u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+		if err := os.WriteFile(u.cs.Path(), []byte("unchanged"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		deps := catalogstartup.Production(fixture.URL+"/overview", codexBaseURL)
+		deps := catalogstartup.Production(fixture.URL+"/overview", conf.CodexBaseURL)
 		defer deps.Close()
 		u.catalog = &deps
 		u.fetchAnthropic = func(ctx context.Context) ([]string, error) { return fetchAnthropicCatalog(ctx, deps) }
@@ -352,7 +281,7 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Error("official refresh did not join after cancellation")
 		}
-		data, err := os.ReadFile(u.cs.provPath)
+		data, err := os.ReadFile(u.cs.Path())
 		if err != nil || string(data) != "unchanged" {
 			t.Errorf("late official providers.json write: %q, %v", data, err)
 		}
@@ -364,14 +293,15 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		u.cs.provPath = path
 		probed := make(chan struct{})
 		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			close(probed)
 			_, _ = w.Write([]byte(`{"data":[{"id":"m1"}]}`))
 		}))
 		defer fixture.Close()
-		u.cs.c.local.Providers[0].BaseURL = fixture.URL
+		c := u.cs.Get()
+		c.Local.Providers[0].BaseURL = fixture.URL
+		u.cs = conf.NewStore(c, path)
 		fetching, release := make(chan struct{}), make(chan struct{})
 		u.fetchAnthropic = func(context.Context) ([]string, error) {
 			close(fetching)
@@ -387,11 +317,23 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("catalog fetch did not start")
 		}
-		u.cs.mu.Lock()
+		// An Update holds the store lock while its function runs; the refused
+		// edit changes nothing.
+		held, unlock, unlocked := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(unlocked)
+			_ = u.cs.Update(func(*localSetup) error {
+				close(held)
+				<-unlock
+				return errors.New("lock held by test")
+			})
+		}()
+		<-held
 		locked := true
 		defer func() {
 			if locked {
-				u.cs.mu.Unlock()
+				close(unlock)
+				<-unlocked
 			}
 		}()
 		close(release)
@@ -405,7 +347,8 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		u.probeMu.Lock()
 		u.probeMu.Unlock()
 		cancel()
-		u.cs.mu.Unlock()
+		close(unlock)
+		<-unlocked
 		locked = false
 		select {
 		case err := <-finished:
@@ -427,7 +370,6 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		if err := os.WriteFile(path, []byte("original"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		u.cs.provPath = path
 		entered, aborted, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 		fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			close(entered)
@@ -439,7 +381,9 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 			}
 		}))
 		defer fixture.Close()
-		u.cs.c.local.Providers[0].BaseURL = fixture.URL
+		c := u.cs.Get()
+		c.Local.Providers[0].BaseURL = fixture.URL
+		u.cs = conf.NewStore(c, path)
 		u.fetchAnthropic = func(context.Context) ([]string, error) { return []string{"claude-opus-5-5"}, nil }
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -477,7 +421,8 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	})
 
 	u, _ := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	path := filepath.Join(t.TempDir(), "providers.json")
+	u.cs = conf.NewStore(u.cs.Get(), path)
 	entered, release := make(chan struct{}), make(chan struct{})
 	u.fetchAnthropic = func(context.Context) ([]string, error) {
 		close(entered)
@@ -487,17 +432,17 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- u.refreshModels(context.Background()) }()
 	<-entered
-	l := u.cs.get().local.clone()
+	l := u.cs.Get().Local.Clone()
 	l.FamilyRoutes = map[string]map[string]modelRoute{"opus": {"high": {Mode: "anthropic"}}}
-	if err := u.cs.applyLocal(l, true); err != nil {
+	if err := u.cs.Update(conf.Replace(l, "")); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	current := u.cs.get().local
-	if current.routeFor("claude-opus-5-5", "high").Mode != "anthropic" || len(current.Catalog.Anthropic) != 2 || len(current.Catalog.Providers["p"].Models) != 2 {
+	current := u.cs.Get().Local
+	if current.RouteFor("claude-opus-5-5", "high").Mode != "anthropic" || len(current.Catalog.Anthropic) != 2 || len(current.Catalog.Providers["p"].Models) != 2 {
 		t.Fatal("refresh overwrote routes or lost a catalog")
 	}
 	updated := current.Catalog.AnthropicUpdated
@@ -505,23 +450,24 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 	if err := u.refreshModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	after := u.cs.get().local
+	after := u.cs.Get().Local
 	if !reflect.DeepEqual(after.Catalog.Anthropic, current.Catalog.Anthropic) || !after.Catalog.AnthropicUpdated.Equal(updated) || len(after.Catalog.Notes) != 1 {
 		t.Fatal("failed refresh destroyed cache or hid failure")
 	}
-	reloaded, err := readProviders(u.cs.provPath)
-	if err != nil || !reflect.DeepEqual(reloaded.Catalog.Anthropic, after.Catalog.Anthropic) || reloaded.routeFor("claude-opus-6", "high").Mode != "anthropic" {
+	reloaded, err := conf.ReadProviders(path)
+	if err != nil || !reflect.DeepEqual(reloaded.Catalog.Anthropic, after.Catalog.Anthropic) || reloaded.RouteFor("claude-opus-6", "high").Mode != "anthropic" {
 		t.Fatalf("catalog persistence: %v", err)
 	}
 }
 
 func TestCodexEffortControlsUseSelectedModelCatalog(t *testing.T) {
 	u, h := testUI(t)
-	p := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
+	p := provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}
 	l := localSetup{Providers: []provider{p}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}, {Provider: "codex", Model: "gpt-6-luna"}}, ModelPools: map[string][]poolTarget{"work": {}}}
-	u.cs.c.local = l
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-	u.probe = map[string]probeResult{"codex": {At: time.Now(), OK: true, Base: codexBaseURL, Models: []string{"gpt-6-sol", "gpt-6-luna"}, Info: []probeModel{{ID: "gpt-6-sol", Efforts: []string{"low", "high", "ultra"}}, {ID: "gpt-6-luna", Efforts: []string{"low", "high"}}}}}
+	c := u.cs.Get()
+	c.Local = l
+	u.cs = conf.NewStore(c, filepath.Join(t.TempDir(), "providers.json"))
+	u.probe = map[string]probeResult{"codex": {At: time.Now(), OK: true, Base: conf.CodexBaseURL, Models: []string{"gpt-6-sol", "gpt-6-luna"}, Info: []probeModel{{ID: "gpt-6-sol", Efforts: []string{"low", "high", "ultra"}}, {ID: "gpt-6-luna", Efforts: []string{"low", "high"}}}}}
 	for _, tc := range []struct {
 		key   string
 		ultra bool
@@ -532,11 +478,11 @@ func TestCodexEffortControlsUseSelectedModelCatalog(t *testing.T) {
 		}
 	}
 	get(t, h, "POST", "/settings/pools", url.Values{"name": {"work"}, "op": {"add"}, "key": {"codex/gpt-6-luna"}, "effort": {"ultra"}})
-	if len(u.cs.get().local.ModelPools["work"]) != 0 {
+	if len(u.cs.Get().Local.ModelPools["work"]) != 0 {
 		t.Fatal("unsupported effort accepted")
 	}
 	get(t, h, "POST", "/settings/pools", url.Values{"name": {"work"}, "op": {"add"}, "key": {"codex/gpt-6-luna"}, "effort": {"high"}})
-	if len(u.cs.get().local.ModelPools["work"]) != 1 {
+	if len(u.cs.Get().Local.ModelPools["work"]) != 1 {
 		t.Fatal("supported effort rejected")
 	}
 	if opts := modelEffortOptions(l, "codex/gpt-6-sol", nil); len(opts) != 0 {
@@ -549,10 +495,11 @@ func TestCodexEffortControlsUseSelectedModelCatalog(t *testing.T) {
 
 func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 	u, h := testUI(t)
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	u.fetchAnthropic = func(context.Context) ([]string, error) { return []string{"claude-opus-5-5"}, nil }
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "http://localhost/settings/refresh-models", nil))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "Проверка моделей завершена") || len(u.cs.get().local.Catalog.Anthropic) != 1 {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "Проверка моделей завершена") || len(u.cs.Get().Local.Catalog.Anthropic) != 1 {
 		t.Fatalf("refresh: %d", w.Code)
 	}
 	t.Run("cancel settings provider probe", func(t *testing.T) {
@@ -564,7 +511,9 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 		}))
 		defer fixture.Close()
 		u, handler := testUI(t)
-		u.cs.c.local.Providers[0].BaseURL = fixture.URL
+		c := u.cs.Get()
+		c.Local.Providers[0].BaseURL = fixture.URL
+		u.cs = conf.NewStore(c, "")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		req := httptest.NewRequest(http.MethodPost, "http://localhost/settings/probe", strings.NewReader("provider=p")).WithContext(ctx)
@@ -600,7 +549,9 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 		}))
 		defer fixture.Close()
 		u, handler := testUI(t)
-		u.cs.c.local.Providers[0].BaseURL = fixture.URL
+		c := u.cs.Get()
+		c.Local.Providers[0].BaseURL = fixture.URL
+		u.cs = conf.NewStore(c, "")
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		req := httptest.NewRequest(http.MethodPost, "http://localhost/settings/profiles/activate", strings.NewReader("name=missing")).WithContext(ctx)
@@ -627,22 +578,4 @@ func TestGlobalRefreshButtonUsesSameUpdater(t *testing.T) {
 			t.Error("profile response did not return after cancellation")
 		}
 	})
-}
-
-func TestCodexInheritanceIncludesInactiveProfilesOnce(t *testing.T) {
-	l := localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "gpt-6-sol"}}, ModelPools: map[string][]poolTarget{"work": {{Model: "codex/gpt-6-sol", Effort: "high"}}}}
-	l.Profiles = map[string]routingProfile{"default": l.routing(), "cloud": l.routing()}
-	l.ActiveProfile = "default"
-	models := []catalogModel{{ID: "gpt-6-sol", Efforts: []string{"high"}}, {ID: "gpt-6.1-sol", Efforts: []string{"high"}}}
-	inheritCodexModels(&l, "codex", models)
-	if len(l.ModelPools["work"]) != 2 || len(l.Profiles["cloud"].ModelPools["work"]) != 2 {
-		t.Fatalf("new version missed profile: %+v", l.Profiles)
-	}
-	cloud := l.Profiles["cloud"]
-	cloud.ModelPools["work"] = cloud.ModelPools["work"][:1]
-	l.Profiles["cloud"] = cloud
-	inheritCodexModels(&l, "codex", models)
-	if len(l.Profiles["cloud"].ModelPools["work"]) != 1 {
-		t.Fatal("manually removed version re-added")
-	}
 }

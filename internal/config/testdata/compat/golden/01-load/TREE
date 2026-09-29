@@ -1,0 +1,12 @@
+drwx------ - home
+-rw------- 158 home/env
+-rw------- 1618 home/providers.json
+-rw------- 10 home/providers.json.active-profile
+drwx------ - home/providers.json.profiles
+-rw------- 700 home/providers.json.profiles/cloud.json
+-rw------- 1067 home/providers.json.profiles/default.json
+drwx------ - legacy
+-rw------- 5939 legacy/providers.json
+-rw------- 6315 legacy/providers.json.before-families
+-rw------- 5225 legacy/providers.json.before-pool-settings
+-rw------- 528 legacy/providers.json.before-pools

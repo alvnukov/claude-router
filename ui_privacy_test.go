@@ -8,12 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/privacy"
 )
 
 func TestPrivacyHTTPPreviewAndConfiguration(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	body := map[string]any{"mode": "text", "input": "10.3.4.5\npassword=CANARY-only-in-preview", "rules": map[string]any{}, "enabled": true}
 	w := apiCall(t, h, "POST", "/api/ui/privacy/preview", body)
 	if w.Code != 200 {
@@ -58,7 +59,7 @@ func callPrivacy(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
 
 func TestPrivacyHTTPRejectsAmbiguityAndNeverEchoesRules(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	for _, draft := range []string{`{"domains":"CANARY"}`, `{"filters":{"secret":true,"secret":false}}`} {
 		w := apiCall(t, h, "POST", "/api/ui/privacy/validate", map[string]string{"rules": draft})
 		if w.Code != 400 || strings.Contains(w.Body.String(), "CANARY") {
@@ -92,7 +93,7 @@ func TestPrivacyHTTPRejectsAmbiguityAndNeverEchoesRules(t *testing.T) {
 
 func TestPrivacyHTTPRuntimeStatus(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	w := apiCall(t, h, "GET", "/api/ui/privacy", nil)
 	var result struct {
 		TrafficApplied bool                 `json:"trafficApplied"`
@@ -104,7 +105,7 @@ func TestPrivacyHTTPRuntimeStatus(t *testing.T) {
 	if !result.TrafficApplied || result.Traffic.Status != "missing" || !result.Traffic.Buffered {
 		t.Fatal("runtime status missing")
 	}
-	writeTrafficConfig(t, filepath.Dir(u.cs.provPath), `{}`)
+	writeTrafficConfig(t, filepath.Dir(u.cs.Path()), `{}`)
 	w = apiCall(t, h, "GET", "/api/ui/privacy", nil)
 	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)

@@ -35,8 +35,8 @@ func TestPrivacyCountReusesAffinityWithoutChangingIt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			base := config{failover: true, local: localSetup{Providers: []provider{{Name: "p", BaseURL: "http://not-contacted.invalid"}}, Models: []localModel{{Provider: "p", Model: "chosen"}, {Provider: "p", Model: "other"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "pool", Pool: "work"}}}, ModelPools: map[string][]poolTarget{"work": {{Model: "p/chosen"}, {Model: "p/other"}}}}}
-			cfg := base.forModel("test", "default")
+			base := config{Failover: true, Local: localSetup{Providers: []provider{{Name: "p", BaseURL: "http://not-contacted.invalid"}}, Models: []localModel{{Provider: "p", Model: "chosen"}, {Provider: "p", Model: "other"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "pool", Pool: "work"}}}, ModelPools: map[string][]poolTarget{"work": {{Model: "p/chosen"}, {Model: "p/other"}}}}}
+			cfg := base.ForModel("test", "default")
 			hl := newHealth("")
 			cands := hl.pick(cfg)
 			body := []byte(trafficBody)
@@ -49,7 +49,7 @@ func TestPrivacyCountReusesAffinityWithoutChangingIt(t *testing.T) {
 				t.Fatal("missing session affinity fixture")
 			}
 			if state != "missing" {
-				hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
+				hl.bindCandidates(scope, poolRoute{cfg.PoolName, cfg.PoolType}, cands)
 				hl.moveSession(scope, cands[0].Key, cands[1])
 				binding := hl.sessions[scope]
 				if state == "expired" {

@@ -22,6 +22,7 @@ import (
 
 	"localrouter/internal/catalogstartup"
 	"localrouter/internal/codextesttransport"
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 	"localrouter/internal/privacy"
@@ -269,7 +270,7 @@ type statusView struct {
 }
 
 func (u *uiServer) status(w http.ResponseWriter, r *http.Request) {
-	v := statusView{C: u.cs.get(), Uptime: fmtDur(time.Since(u.started))}
+	v := statusView{C: u.cs.Get(), Uptime: fmtDur(time.Since(u.started))}
 	v.StoreLen, v.StoreMax = u.st.Size()
 	var dc, dl time.Duration
 	var nc, nl int
@@ -540,8 +541,7 @@ type routeChoice struct {
 	Inherited   string
 }
 
-var claudeEfforts = []string{"default", "low", "medium", "high", "xhigh", "max"}
-var providerEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+var anthropicModels = []string{"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5", "claude-haiku-4-5-20251001"}
 
 type poolRow struct {
 	Profile   string
@@ -593,7 +593,7 @@ func (u *uiServer) codexLoginViewFor(p provider) codexLoginView {
 // checked against the config in force now.
 func (u *uiServer) codexProvider(r *http.Request) (provider, *codexAuthStore, error) {
 	name := strings.TrimSpace(r.FormValue("provider"))
-	p, ok := u.cs.get().local.provider(name)
+	p, ok := u.cs.Get().Local.Provider(name)
 	if !ok || p.Type != "codex" {
 		return provider{}, nil, fmt.Errorf("подключение Codex %q не найдено", name)
 	}
@@ -619,14 +619,14 @@ func (u *uiServer) settingsView(contexts ...context.Context) settingsView {
 	if len(contexts) > 0 {
 		ctx = contexts[0]
 	}
-	c := u.cs.get()
-	v := settingsView{ReloadErrors: u.cs.reloadFailures(), ActiveProfile: c.local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.local.Catalog, C: c, Models: u.ranked(c), AllModels: c.local.Models, Efforts: providerEfforts, Limits: u.limits.View(time.Now())}
-	for name := range c.local.Profiles {
+	c := u.cs.Get()
+	v := settingsView{ReloadErrors: u.cs.ReloadFailures(), ActiveProfile: c.Local.ActiveProfile, ClaudeProxy: u.claudeProxyView(), Catalog: c.Local.Catalog, C: c, Models: u.ranked(c), AllModels: c.Local.Models, Efforts: conf.ProviderEfforts, Limits: u.limits.View(time.Now())}
+	for name := range c.Local.Profiles {
 		v.ProfileNames = append(v.ProfileNames, name)
 	}
 	sort.Strings(v.ProfileNames)
 	info := map[string]probeModel{}
-	for _, p := range c.local.Providers {
+	for _, p := range c.Local.Providers {
 		if p.Type == "codex" {
 			v.Logins = append(v.Logins, u.codexLoginViewFor(p))
 		}
@@ -636,48 +636,48 @@ func (u *uiServer) settingsView(contexts ...context.Context) settingsView {
 			info[p.Name+"/"+m.ID] = m
 		}
 	}
-	names := make([]string, 0, len(c.local.ModelPools))
-	for name := range c.local.ModelPools {
+	names := make([]string, 0, len(c.Local.ModelPools))
+	for name := range c.Local.ModelPools {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		targets := c.local.ModelPools[name]
-		row := poolRow{Profile: c.local.ActiveProfile, Name: name, Settings: c.poolSettings(name)}
+		targets := c.Local.ModelPools[name]
+		row := poolRow{Profile: c.Local.ActiveProfile, Name: name, Settings: c.PoolSettings(name)}
 		present := map[string]bool{}
 		for i, target := range targets {
-			options := modelEffortOptions(c.local, target.Model, info)
-			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && target.Effort != poolRequestEffort && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1, Stat: u.hl.snapshot(target.Model)})
+			options := modelEffortOptions(c.Local, target.Model, info)
+			row.Keys = append(row.Keys, poolKeyRow{Key: target.Model, Effort: target.Effort, Options: options, Unconfirmed: target.Effort != "" && target.Effort != conf.PoolRequestEffort && !slices.Contains(options, target.Effort), First: i == 0, Last: i == len(targets)-1, Stat: u.hl.snapshot(target.Model)})
 			present[target.Model] = true
 		}
-		for _, m := range c.local.Models {
+		for _, m := range c.Local.Models {
 			if !present[m.Key()] {
 				row.Available = append(row.Available, m)
 			}
 		}
-		for _, efforts := range c.local.allRouteRules() {
+		for _, efforts := range c.Local.AllRouteRules() {
 			for _, route := range efforts {
 				if route.Mode == "pool" && route.Pool == name {
 					row.Uses++
 				}
 			}
 		}
-		row.Add = u.poolAddView(c.local, name, "", info)
+		row.Add = u.poolAddView(c.Local, name, "", info)
 		v.Pools = append(v.Pools, row)
 	}
 	var directTargets []directTargetRow
-	for _, model := range c.local.Models {
-		directTargets = append(directTargets, directTargetRow{Key: model.Key(), Efforts: modelEffortOptions(c.local, model.Key(), info)})
+	for _, model := range c.Local.Models {
+		directTargets = append(directTargets, directTargetRow{Key: model.Key(), Efforts: modelEffortOptions(c.Local, model.Key(), info)})
 	}
 	models := map[string]bool{}
-	catalog := c.local.Catalog.Anthropic
+	catalog := c.Local.Catalog.Anthropic
 	if len(catalog) == 0 {
 		catalog = anthropicModels
 	}
 	for _, model := range catalog {
 		models[model] = true
 	}
-	for model := range c.local.Routes {
+	for model := range c.Local.Routes {
 		models[model] = true
 	}
 	for _, rec := range u.st.List() {
@@ -687,11 +687,11 @@ func (u *uiServer) settingsView(contexts ...context.Context) settingsView {
 	}
 	families := map[string]bool{}
 	for model := range models {
-		if family := claudeFamily(model); family != "" {
+		if family := conf.ClaudeFamily(model); family != "" {
 			families[family] = true
 		}
 	}
-	for family := range c.local.FamilyRoutes {
+	for family := range c.Local.FamilyRoutes {
 		families[family] = true
 	}
 	familyNames := make([]string, 0, len(families))
@@ -700,9 +700,9 @@ func (u *uiServer) settingsView(contexts ...context.Context) settingsView {
 	}
 	sort.Strings(familyNames)
 	for _, family := range familyNames {
-		row := routeRow{Profile: c.local.ActiveProfile, Model: family, Label: strings.ToUpper(family[:1]) + family[1:], IsFamily: true, Pools: v.Pools, Targets: directTargets}
-		for _, effort := range claudeEfforts {
-			route, ok := c.local.FamilyRoutes[family][effort]
+		row := routeRow{Profile: c.Local.ActiveProfile, Model: family, Label: strings.ToUpper(family[:1]) + family[1:], IsFamily: true, Pools: v.Pools, Targets: directTargets}
+		for _, effort := range conf.ClaudeEfforts {
+			route, ok := c.Local.FamilyRoutes[family][effort]
 			if !ok {
 				route.Mode = "disabled"
 			}
@@ -716,17 +716,17 @@ func (u *uiServer) settingsView(contexts ...context.Context) settingsView {
 	}
 	sort.Strings(ids)
 	for _, model := range ids {
-		family := claudeFamily(model)
-		row := routeRow{Profile: c.local.ActiveProfile, Model: model, Label: model, Family: family, Pools: v.Pools, Targets: directTargets}
-		for _, effort := range claudeEfforts {
-			route, explicit := c.local.Routes[model][effort]
+		family := conf.ClaudeFamily(model)
+		row := routeRow{Profile: c.Local.ActiveProfile, Model: model, Label: model, Family: family, Pools: v.Pools, Targets: directTargets}
+		for _, effort := range conf.ClaudeEfforts {
+			route, explicit := c.Local.Routes[model][effort]
 			choice := routeChoice{Effort: effort, Destination: "disabled"}
 			if explicit {
 				choice.Destination = routeDestination(route)
 			} else if family != "" {
 				choice.Destination = "inherit"
 			}
-			inherited, ok := c.local.FamilyRoutes[family][effort]
+			inherited, ok := c.Local.FamilyRoutes[family][effort]
 			choice.Inherited = "не настроено"
 			if ok && inherited.Mode == "anthropic" {
 				choice.Inherited = "Anthropic"
@@ -757,7 +757,7 @@ func (u *uiServer) settings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
-	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
+	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.Get().Local.ActiveProfile {
 		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "", r.Context())
 		return
 	}
@@ -766,7 +766,7 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	settings, err := parsePoolSettings(settingsInput{
+	settings, err := conf.ParsePoolSettings(settingsInput{
 		MaxInputChars: r.FormValue("max_input_chars"),
 		Failover:      r.FormValue("failover"),
 		FirstByte:     r.FormValue("first_byte"),
@@ -774,17 +774,13 @@ func (u *uiServer) settingsPoolSave(w http.ResponseWriter, r *http.Request) {
 		Type:          r.FormValue("type"),
 	})
 	if err == nil {
-		err = u.cs.savePoolSettings(r.FormValue("name"), settings, r.FormValue("profile"))
+		err = u.cs.SavePoolSettings(r.FormValue("name"), settings, r.FormValue("profile"))
 	}
 	u.renderSettingsResult(w, err, "Настройки пула сохранены и применены", r.Context())
 }
 
-func splitList(s string) []string {
-	return strings.FieldsFunc(s, func(c rune) bool { return c == ',' || c == '\n' || c == ' ' })
-}
-
 func disableDirectRoutes(l *localSetup, removed func(string) bool) {
-	for _, rules := range l.allRouteRules() {
+	for _, rules := range l.AllRouteRules() {
 		for effort, route := range rules {
 			if route.Mode == "model" && removed(route.Model) {
 				rules[effort] = modelRoute{Mode: "disabled"}
@@ -805,12 +801,12 @@ func routeDestination(route modelRoute) string {
 
 // settingsRoute saves family defaults or explicit version overrides.
 func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
-	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.get().local.ActiveProfile {
+	if r.FormValue("profile") != "" && r.FormValue("profile") != u.cs.Get().Local.ActiveProfile {
 		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "", r.Context())
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	l := u.cs.get().local.clone()
+	l := u.cs.Get().Local.Clone()
 	if l.Routes == nil {
 		l.Routes = map[string]map[string]modelRoute{}
 	}
@@ -825,7 +821,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	allKey, perLevel := strings.CutSuffix(rest, ":")
 	perLevel = perLevel && isModel
 	var lacking []string
-	for _, effort := range claudeEfforts {
+	for _, effort := range conf.ClaudeEfforts {
 		dest := r.FormValue(effort)
 		switch {
 		case perLevel && effort != "default" && strings.Contains(fmt.Sprint(u.validateTargetEffort(l, allKey, effort, r.Context())), "не подтверждён каталогом"):
@@ -835,7 +831,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 		case all != "":
 			dest = all
 		}
-		if dest == "inherit" || !familyScope && dest == "" && claudeFamily(model) != "" {
+		if dest == "inherit" || !familyScope && dest == "" && conf.ClaudeFamily(model) != "" {
 			continue
 		}
 		route := modelRoute{Mode: dest}
@@ -873,7 +869,7 @@ func (u *uiServer) settingsRoute(w http.ResponseWriter, r *http.Request) {
 	if len(lacking) > 0 {
 		message += fmt.Sprintf(". У %s нет effort %s — эти строки не изменены", allKey, strings.Join(lacking, ", "))
 	}
-	u.renderSettingsResult(w, u.cs.applyLocal(l, true, r.FormValue("profile")), message, r.Context())
+	u.renderSettingsResult(w, u.cs.Update(conf.Replace(l, r.FormValue("profile"))), message, r.Context())
 }
 
 func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, message string, contexts ...context.Context) {
@@ -893,8 +889,8 @@ func (u *uiServer) renderSettingsResult(w http.ResponseWriter, err error, messag
 // settingsProbe re-probes one provider and re-renders its pane.
 func (u *uiServer) settingsProbe(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	c := u.cs.get()
-	p, ok := c.local.provider(strings.TrimSpace(r.FormValue("provider")))
+	c := u.cs.Get()
+	p, ok := c.Local.Provider(strings.TrimSpace(r.FormValue("provider")))
 	if !ok {
 		u.render(w, "settings", u.settingsView(r.Context()))
 		return
@@ -906,9 +902,9 @@ func (u *uiServer) settingsProbe(w http.ResponseWriter, r *http.Request) {
 // its probe, the models it offers that are not configured yet, and its form.
 // An unknown or empty name is the form for a new provider.
 func (u *uiServer) settingsProvider(w http.ResponseWriter, r *http.Request) {
-	c := u.cs.get()
+	c := u.cs.Get()
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
-	if p, ok := c.local.provider(name); ok {
+	if p, ok := c.Local.Provider(name); ok {
 		u.render(w, "provider", u.providerRow(c, p, r.URL.Query().Get("filter") == "", filterFrom(r.URL.Query()), r.Context()))
 		return
 	}
@@ -919,21 +915,21 @@ func (u *uiServer) settingsProvider(w http.ResponseWriter, r *http.Request) {
 // models too; affected pools remain empty and reject requests until configured.
 func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	c := u.cs.get()
-	l := c.local.clone()
+	c := u.cs.Get()
+	l := c.Local.Clone()
 	name := strings.TrimSpace(r.FormValue("name"))
 	orig := strings.TrimSpace(r.FormValue("orig")) // name before an edit
 	var err error
 	flash := ""
 	switch op := r.FormValue("op"); op {
 	case "add":
-		if _, dup := l.provider(name); dup {
+		if _, dup := l.Provider(name); dup {
 			err = fmt.Errorf("провайдер %q уже есть", name)
 			break
 		}
 		p := provider{Name: name, DisplayName: strings.TrimSpace(r.FormValue("display_name")), Type: r.FormValue("type"), BaseURL: r.FormValue("base_url"), APIKey: r.FormValue("api_key")}
 		if p.Type == "codex" {
-			p.BaseURL, p.APIKey, p.AuthID = codexBaseURL, "", newCodexAuthID()
+			p.BaseURL, p.APIKey, p.AuthID = conf.CodexBaseURL, "", conf.NewCodexAuthID()
 		}
 		l.Providers = append(l.Providers, p)
 		flash = "Провайдер добавлен: " + name
@@ -948,7 +944,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			err = fmt.Errorf("провайдер %q не найден", orig)
 			break
 		}
-		if _, dup := l.provider(name); dup && name != orig {
+		if _, dup := l.Provider(name); dup && name != orig {
 			err = fmt.Errorf("провайдер %q уже есть", name)
 			break
 		}
@@ -986,7 +982,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			l.ModelPools[pattern] = pool
 		}
 		if name != orig {
-			for _, rules := range l.allRouteRules() {
+			for _, rules := range l.AllRouteRules() {
 				for effort, route := range rules {
 					if route.Mode == "model" && strings.HasPrefix(route.Model, orig+"/") {
 						route.Model = name + strings.TrimPrefix(route.Model, orig)
@@ -996,7 +992,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if name != orig {
-			l.renameInactiveProvider(orig, name)
+			l.RenameInactiveProvider(orig, name)
 		}
 		if name != orig {
 			if entry, ok := l.Catalog.Providers[orig]; ok {
@@ -1045,7 +1041,7 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("unknown op %q", op)
 	}
 	if err == nil {
-		err = u.cs.applyLocal(l, true)
+		err = u.cs.Update(conf.Replace(l, ""))
 	}
 	if api, ok := w.(*actionResponse); ok {
 		api.complete(err, flash)
@@ -1055,10 +1051,10 @@ func (u *uiServer) settingsProviders(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		v.Err = err.Error()
 	} else {
-		n := u.cs.get()
+		n := u.cs.Get()
 		v.Flash = flash
-		log.Printf("ui: providers: %s", n.local.summary())
-		if p, ok := n.local.provider(name); ok {
+		log.Printf("ui: providers: %s", n.Local.Summary())
+		if p, ok := n.Local.Provider(name); ok {
 			row := u.providerRow(n, p, true, modelFilter{}, r.Context())
 			v.Pick = &row
 		}
@@ -1131,7 +1127,7 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 	u.oauthMu.Unlock()
 	go func() {
 		err := store.finishBrowserFlow(context.Background(), flow, func() bool {
-			now, ok := u.cs.get().local.provider(p.Name)
+			now, ok := u.cs.Get().Local.Provider(p.Name)
 			return ok && now.Type == "codex" && now.AuthID == p.AuthID
 		})
 		u.oauthMu.Lock()
@@ -1172,13 +1168,13 @@ func (u *uiServer) settingsCodexStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
-	c := u.cs.get()
-	if r.FormValue("profile") != "" && r.FormValue("profile") != c.local.ActiveProfile {
+	c := u.cs.Get()
+	if r.FormValue("profile") != "" && r.FormValue("profile") != c.Local.ActiveProfile {
 		u.renderSettingsResult(w, fmt.Errorf("активный профиль изменился; обновите страницу"), "", r.Context())
 		return
 	}
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	l := c.local.clone()
+	l := c.Local.Clone()
 	if l.ModelPools == nil {
 		l.ModelPools = map[string][]poolTarget{}
 	}
@@ -1211,18 +1207,18 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 		default:
 			l.ModelPools[name] = append([]poolTarget{}, members...)
 			for i, member := range members {
-				l.ModelPools[name][i] = member.clone()
+				l.ModelPools[name][i] = member.Clone()
 			}
 			if l.PoolSettings == nil {
 				l.PoolSettings = map[string]poolSettings{}
 			}
-			l.PoolSettings[name] = c.poolSettings(source)
+			l.PoolSettings[name] = c.PoolSettings(source)
 		}
 	case "delete":
 		if l.DefaultPool == name {
 			err = fmt.Errorf("пул %q используется по умолчанию; сначала выберите другой пул или отключите правило", name)
 		}
-		for _, efforts := range l.allRouteRules() {
+		for _, efforts := range l.AllRouteRules() {
 			for _, route := range efforts {
 				if route.Mode == "pool" && route.Pool == name {
 					err = fmt.Errorf("пул %q используется: сначала измените его маршруты", name)
@@ -1266,7 +1262,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 			pool[idx].Effort = r.FormValue("effort")
 		case "mapping":
 			mapping := map[string]string{}
-			for _, source := range claudeEfforts {
+			for _, source := range conf.ClaudeEfforts {
 				if _, ok := r.Form[source]; !ok {
 					err = fmt.Errorf("не указано соответствие для %s", source)
 					break
@@ -1275,7 +1271,7 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 				if value == "inherit" {
 					continue
 				}
-				if value != poolRequestEffort {
+				if value != conf.PoolRequestEffort {
 					if err = u.validateTargetEffort(l, key, value, r.Context()); err != nil {
 						break
 					}
@@ -1289,11 +1285,11 @@ func (u *uiServer) settingsPools(w http.ResponseWriter, r *http.Request) {
 	default:
 		err = fmt.Errorf("неизвестная операция")
 	}
-	if err == nil && (op == "add" || op == "effort") && r.FormValue("effort") != poolRequestEffort {
+	if err == nil && (op == "add" || op == "effort") && r.FormValue("effort") != conf.PoolRequestEffort {
 		err = u.validateTargetEffort(l, key, r.FormValue("effort"), r.Context())
 	}
 	if err == nil {
-		err = u.cs.applyLocal(l, true, r.FormValue("profile"))
+		err = u.cs.Update(conf.Replace(l, r.FormValue("profile")))
 	}
 	u.renderSettingsResult(w, err, "Пул сохранён", r.Context())
 }
@@ -1306,7 +1302,7 @@ func (u *uiServer) validateTargetEffort(l localSetup, key, effort string, contex
 		if model.Key() != key {
 			continue
 		}
-		p, _ := l.provider(model.Provider)
+		p, _ := l.Provider(model.Provider)
 		probe := u.probeProvider(p, false, contexts...)
 		if p.Type == "codex" && probe.OK && !slices.Contains(probe.Models, model.Model) {
 			return fmt.Errorf("%s отсутствует в текущем каталоге Codex", key)
@@ -1331,12 +1327,12 @@ func modelEffortOptions(l localSetup, key string, info map[string]probeModel) []
 		if model.Key() != key {
 			continue
 		}
-		p, _ := l.provider(model.Provider)
+		p, _ := l.Provider(model.Provider)
 		if m, ok := info[key]; ok && (p.Type == "codex" || len(m.Efforts) > 0) {
 			return m.Efforts
 		}
 		if p.Type != "codex" {
-			return providerEfforts
+			return conf.ProviderEfforts
 		}
 		for _, m := range l.Catalog.Providers[p.Name].Models {
 			if m.ID == model.Model {
@@ -1377,7 +1373,7 @@ func (u *uiServer) poolAddView(l localSetup, name, key string, info map[string]p
 }
 
 func (u *uiServer) settingsPoolAdd(w http.ResponseWriter, r *http.Request) {
-	l := u.cs.get().local
+	l := u.cs.Get().Local
 	name, key := r.URL.Query().Get("name"), r.URL.Query().Get("key")
 	if _, ok := l.ModelPools[name]; !ok {
 		http.Error(w, "пул не найден", http.StatusNotFound)
@@ -1386,7 +1382,7 @@ func (u *uiServer) settingsPoolAdd(w http.ResponseWriter, r *http.Request) {
 	info := map[string]probeModel{}
 	for _, m := range l.Models {
 		if m.Key() == key {
-			p, _ := l.provider(m.Provider)
+			p, _ := l.Provider(m.Provider)
 			for _, item := range u.probeProvider(p, false, r.Context()).Info {
 				info[p.Name+"/"+item.ID] = item
 			}
@@ -1402,7 +1398,7 @@ func (u *uiServer) providerRow(c config, p provider, force bool, f modelFilter, 
 		ctx = contexts[0]
 	}
 	row := providerRow{P: p, KeySet: p.APIKey != "", Probe: u.probeProvider(p, force, ctx), Filter: f}
-	for _, m := range c.local.Models {
+	for _, m := range c.Local.Models {
 		if m.Provider == p.Name {
 			row.NModels++
 		}
@@ -1412,7 +1408,7 @@ func (u *uiServer) providerRow(c config, p provider, force bool, f modelFilter, 
 		row.Facets[i].Picked = f.Pick[row.Facets[i].Key]
 	}
 	for _, m := range row.Probe.Info {
-		if c.local.hasModel(p.Name + "/" + m.ID) {
+		if c.Local.HasModel(p.Name + "/" + m.ID) {
 			continue
 		}
 		row.Total++
@@ -1455,7 +1451,7 @@ func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Con
 	if u.catalog != nil {
 		deps = *u.catalog
 	}
-	body, msg := deps.FetchModels(ctx, codexBaseURL+"/models?client_version=0.156.0", catalogstartup.ProbeInput{
+	body, msg := deps.FetchModels(ctx, conf.CodexBaseURL+"/models?client_version=0.156.0", catalogstartup.ProbeInput{
 		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey,
 	}, func(ctx context.Context, req *http.Request) error {
 		store, err := codexStoreFor(p)
@@ -1487,7 +1483,7 @@ func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Con
 			if m.Slug != "" && m.Visibility == "list" {
 				info := probeModel{ID: m.Slug, Name: m.Name}
 				for _, level := range m.Supported {
-					if validProviderEffort(level.Effort) {
+					if conf.ValidProviderEffort(level.Effort) {
 						info.Efforts = append(info.Efforts, level.Effort)
 					}
 				}
@@ -1635,7 +1631,7 @@ func fmtAgo(t time.Time) string {
 
 // ranked is the failover order regardless of whether failover is on, for display.
 func (u *uiServer) ranked(c config) []candidate {
-	c.failover = true
+	c.Failover = true
 	return u.hl.pick(c)
 }
 
@@ -1643,8 +1639,8 @@ func (u *uiServer) ranked(c config) []candidate {
 // Models are addressed by key (provider/model); add takes provider + model.
 func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm() // a malformed form reads as empty fields
-	c := u.cs.get()
-	l := c.local.clone()
+	c := u.cs.Get()
+	l := c.Local.Clone()
 	key := strings.TrimSpace(r.FormValue("key"))
 	pname := strings.TrimSpace(r.FormValue("provider"))
 	var err error
@@ -1652,7 +1648,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	local := true // op changes providers.json rather than env or ratings
 	switch op {
 	case "add":
-		for _, id := range splitList(r.FormValue("model")) {
+		for _, id := range conf.SplitList(r.FormValue("model")) {
 			m := localModel{Provider: pname, Model: id}
 
 			l.Models = append(l.Models, m)
@@ -1677,12 +1673,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 		disableDirectRoutes(&l, func(model string) bool { return model == key })
 	case "failover":
 		local = false
-		in := inputFromConfig(c)
-		in.Failover = "0"
-		if r.FormValue("on") == "1" {
-			in.Failover = "1"
-		}
-		err = u.cs.apply(in, true)
+		err = u.cs.SetFailover(r.FormValue("on") == "1")
 	case "reset":
 		local = false
 		u.hl.reset(key) // "" resets all
@@ -1691,7 +1682,7 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 		err = fmt.Errorf("unknown op %q", op)
 	}
 	if err == nil && local {
-		err = u.cs.applyLocal(l, true)
+		err = u.cs.Update(conf.Replace(l, ""))
 	}
 	if api, ok := w.(*actionResponse); ok {
 		api.complete(err, "Каталог моделей обновлён")
@@ -1701,9 +1692,9 @@ func (u *uiServer) settingsModels(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		v.Err = err.Error()
 	} else {
-		n := u.cs.get()
-		log.Printf("ui: local models: %s failover=%v", n.local.summary(), n.failover)
-		if p, ok := n.local.provider(pname); ok && op == "add" {
+		n := u.cs.Get()
+		log.Printf("ui: local models: %s failover=%v", n.Local.Summary(), n.Failover)
+		if p, ok := n.Local.Provider(pname); ok && op == "add" {
 			row := u.providerRow(n, p, false, modelFilter{}, r.Context())
 			v.Pick = &row
 		}

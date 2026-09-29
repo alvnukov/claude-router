@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 )
@@ -28,13 +29,13 @@ func trafficFixture(t *testing.T, up *httptest.Server, local bool) (http.Handler
 	t.Helper()
 	home := t.TempDir()
 	base, _ := url.Parse(up.URL)
-	cfg := config{upstream: base, firstByte: time.Second, failover: true, local: oneProvider(up.URL, "good")}
+	cfg := config{Upstream: base, FirstByte: time.Second, Failover: true, Local: oneProvider(up.URL, "good")}
 	route := modelRoute{Mode: "anthropic"}
 	if local {
 		route = modelRoute{Mode: "model", Model: "p/good"}
 	}
-	cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": route}}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": route}}
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st := history.New(10, filepath.Join(home, "history.jsonl"))
 	hl := newHealth("")
 	writeTrafficConfig(t, home, `{}`)
@@ -289,14 +290,14 @@ func TestPrivacyTrafficFailoverUsesActualTargetAndFrozenPolicy(t *testing.T) {
 	}))
 	defer up.Close()
 	base, _ := url.Parse(up.URL)
-	cfg := config{upstream: base, firstByte: time.Second, failover: true, local: oneProvider(up.URL, "a", "b")}
-	cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "pool", Pool: "both"}}}
-	cfg.local.ModelPools = map[string][]poolTarget{"both": {{Model: "p/a"}, {Model: "p/b"}}}
+	cfg := config{Upstream: base, FirstByte: time.Second, Failover: true, Local: oneProvider(up.URL, "a", "b")}
+	cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "pool", Pool: "both"}}}
+	cfg.Local.ModelPools = map[string][]poolTarget{"both": {{Model: "p/a"}, {Model: "p/b"}}}
 	setup := `{"version":1,"enabled":true,"default":"a","profiles":[{"id":"a","name":"A","enabled":true,"rules":{"entries":[{"kind":"org","forms":["AlphaCanary"]}]}},{"id":"b","name":"B","enabled":true,"rules":{"entries":[{"kind":"org","forms":["BetaCanary"]}]}}],"bindings":[{"kind":"model","target":"p/b","profile":"b"}]}`
 	if err := os.WriteFile(filepath.Join(home, "privacy-profiles.json"), []byte(setup), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st := history.New(10, "")
 	hl := newHealth("")
 	h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
@@ -408,9 +409,9 @@ func TestPrivacyTrafficCodexJSONAndStream(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		home := t.TempDir()
 		writeTrafficConfig(t, home, `{}`)
-		base, _ := url.Parse(codexBaseURL)
-		cfg := config{upstream: base, local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, firstByte: time.Second}
-		cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+		base, _ := url.Parse(conf.CodexBaseURL)
+		cfg := config{Upstream: base, Local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, FirstByte: time.Second}
+		cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 		st := history.New(10, "")
 		hl := newHealth("")
 		h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
@@ -538,9 +539,9 @@ func TestPrivacyTrafficReviewLateErrorDiagnosticsAndTrailingJSON(t *testing.T) {
 		home := t.TempDir()
 		writeTrafficConfig(t, home, `{}`)
 		base, _ := url.Parse(up.URL)
-		cfg := config{upstream: base, local: oneProvider(up.URL, "good"), firstByte: time.Second}
-		cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "p/good"}}}
-		cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+		cfg := config{Upstream: base, Local: oneProvider(up.URL, "good"), FirstByte: time.Second}
+		cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "p/good"}}}
+		cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 		hl := newHealth("")
 		st := history.New(10, "")
 		h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))

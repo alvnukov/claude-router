@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	conf "localrouter/internal/config"
 	webui "localrouter/internal/ui"
 )
 
@@ -14,17 +15,16 @@ func TestUIJSONPoolCloneAndRequestEffort(t *testing.T) {
 	for _, explicitSettings := range []bool{false, true} {
 		t.Run(map[bool]string{false: "defaults", true: "explicit"}[explicitSettings], func(t *testing.T) {
 			u, h := testUI(t)
-			u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-			l := u.cs.get().local.clone()
+			u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+			l := u.cs.Get().Local.Clone()
 			l.Models = append(l.Models, localModel{Provider: "p", Model: "m2"})
 			l.ModelPools = map[string][]poolTarget{"source": {{Model: "p/m1", Effort: "high"}, {Model: "p/m2", Effort: "low"}}}
 			if explicitSettings {
-				l.PoolSettings = map[string]poolSettings{"source": {Type: poolBalance, Failover: false, FirstByteSec: 7, ProbeSec: 9, MaxInputChars: 12345}}
+				l.PoolSettings = map[string]poolSettings{"source": {Type: conf.PoolBalance, Failover: false, FirstByteSec: 7, ProbeSec: 9, MaxInputChars: 12345}}
 			}
 			l.ActiveProfile = "active"
-			l.Profiles = map[string]routingProfile{"active": l.routing(), "other": l.routing()}
-			u.cs.c.local = l
-			if err := u.cs.applyLocal(l, true); err != nil {
+			l.Profiles = map[string]conf.Profile{"active": l.Routing(), "other": l.Routing()}
+			if err := u.cs.Update(func(cur *localSetup) error { *cur = l; return nil }); err != nil {
 				t.Fatal(err)
 			}
 			action := func(name string, fields map[string]string) {
@@ -35,29 +35,29 @@ func TestUIJSONPoolCloneAndRequestEffort(t *testing.T) {
 					t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
 				}
 			}
-			action("pool.edit", map[string]string{"op": "effort", "name": "source", "key": "p/m1", "effort": poolRequestEffort})
+			action("pool.edit", map[string]string{"op": "effort", "name": "source", "key": "p/m1", "effort": conf.PoolRequestEffort})
 			action("pool.edit", map[string]string{"op": "mapping", "name": "source", "key": "p/m1", "default": "inherit", "low": "inherit", "medium": "low", "high": "xhigh", "xhigh": "inherit", "max": ""})
-			original := u.cs.get()
+			original := u.cs.Get()
 			action("pool.edit", map[string]string{"op": "clone", "source": "source", "name": "copy"})
-			got := u.cs.get()
-			if !reflect.DeepEqual(got.local.ModelPools["copy"], original.local.ModelPools["source"]) || got.poolSettings("copy") != original.poolSettings("source") {
-				t.Fatalf("clone lost order/effort/settings: %+v", got.local)
+			got := u.cs.Get()
+			if !reflect.DeepEqual(got.Local.ModelPools["copy"], original.Local.ModelPools["source"]) || got.PoolSettings("copy") != original.PoolSettings("source") {
+				t.Fatalf("clone lost order/effort/settings: %+v", got.Local)
 			}
-			if !reflect.DeepEqual(got.local.Routes, original.local.Routes) || !reflect.DeepEqual(got.local.Profiles["other"], original.local.Profiles["other"]) {
+			if !reflect.DeepEqual(got.Local.Routes, original.Local.Routes) || !reflect.DeepEqual(got.Local.Profiles["other"], original.Local.Profiles["other"]) {
 				t.Fatal("clone changed routes or another profile")
 			}
 			action("pool.edit", map[string]string{"op": "down", "name": "copy", "key": "p/m1"})
-			got = u.cs.get()
-			if got.local.ModelPools["copy"][0].Model != "p/m2" || !reflect.DeepEqual(got.local.ModelPools["source"], original.local.ModelPools["source"]) {
+			got = u.cs.Get()
+			if got.Local.ModelPools["copy"][0].Model != "p/m2" || !reflect.DeepEqual(got.Local.ModelPools["source"], original.Local.ModelPools["source"]) {
 				t.Fatal("clone aliases original members")
 			}
 			action("route.save", map[string]string{"scope": "family", "model": "sonnet", "all": "pool:copy"})
-			reloaded, err := readProviders(u.cs.provPath)
+			reloaded, err := conf.ReadProviders(u.cs.Path())
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, effort := range claudeEfforts {
-				cfg := (config{local: reloaded}).forModel("claude-sonnet-5", effort)
+			for _, effort := range conf.ClaudeEfforts {
+				cfg := (config{Local: reloaded}).ForModel("claude-sonnet-5", effort)
 				want := effort
 				if effort == "default" {
 					want = ""
@@ -71,11 +71,11 @@ func TestUIJSONPoolCloneAndRequestEffort(t *testing.T) {
 				if effort == "max" {
 					want = ""
 				}
-				if len(cfg.local.Models) != 2 || cfg.local.Models[1].Efforts[effort] != want {
-					t.Fatalf("route/policy lost after reload: %s %+v", effort, cfg.local.Models)
+				if len(cfg.Local.Models) != 2 || cfg.Local.Models[1].Efforts[effort] != want {
+					t.Fatalf("route/policy lost after reload: %s %+v", effort, cfg.Local.Models)
 				}
 			}
-			before, err := os.ReadFile(u.cs.provPath)
+			before, err := os.ReadFile(u.cs.Path())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -92,14 +92,14 @@ func TestUIJSONPoolCloneAndRequestEffort(t *testing.T) {
 				if w.Code != 400 {
 					t.Fatalf("invalid action accepted: %+v: %d", fields, w.Code)
 				}
-				after, err := os.ReadFile(u.cs.provPath)
+				after, err := os.ReadFile(u.cs.Path())
 				if err != nil || !bytes.Equal(before, after) {
 					t.Fatal("rejected action changed persisted config")
 				}
 			}
 			action("pool.edit", map[string]string{"op": "mapping", "name": "copy", "key": "p/m1", "default": "inherit", "low": "inherit", "medium": "inherit", "high": "inherit", "xhigh": "inherit", "max": "inherit"})
-			got = u.cs.get()
-			if len(got.local.ModelPools["copy"][1].EffortMap) != 0 || got.local.ModelPools["source"][0].EffortMap["high"] != "xhigh" {
+			got = u.cs.Get()
+			if len(got.Local.ModelPools["copy"][1].EffortMap) != 0 || got.Local.ModelPools["source"][0].EffortMap["high"] != "xhigh" {
 				t.Fatal("resetting a copy changed the source mapping")
 			}
 		})

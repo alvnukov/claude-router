@@ -21,7 +21,7 @@ func TestCodexNativeReplaySurvivesRouterRestart(t *testing.T) {
 			t.Run(fmt.Sprintf("stream=%v/%s", stream, change), func(t *testing.T) {
 				seedTwoConnections(t)
 				cfg := twoCodexPool()
-				cfg.failover = false
+				cfg.Failover = false
 				path := filepath.Join(t.TempDir(), "history.jsonl")
 				hist := history.New(20, path)
 				calls := 0

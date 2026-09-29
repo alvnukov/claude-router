@@ -25,12 +25,12 @@ func startChecker(ctx context.Context, cs *configStore, hl *health, life *lifecy
 		done := make(chan string)
 		for {
 			if life.mode() == modeActive && ctx.Err() == nil {
-				for key, pc := range poolProbeConfigs(cs.get()) {
+				for key, pc := range poolProbeConfigs(cs.Get()) {
 					if running[key] {
 						continue
 					}
 					last := hl.snapshot(key).LastAt
-					if !last.IsZero() && time.Since(last) < pc.probeEvery {
+					if !last.IsZero() && time.Since(last) < pc.ProbeEvery {
 						continue
 					}
 					running[key] = true
@@ -58,30 +58,30 @@ func startChecker(ctx context.Context, cs *configStore, hl *health, life *lifecy
 // enabled interval (and that pool's timeout). A disabled pool schedules nothing.
 func poolProbeConfigs(c config) map[string]config {
 	out := map[string]config{}
-	names := make([]string, 0, len(c.local.ModelPools))
-	for name := range c.local.ModelPools {
+	names := make([]string, 0, len(c.Local.ModelPools))
+	for name := range c.Local.ModelPools {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		pc := c.poolSettings(name).apply(c)
-		if pc.probeEvery <= 0 {
+		pc := c.PoolSettings(name).Apply(c)
+		if pc.ProbeEvery <= 0 {
 			continue
 		}
-		for _, target := range c.local.ModelPools[name] {
-			if previous, ok := out[target.Model]; ok && previous.probeEvery <= pc.probeEvery {
+		for _, target := range c.Local.ModelPools[name] {
+			if previous, ok := out[target.Model]; ok && previous.ProbeEvery <= pc.ProbeEvery {
 				continue
 			}
-			for _, model := range c.local.Models {
+			for _, model := range c.Local.Models {
 				if model.Key() != target.Model {
 					continue
 				}
-				p, ok := c.local.provider(model.Provider)
+				p, ok := c.Local.Provider(model.Provider)
 				if !ok || p.Type == "codex" {
 					break
 				}
 				next := pc
-				next.local = localSetup{Providers: []provider{p}, Models: []localModel{model}}
+				next.Local = localSetup{Providers: []provider{p}, Models: []localModel{model}}
 				out[target.Model] = next
 				break
 			}
@@ -91,9 +91,9 @@ func poolProbeConfigs(c config) map[string]config {
 }
 
 func checkModels(c config, hl *health) {
-	c.failover = true // pick lists every model only with failover on
-	if c.firstByte <= 0 || c.firstByte > c.probeEvery {
-		c.firstByte = c.probeEvery
+	c.Failover = true // pick lists every model only with failover on
+	if c.FirstByte <= 0 || c.FirstByte > c.ProbeEvery {
+		c.FirstByte = c.ProbeEvery
 	}
 	var wg sync.WaitGroup
 	for _, cand := range hl.pick(c) {
@@ -101,13 +101,13 @@ func checkModels(c config, hl *health) {
 		if cand.Provider.Type == "codex" {
 			continue
 		}
-		if !cand.Stat.LastAt.IsZero() && time.Since(cand.Stat.LastAt) < c.probeEvery {
+		if !cand.Stat.LastAt.IsZero() && time.Since(cand.Stat.LastAt) < c.ProbeEvery {
 			continue
 		}
 		wg.Add(1)
 		go func(cand candidate) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*c.probeEvery)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*c.ProbeEvery)
 			defer cancel()
 			r, _ := http.NewRequestWithContext(ctx, "POST", "/", nil)
 			payload, _ := json.Marshal(openaiRequest{

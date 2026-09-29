@@ -1,0 +1,234 @@
+{
+  "family_routes": {
+    "fable": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    },
+    "haiku": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    },
+    "opus": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "sonnet": {
+      "default": {
+        "mode": "anthropic"
+      },
+      "high": {
+        "mode": "anthropic"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "anthropic"
+      },
+      "medium": {
+        "mode": "anthropic"
+      },
+      "xhigh": {
+        "mode": "anthropic"
+      }
+    }
+  },
+  "routes": {
+    "gpt-6-sol": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "local-model": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    },
+    "qwen-coder": {
+      "default": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "high": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / high"
+      },
+      "low": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / low"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / max"
+      },
+      "medium": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      },
+      "xhigh": {
+        "mode": "pool",
+        "pool": "Перенесённый claude-opus-5 / default"
+      }
+    }
+  },
+  "model_pools": {
+    "Перенесённый claude-opus-5 / default": [
+      {
+        "model": "codex/gpt-6-sol"
+      },
+      {
+        "model": "lab/qwen-coder"
+      }
+    ],
+    "Перенесённый claude-opus-5 / high": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "xhigh"
+      },
+      {
+        "model": "lab/qwen-coder",
+        "effort": "high"
+      }
+    ],
+    "Перенесённый claude-opus-5 / low": [
+      {
+        "model": "codex/gpt-6-sol"
+      },
+      {
+        "model": "lab/qwen-coder",
+        "effort": "low"
+      }
+    ],
+    "Перенесённый claude-opus-5 / max": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "max"
+      },
+      {
+        "model": "lab/qwen-coder"
+      }
+    ]
+  },
+  "pool_settings": {
+    "Перенесённый claude-opus-5 / default": {
+      "failover": true,
+      "first_byte_seconds": 45,
+      "probe_seconds": 30,
+      "max_input_chars": 0
+    },
+    "Перенесённый claude-opus-5 / high": {
+      "failover": true,
+      "first_byte_seconds": 45,
+      "probe_seconds": 30,
+      "max_input_chars": 0
+    },
+    "Перенесённый claude-opus-5 / low": {
+      "failover": true,
+      "first_byte_seconds": 45,
+      "probe_seconds": 30,
+      "max_input_chars": 0
+    },
+    "Перенесённый claude-opus-5 / max": {
+      "failover": true,
+      "first_byte_seconds": 45,
+      "probe_seconds": 30,
+      "max_input_chars": 0
+    }
+  }
+}
