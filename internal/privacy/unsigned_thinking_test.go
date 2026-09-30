@@ -8,7 +8,6 @@ import (
 func TestDropUnsignedThinking(t *testing.T) {
 	const (
 		on       = `"thinking":{"type":"enabled","budget_tokens":16,"display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}`
-		off      = `"thinking":{"type":"disabled"}`
 		signed   = `{"type":"thinking","thinking":"claude","signature":"sig"}`
 		unsigned = `{"type":"thinking","thinking":"codex"}`
 		toolUse  = `{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}`
@@ -34,8 +33,9 @@ func TestDropUnsignedThinking(t *testing.T) {
 			body("", `{"role":"user","content":"a"},{"role":"assistant","content":[{ "type" : "text", "text":"a " }]},{"role":"user","content":"b"}`)},
 		{"thinking-only message deleted", body("", `{"role":"user","content":"a"},{"role":"assistant","content":[`+unsigned+`]},{"role":"user","content":"b"}`),
 			body("", `{"role":"user","content":"a"},{"role":"user","content":"b"}`)},
-		{"open turn after Codex tool_use", body(on, codex), body(off, cleaned)},
-		{"open turn continues", body(on, codex+more), body(off, cleaned+more)},
+		{"open turn after Codex tool_use keeps thinking", body(on, codex), body(on, cleaned)},
+		{"open turn before trailing system keeps thinking", body(on, codex+`,{"role":"system","content":"s"}`), body(on, cleaned+`,{"role":"system","content":"s"}`)},
+		{"open turn continues", body(on, codex+more), body(on, cleaned+more)},
 		{"Codex tool_use without thinking goes as is", body(on, cleaned), ""},
 		{"new turn keeps thinking", body(on, codex+`,{"role":"assistant","content":[{"type":"text","text":"done"}]},{"role":"user","content":"next"}`),
 			body(on, cleaned+`,{"role":"assistant","content":[{"type":"text","text":"done"}]},{"role":"user","content":"next"}`)},
@@ -44,8 +44,8 @@ func TestDropUnsignedThinking(t *testing.T) {
 		{"unsigned block mid-turn", body(on, `{"role":"user","content":"go"},{"role":"assistant","content":[`+signed+`,`+toolUse+`]},`+result+`,{"role":"assistant","content":[`+unsigned+`,{"type":"tool_use","id":"t2","name":"Bash","input":{}}]},`+result2),
 			body(on, `{"role":"user","content":"go"},{"role":"assistant","content":[`+signed+`,`+toolUse+`]},`+result+more)},
 		{"adaptive untouched", body(`"thinking":{"type":"adaptive"}`, codex), body(`"thinking":{"type":"adaptive"}`, cleaned)},
-		{"enabled without context_management", body(`"thinking":{"type":"enabled","budget_tokens":16}`, codex), body(off, cleaned)},
-		{"context_management first", `{"context_management":{"edits":[]},"thinking":{"type":"enabled","budget_tokens":16},"messages":[` + codex + `]}`, `{` + off + `,"messages":[` + cleaned + `]}`},
+		{"enabled without context_management", body(`"thinking":{"type":"enabled","budget_tokens":16}`, codex), body(`"thinking":{"type":"enabled","budget_tokens":16}`, cleaned)},
+		{"context_management first", `{"context_management":{"edits":[]},"thinking":{"type":"enabled","budget_tokens":16},"messages":[` + codex + `]}`, `{"context_management":{"edits":[]},"thinking":{"type":"enabled","budget_tokens":16},"messages":[` + cleaned + `]}`},
 		{"invalid JSON", `{"messages":[` + unsigned, ""},
 		{"not an object", `[` + unsigned + `]`, ""},
 		{"duplicate key", `{"messages":[],"messages":[{"role":"assistant","content":[` + unsigned + `]}]}`, ""},
