@@ -59,6 +59,22 @@ func WritePrivateAtomic(path string, data []byte) error {
 	return WriteFileAtomic(path, data, 0o600)
 }
 
+// OpenPrivateLog opens path for appending, readable only by the user on unix:
+// a new file is created 0600, and an existing one, perhaps left 0644 by an
+// older build, is narrowed to 0600. On Windows access comes from the
+// directory's ACL, as for WriteFileAtomic.
+func OpenPrivateLog(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 // ReplaceFile renames src over dst. Unix replaces dst even while it is open.
 // Windows refuses while another handle has dst open, so the rename is retried
 // for up to a second before its error is returned.

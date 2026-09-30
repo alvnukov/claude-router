@@ -15,7 +15,7 @@ import (
 // output to logPath, and returns its pid without waiting for it. The caller's
 // terminal and its interrupts no longer reach the process.
 func StartDetached(exe string, args []string, logPath string) (int, error) {
-	log, err := os.OpenFile(logPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	log, err := OpenPrivateLog(logPath)
 	if err != nil {
 		return 0, err
 	}

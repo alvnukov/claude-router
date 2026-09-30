@@ -66,9 +66,20 @@ func (l Launchd) plist(label string) string { return filepath.Join(l.Dir, label+
 
 func (l Launchd) target(label string) string { return l.Domain + "/" + label }
 
+// Install creates the agent's log before launchd does: launchd would create it
+// 0644, and the log carries request details, so it is made 0600 here.
 func (l Launchd) Install(_ context.Context, spec ServiceSpec) error {
 	if err := os.MkdirAll(l.Dir, 0o755); err != nil {
 		return err
+	}
+	if spec.LogPath != "" {
+		log, err := OpenPrivateLog(spec.LogPath)
+		if err != nil {
+			return err
+		}
+		if err := log.Close(); err != nil {
+			return err
+		}
 	}
 	return WriteFileAtomic(l.plist(spec.Label), LaunchdPlist(spec), 0o644)
 }

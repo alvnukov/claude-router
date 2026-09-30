@@ -103,3 +103,40 @@ func TestKillMatchingWithoutMatchIsNoError(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// router.log carries request details, so every start path leaves it readable
+// only by its owner, including a log an older build created 0644.
+func TestStartDetachedLogIsPrivate(t *testing.T) {
+	t.Run("new", func(t *testing.T) {
+		log := filepath.Join(t.TempDir(), "router.log")
+		if _, err := StartDetached("/usr/bin/true", nil, log); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("perm %v; want 0600", info.Mode().Perm())
+		}
+	})
+	t.Run("existing", func(t *testing.T) {
+		log := filepath.Join(t.TempDir(), "router.log")
+		if err := os.WriteFile(log, []byte("earlier\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := StartDetached("/usr/bin/true", nil, log); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("perm %v; want 0600", info.Mode().Perm())
+		}
+		if data, _ := os.ReadFile(log); string(data) != "earlier\n" {
+			t.Fatalf("log %q; want the earlier lines kept", data)
+		}
+	})
+}

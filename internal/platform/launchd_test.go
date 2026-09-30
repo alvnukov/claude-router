@@ -137,7 +137,7 @@ func outlasted(t *testing.T, l *Launchd) context.Context {
 
 func TestLaunchdInstallWritesPlistWithoutLoading(t *testing.T) {
 	l, fake := newFakeLaunchd(t)
-	spec := ServiceSpec{Label: "com.example.svc", Exe: "/bin/svc", Dir: "/d", LogPath: "/d/log", KeepAlive: true}
+	spec := ServiceSpec{Label: "com.example.svc", Exe: "/bin/svc", Dir: "/d", LogPath: filepath.Join(t.TempDir(), "log"), KeepAlive: true}
 	if err := l.Install(t.Context(), spec); err != nil {
 		t.Fatal(err)
 	}
@@ -330,5 +330,40 @@ func TestRunLaunchctlRefusesUnderTest(t *testing.T) {
 	err := RunLaunchctl(t.Context(), "bootout", "gui/0/com.claude-local-router.blue")
 	if _, statErr := os.Stat(ran); err == nil || statErr == nil {
 		t.Fatalf("launchctl ran under test: err=%v", err)
+	}
+}
+
+// launchd opens StandardOutPath with its own umask, 0644. Install creates the
+// log first, so launchd appends to a file only the user can read.
+func TestLaunchdInstallCreatesPrivateLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits do not apply on Windows")
+	}
+	for _, earlier := range []bool{false, true} {
+		t.Run(map[bool]string{false: "new", true: "existing"}[earlier], func(t *testing.T) {
+			l, fake := newFakeLaunchd(t)
+			log := filepath.Join(t.TempDir(), "router.log")
+			if earlier {
+				if err := os.WriteFile(log, []byte("earlier\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := l.Install(t.Context(), ServiceSpec{Label: "svc", Exe: "/bin/svc", LogPath: log}); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode().Perm() != 0o600 {
+				t.Fatalf("log mode %v; want 0600", info.Mode().Perm())
+			}
+			if data, _ := os.ReadFile(log); earlier && string(data) != "earlier\n" {
+				t.Fatalf("log %q; want the earlier lines kept", data)
+			}
+			if len(fake.calls) != 0 {
+				t.Fatalf("Install ran launchctl: %v", fake.calls)
+			}
+		})
 	}
 }
