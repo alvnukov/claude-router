@@ -20,7 +20,7 @@ func corpusRules(t testing.TB) *Rules {
 
 func TestCorpusSpans(t *testing.T) {
 	r := corpusRules(t)
-	m, err := newIPMapper(testIPKey, r)
+	m, err := newIPMapper(testIPKey, r, prfV2)
 	if err != nil {
 		t.Fatal(err)
 	}

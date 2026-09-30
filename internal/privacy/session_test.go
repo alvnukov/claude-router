@@ -26,7 +26,7 @@ func TestMapUnique(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Run("torn-tail", func(t *testing.T) {
-		p := filepath.Join(s.dir, "alpha.jsonl")
+		p := filepath.Join(s.versionDir(prfV2), "alpha.jsonl")
 		f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			t.Fatal(err)

@@ -40,7 +40,7 @@ func TestSessionsUnlinkable(t *testing.T) {
 	if ta == tb {
 		t.Fatal("sessions linkable")
 	}
-	fa, err := os.ReadFile(filepath.Join(e.store.dir, "one.jsonl"))
+	fa, err := os.ReadFile(filepath.Join(e.store.versionDir(prfV2), "one.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func TestPruneSessions(t *testing.T) {
 	}
 	old := time.Now().AddDate(0, 0, -40)
 	for _, id := range []string{"old", "live"} {
-		if err := os.Chtimes(filepath.Join(e.store.dir, id+".jsonl"), old, old); err != nil {
+		if err := os.Chtimes(filepath.Join(e.store.versionDir(prfV2), id+".jsonl"), old, old); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -146,7 +146,7 @@ func TestPruneSessions(t *testing.T) {
 	})
 	t.Run("live-request", func(t *testing.T) {
 		_, req := mustMask(t, e, requestBody("held", "Ромашка"))
-		path := filepath.Join(e.store.dir, "held.jsonl")
+		path := filepath.Join(e.store.versionDir(prfV2), "held.jsonl")
 		if err := os.Chtimes(path, old, old); err != nil {
 			t.Fatal(err)
 		}
@@ -233,7 +233,7 @@ func TestSecrets(t *testing.T) {
 	if err != nil || !bytes.Equal(back, body) {
 		t.Fatal("secret roundtrip", err)
 	}
-	disk, err := os.ReadFile(filepath.Join(e.store.dir, "secrets.jsonl"))
+	disk, err := os.ReadFile(filepath.Join(e.store.versionDir(prfV2), "secrets.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestSessionPermissionsAndCorruption(t *testing.T) {
 	e := testEngine(t, corpusRules(t))
 	_, req := mustMask(t, e, requestBody("safe", "Ромашка"))
 	req.Close()
-	path := filepath.Join(e.store.dir, "safe.jsonl")
+	path := filepath.Join(e.store.versionDir(prfV2), "safe.jsonl")
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)

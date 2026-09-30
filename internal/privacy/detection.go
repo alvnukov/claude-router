@@ -11,11 +11,11 @@ func (e *Engine) Detect(body []byte) (map[Kind]int, error) {
 	// This key is used only for ephemeral equality fingerprints and IP scope
 	// selection. No generated value, fingerprint or key leaves this call.
 	key := make([]byte, 32)
-	ip, err := newIPMapper(key, e.rules)
+	ip, err := newIPMapper(key, e.rules, prfV2)
 	if err != nil {
 		return nil, errTraffic
 	}
-	session := &sessionData{key: key}
+	session := &sessionData{key: key, version: prfV2}
 	m := &mapper{e: e, req: &Request{ip: ip}, view: &sessionView{session: session}}
 	// Discover plaintext secrets first so encoded occurrences can precede them.
 	_, err = rewriteRecordedMode(body, func(text string, f fieldKind) ([]textEdit, error) {

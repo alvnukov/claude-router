@@ -128,7 +128,7 @@ func TestTouchOnUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Close()
-	path := filepath.Join(e.store.dir, "touch.jsonl")
+	path := filepath.Join(e.store.versionDir(prfV2), "touch.jsonl")
 	old := time.Now().AddDate(0, 0, -40)
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)

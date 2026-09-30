@@ -53,7 +53,7 @@ func TestMaskCommandGolden(t *testing.T) {
 			if !bytes.Equal(out.Bytes(), repeat.Bytes()) || !bytes.Equal(report.Bytes(), secondReport.Bytes()) {
 				t.Fatal("preview not deterministic")
 			}
-			if !strings.Contains(report.String(), "scope=request") {
+			if !strings.Contains(report.String(), "scope=request version=2") {
 				t.Fatal("missing report")
 			}
 		})

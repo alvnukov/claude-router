@@ -18,7 +18,7 @@ func testMapper(t *testing.T, rules string) *ipMapper {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := newIPMapper(testIPKey, r)
+	m, err := newIPMapper(testIPKey, r, prfV2)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -32,6 +32,7 @@ type keyRecord struct {
 }
 type sessionData struct {
 	key          []byte
+	version      int
 	entries      map[string]mapRecord
 	fingerprints map[string]bool
 	pending      []mapRecord
@@ -68,6 +69,22 @@ type sessionView struct {
 	hold    func() func()
 }
 
+// Session files of PRF version 1 stay in the sessions directory, which the
+// code before versions reads; version 2 files live in its v2 subdirectory,
+// which that code skips. A binary rolled back below version 2 therefore starts
+// such a session with a fresh key instead of reading it with the old PRF.
+const (
+	prfV1 = 1
+	prfV2 = 2
+)
+
+func (s *sessionStore) versionDir(version int) string {
+	if version == prfV1 {
+		return s.dir
+	}
+	return filepath.Join(s.dir, "v2")
+}
+
 func randomKey() ([]byte, error) { b := make([]byte, 32); _, err := rand.Read(b); return b, err }
 func newSessionStore(home string, now func() time.Time) *sessionStore {
 	dir, _ := filepath.Abs(filepath.Join(home, "privacy", "sessions"))
@@ -76,53 +93,66 @@ func newSessionStore(home string, now func() time.Time) *sessionStore {
 }
 func (s *sessionStore) readAll() (map[string]*sessionData, error) {
 	all := make(map[string]*sessionData)
-	files, err := os.ReadDir(s.dir)
+	pseudos := make(map[string]mapRecord)
+	for _, version := range []int{prfV1, prfV2} {
+		if err := s.readDir(version, all, pseudos); err != nil {
+			return nil, err
+		}
+	}
+	return all, nil
+}
+func (s *sessionStore) readDir(version int, all map[string]*sessionData, pseudos map[string]mapRecord) error {
+	dir := s.versionDir(version)
+	files, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return all, nil
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return err
 	}
-	pseudos := make(map[string]mapRecord)
 	for _, f := range files {
 		if !strings.HasSuffix(f.Name(), ".jsonl") {
 			continue
 		}
 		id := strings.TrimSuffix(f.Name(), ".jsonl")
 		if !sessionIDRE.MatchString(id) {
-			return nil, errors.New("privacy: invalid session filename")
+			return errors.New("privacy: invalid session filename")
 		}
-		path := filepath.Join(s.dir, f.Name())
+		path := filepath.Join(dir, f.Name())
 		info, err := os.Lstat(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if !info.Mode().IsRegular() {
-			return nil, errors.New("privacy: session is not a regular file")
+			return errors.New("privacy: session is not a regular file")
 		}
 		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-			return nil, errors.New("privacy: session file permissions must be 0600")
+			return errors.New("privacy: session file permissions must be 0600")
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sd, err := readSession(data)
 		if err != nil {
-			return nil, fmt.Errorf("privacy: session %s: %w", id, err)
+			return fmt.Errorf("privacy: session %s: %w", id, err)
 		}
 		for _, r := range sd.entries {
 			p := strings.ToLower(r.Pseudo)
 			if issued, ok := pseudos[p]; ok {
 				if issued.Kind != r.Kind || issued.Real != r.Real || issued.Pseudo != r.Pseudo || explicitPseudonym(s.rules, r.Kind, r.Real) != r.Pseudo {
-					return nil, errors.New("privacy: duplicate pseudonym in session index")
+					return errors.New("privacy: duplicate pseudonym in session index")
 				}
 			}
 			pseudos[p] = r
 		}
+		if _, ok := all[id]; ok {
+			return fmt.Errorf("privacy: session %s exists in two versions", id)
+		}
+		sd.version = version
 		all[id] = sd
 	}
-	return all, nil
+	return nil
 }
 func readSession(data []byte) (*sessionData, error) {
 	end := bytes.LastIndexByte(data, '\n')
@@ -177,7 +207,7 @@ func mappedKind(k Kind) bool {
 func (s *sessionStore) locked(fn func() error) error {
 	s.shared.Lock()
 	defer s.shared.Unlock()
-	for _, dir := range []string{filepath.Dir(s.dir), s.dir} {
+	for _, dir := range []string{filepath.Dir(s.dir), s.dir, s.versionDir(prfV2)} {
 		if info, err := os.Lstat(dir); err == nil && (!info.IsDir() || info.Mode()&os.ModeSymlink != 0) {
 			return errors.New("privacy: invalid session directory")
 		}
@@ -219,7 +249,7 @@ func (s *sessionStore) transaction(id string, resume bool, fn func(*sessionView)
 			if len(key) != 32 {
 				return errors.New("privacy: invalid generated key")
 			}
-			sd = &sessionData{key: key, entries: make(map[string]mapRecord)}
+			sd = &sessionData{key: key, version: prfV2, entries: make(map[string]mapRecord)}
 			all[id] = sd
 		}
 		hold := func() func() {
@@ -239,7 +269,7 @@ func (s *sessionStore) transaction(id string, resume bool, fn func(*sessionView)
 		if err := fn(&sessionView{sd, all, hold}); err != nil {
 			return err
 		}
-		path := filepath.Join(s.dir, id+".jsonl")
+		path := filepath.Join(s.versionDir(sd.version), id+".jsonl")
 		if fresh {
 			line, _ := json.Marshal(keyRecord{"key", hex.EncodeToString(sd.key)})
 			line = append(line, '\n')
@@ -285,24 +315,27 @@ func (s *sessionStore) prune(now time.Time, days int) (int, error) {
 	}
 	removed := 0
 	err := s.locked(func() error {
-		files, err := os.ReadDir(s.dir)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			id := strings.TrimSuffix(f.Name(), ".jsonl")
-			if id == f.Name() || s.shared.live[id] > 0 {
-				continue
-			}
-			info, err := f.Info()
+		for _, version := range []int{prfV1, prfV2} {
+			dir := s.versionDir(version)
+			files, err := os.ReadDir(dir)
 			if err != nil {
 				return err
 			}
-			if info.ModTime().Before(now.AddDate(0, 0, -days)) {
-				if err := os.Remove(filepath.Join(s.dir, f.Name())); err != nil {
+			for _, f := range files {
+				id := strings.TrimSuffix(f.Name(), ".jsonl")
+				if id == f.Name() || s.shared.live[id] > 0 {
+					continue
+				}
+				info, err := f.Info()
+				if err != nil {
 					return err
 				}
-				removed++
+				if info.ModTime().Before(now.AddDate(0, 0, -days)) {
+					if err := os.Remove(filepath.Join(dir, f.Name())); err != nil {
+						return err
+					}
+					removed++
+				}
 			}
 		}
 		return nil
@@ -319,14 +352,17 @@ func (s *sessionStore) forget(id string) error {
 		return err
 	}
 	return s.locked(func() error {
-		files, err := os.ReadDir(s.dir)
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			if strings.HasSuffix(f.Name(), ".jsonl") && (id == "" || f.Name() == id+".jsonl") {
-				if err := os.Remove(filepath.Join(s.dir, f.Name())); err != nil {
-					return err
+		for _, version := range []int{prfV1, prfV2} {
+			dir := s.versionDir(version)
+			files, err := os.ReadDir(dir)
+			if err != nil {
+				return err
+			}
+			for _, f := range files {
+				if strings.HasSuffix(f.Name(), ".jsonl") && (id == "" || f.Name() == id+".jsonl") {
+					if err := os.Remove(filepath.Join(dir, f.Name())); err != nil {
+						return err
+					}
 				}
 			}
 		}

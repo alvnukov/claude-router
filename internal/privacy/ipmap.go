@@ -25,8 +25,12 @@ type ipMapper struct {
 	blocks []netBlock
 }
 
-func newIPMapper(key []byte, r *Rules) (*ipMapper, error) {
-	pan, err := cryptopan.New(key)
+func newIPMapper(key []byte, r *Rules, version int) (*ipMapper, error) {
+	newPan := cryptopan.NewV2
+	if version == prfV1 {
+		newPan = cryptopan.New
+	}
+	pan, err := newPan(key)
 	if err != nil {
 		return nil, err
 	}

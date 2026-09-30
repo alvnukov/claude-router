@@ -15,6 +15,8 @@ type Stats struct {
 	Scope            string
 	Masked, Unmasked map[Kind]int
 	Unexpected       int
+	// Version is the PRF version of the request's session.
+	Version int
 }
 
 // Request owns the response dictionary and request-scoped secret values.

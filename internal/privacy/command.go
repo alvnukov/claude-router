@@ -100,7 +100,7 @@ func command(ctx context.Context, args []string, stdout, stderr io.Writer, opt O
 		return io.ErrShortWrite
 	}
 	stats := req.Stats()
-	fmt.Fprintf(stderr, "privacy: scope=%s", stats.Scope)
+	fmt.Fprintf(stderr, "privacy: scope=%s version=%d", stats.Scope, stats.Version)
 	kinds := make([]Kind, 0, len(stats.Masked))
 	for k := range stats.Masked {
 		kinds = append(kinds, k)

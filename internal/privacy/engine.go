@@ -32,6 +32,7 @@ type Engine struct {
 	store      *sessionStore
 	words      *wordFilter
 	allowPaths []*regexp.Regexp
+	counts     counters
 }
 
 func Open(routerHome string, rules *Rules, opt Options) (*Engine, error) {
@@ -192,11 +193,12 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 	req := &Request{engine: e, secrets: make(map[string]string), spellings: make(map[string]string), stats: Stats{Scope: "request", Masked: make(map[Kind]int), Unmasked: make(map[Kind]int)}}
 	var masked []byte
 	transform := func(view *sessionView) error {
-		ip, err := newIPMapper(subkey(view.session.key, "ip"), e.rules)
+		ip, err := newIPMapper(subkey(view.session.key, "ip"), e.rules, view.session.version)
 		if err != nil {
 			return err
 		}
 		req.ip = ip
+		req.stats.Version = view.session.version
 		m := &mapper{e: e, view: view, req: req}
 		m.init()
 		// Reserve every detected real value before issuing any pseudonym.
@@ -248,13 +250,14 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 		if keyErr != nil {
 			return nil, nil, keyErr
 		}
-		sd := &sessionData{key: key, entries: make(map[string]mapRecord)}
+		sd := &sessionData{key: key, version: prfV2, entries: make(map[string]mapRecord)}
 		err = transform(&sessionView{session: sd, all: map[string]*sessionData{"": sd}})
 	}
 	if err != nil {
 		req.Close()
 		return nil, nil, err
 	}
+	e.counts.session(id, req.stats.Version)
 	return masked, req, nil
 }
 func (e *Engine) UnmaskJSON(req *Request, body []byte) ([]byte, error) {

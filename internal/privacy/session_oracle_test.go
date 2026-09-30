@@ -188,7 +188,7 @@ func TestSessionOracleAutomaticPseudonymsA(t *testing.T) {
 		}
 	}
 	for _, id := range []string{"rr-one", "rr-two"} {
-		if info, err := os.Stat(filepath.Join(home, "privacy", "sessions", id+".jsonl")); err != nil || !info.Mode().IsRegular() {
+		if info, err := os.Stat(filepath.Join(home, "privacy", "sessions", "v2", id+".jsonl")); err != nil || !info.Mode().IsRegular() {
 			t.Fatal("expected synthetic session file missing", err)
 		}
 	}
@@ -202,7 +202,7 @@ func TestSessionOracleAutomaticPseudonymsA(t *testing.T) {
 
 func sessionOracleReplacePersonRecord(t *testing.T, home, id, real, pseudo string) {
 	t.Helper()
-	path := filepath.Join(home, "privacy", "sessions", id+".jsonl")
+	path := filepath.Join(home, "privacy", "sessions", "v2", id+".jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal("read synthetic session record", err)
@@ -373,7 +373,7 @@ func TestSessionOracleForeignRestorationB(t *testing.T) {
 	for _, tc := range []struct{ id, foreign string }{
 		{"rr-owner-a", sessionOracleOther}, {"rr-owner-b", sessionOraclePerson},
 	} {
-		stored, err := os.ReadFile(filepath.Join(home, "privacy", "sessions", tc.id+".jsonl"))
+		stored, err := os.ReadFile(filepath.Join(home, "privacy", "sessions", "v2", tc.id+".jsonl"))
 		if err != nil || bytes.Contains(stored, []byte(tc.foreign)) {
 			t.Fatal("foreign owner entered session map", err)
 		}
