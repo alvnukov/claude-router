@@ -51,10 +51,10 @@ func TestRoundTrip(t *testing.T) {
 			want := body
 			if name == "deploy/docker-compose.yml" {
 				// Decision 997b362: after "kafka-1:" (a host, masked as
-				// "<pseudonym>-1:") the address pseudonym reads as a longer
-				// IPv6 ("1:3fff::…"), so it is not restored whole. A missed
-				// restore is visible; a wrong one would be silent.
-				pseudo := regexp.MustCompile(`[a-z]-1:([0-9a-f]*:[0-9a-f:]+)`).FindSubmatch(masked)
+				// "<pseudonym>-<digit>:") the address pseudonym reads as a
+				// longer IPv6 ("1:3fff::…"), so it is not restored whole. A
+				// missed restore is visible; a wrong one would be silent.
+				pseudo := regexp.MustCompile(`- \\"[a-z0-9-]+:([0-9a-f]*:[0-9a-f:]+)\\"`).FindSubmatch(masked)
 				if pseudo == nil {
 					t.Fatalf("no pseudonym after kafka-1: in %s", masked)
 				}
