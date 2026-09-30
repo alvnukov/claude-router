@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -87,8 +88,7 @@ func TestRestoreOnlyIssuedNetworks(t *testing.T) {
 }
 
 func atoi(s string) int {
-	n := 0
-	fmt.Sscan(s, &n)
+	n, _ := strconv.Atoi(s)
 	return n
 }
 
