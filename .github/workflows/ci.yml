@@ -61,8 +61,12 @@ jobs:
       - run: go vet ./...
       - if: runner.os != 'Windows'
         run: go test ./... -count=1
+        env:
+          ROUTER_OS_SECRET_TEST: "1"
       - if: runner.os == 'Windows'
         run: go test ./internal/... ./deploy/... -count=1
+        env:
+          ROUTER_OS_SECRET_TEST: "1"
       # Advisory until the TempDir cleanup leak on Windows is fixed: removing
       # a test's temporary directory sometimes fails with "The directory is
       # not empty".
