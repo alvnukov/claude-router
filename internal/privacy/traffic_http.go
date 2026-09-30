@@ -341,7 +341,7 @@ func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, r
 	target := Target{Model: route.Model, Provider: "anthropic", Betas: beta, TokenCount: r.URL.Path == "/v1/messages/count_tokens"}
 	// Prepare masks supported content according to the resolved profile.
 	// Client controls and opaque content do not prevent preparation.
-	exchange, wire, err := policy.Prepare(target, body)
+	exchange, wire, err := policy.Prepare(target, DropUnsignedThinking(body))
 	if err != nil {
 		reject(400, "invalid_request_error", "privacy: request preparation failed")
 		return

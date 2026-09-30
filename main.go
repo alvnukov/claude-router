@@ -256,7 +256,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 			if cfg.UIListen != "" {
 				r.Header.Del("Accept-Encoding")
 			}
-			pass(rw, r.WithContext(markStream(r.Context(), probe.Stream)), body)
+			pass(rw, r.WithContext(markStream(r.Context(), probe.Stream)), privacy.DropUnsignedThinking(body))
 			return
 		}
 		handleLocal(rw, r, cfg.ForModel(probe.Model, probe.OutputConfig.Effort), body, tr, hl, st)
@@ -284,7 +284,7 @@ func newRouterHandler(cfg config, cs *configStore, st *history.Store, hl *health
 			return
 		}
 		if target.Mode == "anthropic" {
-			pass(rw, r, body)
+			pass(rw, r, privacy.DropUnsignedThinking(body))
 			return
 		}
 

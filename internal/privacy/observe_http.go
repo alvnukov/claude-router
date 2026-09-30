@@ -52,6 +52,8 @@ func serveObservedHTTP(w http.ResponseWriter, r *http.Request, policy *Policy, d
 		return
 	}
 	if route.Mode == "anthropic" {
+		body = DropUnsignedThinking(body)
+		r.Body, r.ContentLength = io.NopCloser(bytes.NewReader(body)), int64(len(body))
 		_, _, _ = policy.Prepare(Target{Model: route.Model, Provider: "anthropic"}, body)
 		serveObservedProxy(w, r, route.Upstream, deps)
 		return
