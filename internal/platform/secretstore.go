@@ -10,6 +10,10 @@ var (
 	ErrNoSecretStore = errors.New("platform: no OS secret store")
 	// ErrSecretNotFound means the store holds no secret for the account.
 	ErrSecretNotFound = errors.New("platform: secret not found")
+	// ErrNoLogonSession means the OS has a store, but this process runs
+	// without a user logon session that could open it (a Windows service
+	// without a profile, an ssh logon by key). It is an ErrNoSecretStore.
+	ErrNoLogonSession = fmt.Errorf("%w: no user logon session to open it", ErrNoSecretStore)
 )
 
 // SecretStore keeps small secrets in the OS secret store, one per account

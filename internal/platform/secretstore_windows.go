@@ -72,7 +72,7 @@ func (c *credentials) Put(account string, secret []byte) error {
 	runtime.KeepAlive(target)
 	clear(blob)
 	if r == 0 {
-		return fmt.Errorf("platform: credential write %s: %w", account, callErr)
+		return credentialError("write", account, callErr)
 	}
 	return nil
 }
@@ -86,10 +86,7 @@ func (c *credentials) Get(account string) ([]byte, error) {
 	r, _, callErr := procCredRead.Call(uintptr(unsafe.Pointer(target)), credTypeGeneric, 0, uintptr(unsafe.Pointer(&cred)))
 	runtime.KeepAlive(target)
 	if r == 0 {
-		if errors.Is(callErr, windows.ERROR_NOT_FOUND) {
-			return nil, ErrSecretNotFound
-		}
-		return nil, fmt.Errorf("platform: credential read %s: %w", account, callErr)
+		return nil, credentialError("read", account, callErr)
 	}
 	defer procCredFree.Call(uintptr(unsafe.Pointer(cred)))
 	if cred.CredentialBlobSize == 0 || cred.CredentialBlob == nil {
@@ -105,8 +102,10 @@ func (c *credentials) Delete(account string) error {
 	}
 	r, _, callErr := procCredDelete.Call(uintptr(unsafe.Pointer(target)), credTypeGeneric, 0)
 	runtime.KeepAlive(target)
-	if r == 0 && !errors.Is(callErr, windows.ERROR_NOT_FOUND) {
-		return fmt.Errorf("platform: credential delete %s: %w", account, callErr)
+	if r == 0 {
+		if err := credentialError("delete", account, callErr); err != ErrSecretNotFound {
+			return err
+		}
 	}
 	return nil
 }
