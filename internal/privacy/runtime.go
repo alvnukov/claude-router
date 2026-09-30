@@ -25,6 +25,7 @@ type Runtime struct {
 	policy         *Policy
 	clientControls clientControlTable
 	stats          RuntimeState
+	legacyCleaned  bool
 }
 type RuntimeState struct {
 	Status          string       `json:"status"`
@@ -38,6 +39,8 @@ type RuntimeState struct {
 	Restored        int          `json:"restored"`
 	Active          int          `json:"active"`
 	Buffered        bool         `json:"buffered"`
+	LegacyRemoved   int          `json:"legacy_removed,omitempty"`
+	LegacyUnknown   int          `json:"legacy_unknown,omitempty"`
 }
 type Policy struct {
 	config         *Profiles
@@ -74,6 +77,15 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 		r.stats.Enabled = r.policy.Enabled()
 		r.stats.Buffered = !r.policy.observationOnly()
 		return r.policy, nil
+	}
+	if !r.legacyCleaned && r.home != "" {
+		// Once per process and before any engine opens: old session files
+		// hold real values. A failure leaves them as they were and is tried
+		// again with the next policy; traffic does not depend on it.
+		removed, unknown, err := cleanLegacy(filepath.Join(r.home, "privacy-runtime"))
+		r.stats.LegacyRemoved += removed
+		r.stats.LegacyUnknown = unknown
+		r.legacyCleaned = err == nil
 	}
 	p := &Policy{config: snapshot.Config, engines: map[string]*Engine{}, clientControls: r.clientControls.clone(), runtime: r}
 	if p.Enabled() {
