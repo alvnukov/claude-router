@@ -51,7 +51,7 @@ func unmaskSystem(t *testing.T, e *Engine, req *Request, text string) string {
 	return out.System
 }
 
-// Acceptance (12): a network value comes back only when it is a pseudonym
+// A network value comes back only when it is a pseudonym
 // this session issued; an address merely shaped like one, even under the same
 // network as the pseudonyms, passes byte for byte.
 func TestRestoreOnlyIssuedNetworks(t *testing.T) {
@@ -92,7 +92,7 @@ func atoi(s string) int {
 	return n
 }
 
-// Acceptance (14): only a whole token is restored. A pseudonym inside a longer
+// Only a whole token is restored. A pseudonym inside a longer
 // value of its class stays as is; a pseudonym split across stream chunks comes
 // back whole.
 func TestRestoreWholeTokenOnly(t *testing.T) {
@@ -107,7 +107,7 @@ func TestRestoreWholeTokenOnly(t *testing.T) {
 		pseudo[1] + "0", "1" + pseudo[1], pseudo[1] + "/8",
 		pseudo[2] + ":0a", "0" + pseudo[2], pseudo[2] + "-01",
 		pseudo[3] + ":1", "a" + pseudo[3],
-		// Decision 997b362: the colon after a host joins a longer IPv6.
+		// The colon after a host joins a longer IPv6.
 		"kafka-1:" + pseudo[3],
 	}
 	for _, v := range longer {
@@ -158,7 +158,7 @@ func TestRestoreWholeTokenOnly(t *testing.T) {
 	}
 }
 
-// Acceptance (13) and (15): after masking networks the session file holds no
+// After masking networks the session file holds no
 // input address and no pseudonym in clear text, only fingerprints. Key 56
 // leaves 10.8.0.0/16 and 10.9.0.0/16 in place, so fixed points are among the
 // values and the file must not name them either.
@@ -208,7 +208,7 @@ func TestSessionFileHoldsNoAddresses(t *testing.T) {
 	}
 }
 
-// Decision 3301bfd: an IPv6 address before dots, at the end of a sentence or
+// An IPv6 address before dots, at the end of a sentence or
 // an ellipsis, is masked and comes back; the detector used to drop it whole.
 func TestNetworkBeforeDots(t *testing.T) {
 	r, err := ParseRules([]byte(`{}`))
@@ -270,7 +270,7 @@ func TestMappedIPv4InIPv6(t *testing.T) {
 	}
 }
 
-// Acceptance (16), decision 0432ab7: a value in the shape of its class that
+// A value in the shape of its class that
 // does not parse leaves as a placeholder and counts as a shape without parse,
 // alarmed on the first; times, dates, versions and ports have no address
 // shape and pass as before.
@@ -319,7 +319,7 @@ func TestShapeWithoutParse(t *testing.T) {
 	}
 }
 
-// Acceptance (17), decisions dca157c and 5a07342: the way an address is
+// The way an address is
 // written does not change what the router does with it. Every form of a
 // generated private, public or loopback address, bare and before a dot, gets
 // the outcome of its canonical form (masked, placeholder, open) and comes
@@ -404,7 +404,8 @@ func TestAddressFormsEquivalent(t *testing.T) {
 	}
 }
 
-// addressForms writes a in the forms of acceptance (17). For an address with
+// addressForms writes a in every form TestAddressFormsEquivalent
+// checks. For an address with
 // an IPv4 inside a is that IPv4.
 func addressForms(a netip.Addr) map[string]string {
 	forms := map[string]string{"canonical": a.String()}

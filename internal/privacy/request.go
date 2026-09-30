@@ -197,7 +197,7 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 }
 
 // wholeToken reports whether the span stands alone in its class, so that
-// 10.23.4.5 is not taken from inside 10.23.4.55 (decision 997b362). A
+// 10.23.4.5 is not taken from inside 10.23.4.55. A
 // neighbour extends the token when it is a character of the class, or a
 // separator of the class with such a character beyond it; the dot that ends a
 // sentence and the colon before a port leave an address whole.

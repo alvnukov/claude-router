@@ -129,9 +129,9 @@ func networkSpan(s string) (netip.Addr, Kind, bool) {
 
 var macShapeRE = regexp.MustCompile(`^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$`)
 
-// addressShape returns the class a value has the shape of (decision 0432ab7):
+// addressShape returns the class a value has the shape of:
 // IPv4 is four groups of up to three digits; IPv6 has "::", exactly seven
-// colons, or six with an IPv4 shape after the last (decision dca157c); a MAC
+// colons, or six with an IPv4 shape after the last; a MAC
 // is six groups of two hex digits split by ':' or '-'; a network is an
 // address shape, '/' and a number. A time, a version or a port has none.
 func addressShape(s string) (Kind, bool) {

@@ -72,7 +72,7 @@ func (m *ipMapper) unmaskAddr(a netip.Addr) (netip.Addr, bool) { return m.addres
 
 // embedded4 returns the IPv4 address an IPv6 one carries, mapped
 // (::ffff:a.b.c.d) or compatible (::a.b.c.d, but not :: or ::1), in whatever
-// notation it is written (decision dca157c). Such an address is masked exactly
+// notation it is written. Such an address is masked exactly
 // as the bare IPv4.
 func embedded4(a netip.Addr) (netip.Addr, bool) {
 	if a.Is4In6() {

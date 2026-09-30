@@ -50,7 +50,7 @@ func TestRoundTrip(t *testing.T) {
 			restored, err := e.UnmaskJSON(req, masked)
 			want := body
 			if name == "deploy/docker-compose.yml" {
-				// Decision 997b362: after "kafka-1:" (a host, masked as
+				// After "kafka-1:" (a host, masked as
 				// "<pseudonym>-<digit>:") the address pseudonym reads as a
 				// longer IPv6 ("1:3fff::…"), so it is not restored whole. A
 				// missed restore is visible; a wrong one would be silent.

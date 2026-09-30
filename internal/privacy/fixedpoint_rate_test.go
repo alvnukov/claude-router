@@ -52,10 +52,10 @@ func fixedPointRate(t *testing.T, version, k, n int) float64 {
 	return float64(fixed) / float64(n)
 }
 
-// Acceptance (2): after the fix the share of keys that leave a value with k
+// The share of keys that leave a value with k
 // free bits unchanged is within 3σ of 2^-k, k = 8 on 1e5 keys, k = 16 on 1e6
 // keys (under PRIVACY_MEASURE, it takes longer than 2 s). Version 1 is
-// measured alongside for the receipt.
+// measured alongside for comparison.
 func TestFixedPointRate(t *testing.T) {
 	cases := []struct{ k, n int }{{8, 100000}}
 	if os.Getenv("PRIVACY_MEASURE") != "" {
