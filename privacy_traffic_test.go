@@ -142,6 +142,8 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 			if req.Thinking.Type != "enabled" || last < 0 || req.Messages[last].Role != "user" || !result(last) {
 				return ""
 			}
+			// Stricter than the docs: there the API quietly turns thinking off
+			// for such a turn rather than refuse it.
 			for i := turn + 1; i < last; i++ {
 				if req.Messages[i].Role == "assistant" {
 					if len(blocks[i]) == 0 || (string(blocks[i][0]["type"]) != `"thinking"` && string(blocks[i][0]["type"]) != `"redacted_thinking"`) {

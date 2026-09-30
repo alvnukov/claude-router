@@ -36,6 +36,7 @@ func TestDropUnsignedThinking(t *testing.T) {
 			body("", `{"role":"user","content":"a"},{"role":"user","content":"b"}`)},
 		{"open turn after Codex tool_use", body(on, codex), body(off, cleaned)},
 		{"open turn continues", body(on, codex+more), body(off, cleaned+more)},
+		{"Codex tool_use without thinking goes as is", body(on, cleaned), ""},
 		{"new turn keeps thinking", body(on, codex+`,{"role":"assistant","content":[{"type":"text","text":"done"}]},{"role":"user","content":"next"}`),
 			body(on, cleaned+`,{"role":"assistant","content":[{"type":"text","text":"done"}]},{"role":"user","content":"next"}`)},
 		{"normal turn keeps thinking", body(on, old+`,{"role":"user","content":"go"},{"role":"assistant","content":[`+signed+`,`+toolUse+`]},`+result+more),
