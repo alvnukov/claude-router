@@ -14,6 +14,7 @@ import (
 
 	"localrouter/internal/catalogstartup"
 	"localrouter/internal/codextesttransport"
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/limits"
 	"localrouter/internal/platform"
@@ -36,12 +37,12 @@ type routerServer struct {
 }
 
 func newRouterServer(cfg config, life *lifecycle, state string, catalog ...*catalogstartup.Dependencies) *routerServer {
-	cs := newConfigStore(cfg, providersPath())
-	st := history.New(cfg.uiHistory, historyPath())
+	cs := conf.NewStore(cfg, conf.ProvidersPath())
+	st := history.New(cfg.UIHistory, historyPath())
 	st.SetGate(life)
 	codexAuth.life = life
 	h := newHealth(healthPath())
-	cs.health = h
+	cs.OnProfileChange(h.clearSessions)
 	h.life = life
 	if os.Getenv("ROUTER_SLOT") == "" {
 		life.markAlone() // the legacy router has no second slot
@@ -72,7 +73,7 @@ func (r *routerServer) startBackground() {
 		if codextesttransport.DisableBackground() {
 			return
 		}
-		r.cs.watch(r.background, 2*time.Second, r.life)
+		r.cs.Watch(r.background, 2*time.Second, r.life)
 		startChecker(r.background, r.cs, r.health, r.life)
 		r.catalogRun = r.ui.startCatalogUpdates(r.background)
 		catalogstartup.StartUsage(r.background, r.ui.catalog, r.ui.startCodexUsageUpdates)
@@ -84,16 +85,16 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	admin.activate = func() error {
 		if r.life.mode() == modeStandby {
 			// The old slot is quiesced, so this one is the only writer now.
-			if err := saveCodexIDs(r.cs.provPath); err != nil {
+			if err := r.cs.SaveCodexIDs(); err != nil {
 				return fmt.Errorf("codex id migration: %w", err)
 			}
-			if err := r.cs.reloadProfiles(r.health); err != nil {
+			if err := r.cs.Reload(); err != nil {
 				return err
 			}
-			if err := r.cs.migrate(); err != nil {
+			if err := r.cs.Migrate(); err != nil {
 				return fmt.Errorf("config migration: %w", err)
 			}
-			if err := r.cs.ensureProfiles(); err != nil {
+			if err := r.cs.EnsureProfiles(); err != nil {
 				return fmt.Errorf("profile migration: %w", err)
 			}
 		}
@@ -105,19 +106,6 @@ func (r *routerServer) runtimeAdmin(state string) *runtimeAdmin {
 	}
 	admin.compact = r.st.CompactAfterDrain
 	return admin
-}
-
-// saveCodexIDs writes the auth_id values the start of an active router would
-// have written; a standby slot assigned them only in memory.
-func saveCodexIDs(path string) error {
-	if path == "" {
-		return nil
-	}
-	local, assigned, err := loadLocalSetupChecked(path)
-	if err != nil || !assigned {
-		return err
-	}
-	return saveConfigurationMigration(path, local, ".before-codex-ids")
 }
 
 func (r *routerServer) serve(api, ui net.Listener) error {
@@ -176,19 +164,19 @@ func (r *routerServer) run() (result error) {
 	defer func() {
 		result = errors.Join(result, catalogstartup.Finish(context.Background(), r.cancel, &r.once, &r.catalogRun, r.apiHTTP, r.uiHTTP))
 	}()
-	api, err := net.Listen("tcp", r.cfg.listen)
+	api, err := net.Listen("tcp", r.cfg.Listen)
 	if err != nil {
 		return err
 	}
 	var ui net.Listener
-	if r.cfg.uiListen != "" {
-		ui, err = net.Listen("tcp", r.cfg.uiListen)
+	if r.cfg.UIListen != "" {
+		ui, err = net.Listen("tcp", r.cfg.UIListen)
 		if err != nil {
 			api.Close()
 			return err
 		}
 	}
-	log.Printf("listening on %s, ui %s, mode %s", r.cfg.listen, r.cfg.uiListen, r.life.mode())
+	log.Printf("listening on %s, ui %s, mode %s", r.cfg.Listen, r.cfg.UIListen, r.life.mode())
 	ctx, stop := platform.ShutdownContext(context.Background(), effectiveLabel("", os.Getenv("ROUTER_SLOT")))
 	defer stop()
 	done := make(chan error, 1)

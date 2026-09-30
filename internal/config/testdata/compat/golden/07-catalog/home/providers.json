@@ -1,0 +1,119 @@
+{
+  "family_routes": null,
+  "catalog": {
+    "anthropic": [
+      "claude-fable-5-1",
+      "claude-opus-5-5",
+      "claude-sonnet-5"
+    ],
+    "anthropic_updated": "NOW",
+    "providers": {
+      "codex": {
+        "models": [
+          {
+            "id": "gpt-6-sol",
+            "name": "GPT-6 Sol",
+            "efforts": [
+              "low",
+              "high"
+            ]
+          },
+          {
+            "id": "gpt-6.1-sol",
+            "name": "GPT-6.1 Sol",
+            "efforts": [
+              "low",
+              "high"
+            ]
+          },
+          {
+            "id": "gpt-6-luna",
+            "name": "GPT-6 Luna",
+            "efforts": [
+              "medium"
+            ]
+          }
+        ],
+        "updated_at": "NOW"
+      },
+      "down": {
+        "models": [
+          {
+            "id": "tiny"
+          }
+        ],
+        "updated_at": "2026-09-01T10:00:00Z",
+        "error": "HTTP 500"
+      },
+      "lab": {
+        "models": [
+          {
+            "id": "qwen-coder"
+          },
+          {
+            "id": "qwen-coder-next"
+          }
+        ],
+        "updated_at": "NOW"
+      }
+    },
+    "codex_seen": {
+      "codex": [
+        "gpt-6-luna",
+        "gpt-6-sol",
+        "gpt-6.1-sol"
+      ]
+    },
+    "checked_at": "NOW",
+    "notes": [
+      "deep: codex/gpt-6.1-sol не добавлена в пул — effort xhigh не подтверждён каталогом.",
+      "default/deep: codex/gpt-6.1-sol не добавлена в пул — effort xhigh не подтверждён каталогом.",
+      "down: HTTP 500. Сохранён предыдущий каталог."
+    ]
+  },
+  "providers": [
+    {
+      "name": "codex",
+      "type": "codex",
+      "base_url": "https://chatgpt.com/backend-api/codex"
+    },
+    {
+      "name": "lab",
+      "base_url": "http://lab.test/v1",
+      "api_key": "sk-test-lab-0001"
+    },
+    {
+      "name": "down",
+      "base_url": "http://down.test/v1",
+      "api_key": "sk-test-down-0001"
+    }
+  ],
+  "models": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-sol"
+    },
+    {
+      "provider": "lab",
+      "model": "qwen-coder"
+    },
+    {
+      "provider": "down",
+      "model": "tiny"
+    },
+    {
+      "provider": "lab",
+      "model": "qwen-coder-next"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-sol"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-luna"
+    }
+  ],
+  "routes": null,
+  "model_pools": null
+}

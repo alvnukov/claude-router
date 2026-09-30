@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	codexprovider "localrouter/internal/providers/codex"
 )
@@ -20,9 +21,9 @@ func privateCodexHandler(t *testing.T) http.Handler {
 	t.Helper()
 	home := t.TempDir()
 	writeTrafficConfig(t, home, `{}`)
-	base, _ := url.Parse(codexBaseURL)
-	cfg := config{upstream: base, local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, firstByte: time.Second}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	base, _ := url.Parse(conf.CodexBaseURL)
+	cfg := config{Upstream: base, Local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, FirstByte: time.Second}
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st, hl := history.New(10, ""), newHealth("")
 	return newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
 }

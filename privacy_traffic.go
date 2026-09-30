@@ -4,38 +4,26 @@ import (
 	"bytes"
 	"errors"
 	"net/http"
-	"path/filepath"
 
 	"localrouter/internal/privacy"
 )
-
-func (s *configStore) privacyRuntime() *privacy.Runtime {
-	s.privacyOnce.Do(func() {
-		home := ""
-		if s.provPath != "" {
-			home = filepath.Dir(s.provPath)
-		}
-		s.privacy = privacy.NewRuntime(home)
-	})
-	return s.privacy
-}
 
 // privacyTraffic runs before any raw body/history capture. The legacy handler
 // remains intact for explicit global-off; malformed config never reaches it.
 func privacyTraffic(next http.Handler, cs *configStore, hl *health, observeAnthropic func(*http.Response) error) http.Handler {
 	return privacy.NewProtectedHTTP(privacy.HTTPDeps{
-		Runtime: cs.privacyRuntime(), Legacy: next, WriteError: writeAnthropicError,
+		Runtime: cs.PrivacyRuntime(), Legacy: next, WriteError: writeAnthropicError,
 		ObserveAnthropicResponse: observeAnthropic,
 		Resolve: func(body []byte) (privacy.HTTPRoute, error) {
-			cfg := cs.get()
+			cfg := cs.Get()
 			model, route, err := configuredRequestRoute(cfg, body)
 			return privacy.HTTPRoute{
-				Mode: route.Mode, Model: model, Upstream: cfg.upstream,
+				Mode: route.Mode, Model: model, Upstream: cfg.Upstream,
 				Pool: func(effort string) (string, string) {
-					return cfg.local.ActiveProfile, cfg.forModel(model, effort).poolName
+					return cfg.Local.ActiveProfile, cfg.ForModel(model, effort).PoolName
 				},
 				Local: func(w http.ResponseWriter, r *http.Request, b []byte, effort string) {
-					handleLocal(w, r, cfg.forModel(model, effort), b, nil, hl)
+					handleLocal(w, r, cfg.ForModel(model, effort), b, nil, hl)
 				},
 			}, err
 		},

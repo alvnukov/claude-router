@@ -1,0 +1,31 @@
+{
+  "family_routes": null,
+  "catalog": {
+    "anthropic_updated": "0001-01-01T00:00:00Z",
+    "checked_at": "0001-01-01T00:00:00Z"
+  },
+  "providers": [
+    {
+      "name": "lab",
+      "base_url": "http://lab.test/v1",
+      "api_key": "sk-test-legacy-0001"
+    },
+    {
+      "name": "codex",
+      "type": "codex",
+      "base_url": "https://chatgpt.com/backend-api/codex"
+    }
+  ],
+  "models": [
+    {
+      "provider": "lab",
+      "model": "qwen-coder"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6-sol"
+    }
+  ],
+  "routes": {},
+  "model_pools": null
+}

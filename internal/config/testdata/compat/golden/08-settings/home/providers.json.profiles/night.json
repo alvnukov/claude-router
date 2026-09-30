@@ -1,0 +1,67 @@
+{
+  "family_routes": {
+    "opus": {
+      "high": {
+        "mode": "pool",
+        "pool": "work"
+      },
+      "low": {
+        "mode": "anthropic"
+      },
+      "max": {
+        "mode": "pool",
+        "pool": "deep"
+      }
+    },
+    "sonnet": {
+      "default": {
+        "mode": "model",
+        "model": "lab/qwen-coder"
+      }
+    }
+  },
+  "routes": {
+    "claude-haiku-4-5": {
+      "default": {
+        "mode": "disabled"
+      }
+    }
+  },
+  "model_pools": {
+    "deep": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "xhigh"
+      }
+    ],
+    "work": [
+      {
+        "model": "codex/gpt-6-sol",
+        "effort": "high"
+      },
+      {
+        "model": "lab/qwen-coder"
+      },
+      {
+        "model": "codex/gpt-6.1-sol",
+        "effort": "high"
+      }
+    ]
+  },
+  "pool_settings": {
+    "deep": {
+      "type": "failover",
+      "failover": true,
+      "first_byte_seconds": 90,
+      "probe_seconds": 30,
+      "max_input_chars": 0
+    },
+    "work": {
+      "type": "balance",
+      "failover": true,
+      "first_byte_seconds": 30,
+      "probe_seconds": 15,
+      "max_input_chars": 120000
+    }
+  }
+}

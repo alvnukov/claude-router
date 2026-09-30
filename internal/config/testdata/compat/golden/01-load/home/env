@@ -1,0 +1,5 @@
+# router settings (synthetic test values)
+ROUTER_LOCAL_API_KEY=sk-test-env-0001
+export ROUTER_LOCAL_FAILOVER=1
+ROUTER_LOCAL_BALANCE="3"
+ROUTER_UI_HISTORY=300

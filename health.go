@@ -225,19 +225,19 @@ type candidate struct {
 // in rating order, so a request that fails on the chosen model moves to the
 // best-rated one, and the load spreads off it again once it is busy.
 //
-// A pool route (any poolType) ignores rating and balance and keeps pool order.
+// A pool route (any PoolType) ignores rating and balance and keeps pool order.
 func (h *health) pick(c config) []candidate {
-	l := c.local
+	l := c.Local
 	var out []candidate
-	for _, m := range l.ordered() {
-		p, _ := l.provider(m.Provider)
+	for _, m := range l.Ordered() {
+		p, _ := l.Provider(m.Provider)
 		key := m.Key()
 		out = append(out, candidate{Key: key, Provider: p, Model: m.Model, Efforts: m.Efforts, Stat: h.snapshot(key), Preferred: key == l.Preferred, InFlight: h.load(key)})
 	}
-	if !c.failover && len(out) > 0 {
+	if !c.Failover && len(out) > 0 {
 		return out[:1]
 	}
-	if c.poolType != "" {
+	if c.PoolType != "" {
 		// Pool order, not rating: members that are not cooling keep the order
 		// the pool lists them in; cooling ones go last, soonest back first.
 		sort.SliceStable(out, func(i, j int) bool {
@@ -273,9 +273,9 @@ func (h *health) pick(c config) []candidate {
 		}
 		return a.Stat.TTFBMs < b.Stat.TTFBMs
 	})
-	if c.balance > 1 {
+	if c.Balance > 1 {
 		group := 0
-		for group < len(out) && group < c.balance && rank(out[group]) < 2 && out[group].Stat.Score >= healthyMinimum {
+		for group < len(out) && group < c.Balance && rank(out[group]) < 2 && out[group].Stat.Score >= healthyMinimum {
 			group++
 		}
 		best := 0
