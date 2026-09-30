@@ -13,7 +13,8 @@ func TestRestoreRunsOnlyNetworkDetectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := testEngine(t, r)
+	// Key 1 is the diagnosis key on which the old PRF left 10.8.0.0/16 as is.
+	e := fixedKeyEngine(t, r, fixedKey(1))
 	body := requestBody("", "Zorvex 10.2.3.4 fd00:1234::7 10.8.0.0/16 02:42:ac:11:00:02\npassword=shh-SYNTHETIC-secret")
 	masked, req := mustMask(t, e, body)
 	for _, real := range []string{"10.2.3.4", "fd00:1234::7", "10.8.0.0/16", "02:42:ac:11:00:02", "shh-SYNTHETIC-secret"} {
