@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"strings"
+	"sync"
 
 	"localrouter/internal/privacy/cryptopan"
 )
@@ -25,10 +26,13 @@ type ipMapper struct {
 	blocks []netBlock
 }
 
-// newIPMapper checks the PRF on its known answers before it takes the key, so
-// a broken build never masks.
+// prfSelfTest checks the PRF on its known answers once per process.
+var prfSelfTest = sync.OnceValue(cryptopan.SelfTest)
+
+// newIPMapper refuses the key when the PRF fails its known answers, so a
+// broken build never masks.
 func newIPMapper(key []byte, r *Rules) (*ipMapper, error) {
-	if err := cryptopan.SelfTest(); err != nil {
+	if err := prfSelfTest(); err != nil {
 		return nil, err
 	}
 	pan, err := cryptopan.NewV2(key)

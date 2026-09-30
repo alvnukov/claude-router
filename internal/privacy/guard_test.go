@@ -12,6 +12,26 @@ import (
 
 var placeholderRE = regexp.MustCompile(`<secret:[a-z0-9]+:[a-f0-9]{8}>`)
 
+// A PRF that fails its known answers refuses the key: nothing is masked with
+// it and nothing leaves, on Mask and on Detect alike.
+func TestBrokenPRFRefused(t *testing.T) {
+	saved := prfSelfTest
+	prfSelfTest = func() error { return fmt.Errorf("broken PRF") }
+	t.Cleanup(func() { prfSelfTest = saved })
+	r, err := ParseRules([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := fixedKeyEngine(t, r, fixedKey(1))
+	body := requestBody("prf", "gateway 10.2.3.4")
+	if out, _, err := e.Mask(body); err == nil || out != nil {
+		t.Errorf("mask with a broken PRF: %s, %v", out, err)
+	}
+	if _, err := e.Detect(body); err == nil {
+		t.Error("detect with a broken PRF succeeded")
+	}
+}
+
 // A value the network mapper does not handle must not leave equal to itself:
 // 10.0.0.0/7 starts inside 10/8 but is wider than the block, so no block
 // permutes it. It leaves as the tier-1 placeholder and counts as a skip.

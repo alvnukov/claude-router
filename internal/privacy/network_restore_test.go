@@ -390,6 +390,8 @@ func TestAddressFormsEquivalent(t *testing.T) {
 		}
 		return "masked"
 	}
+	// Private addresses are masked; public and loopback ones stay open.
+	classOutcome := map[string]string{"private": "masked", "public": "open", "loopback": "open"}
 	table := map[string]map[string]bool{}
 	for _, a := range addrs {
 		canonical := a.String()
@@ -405,6 +407,9 @@ func TestAddressFormsEquivalent(t *testing.T) {
 					class = "loopback"
 				case a.IsPrivate() || a.IsLinkLocalUnicast():
 					class = "private"
+				}
+				if want != classOutcome[class] {
+					t.Errorf("%s canonical %q: %s, want %s", class, canonical, want, classOutcome[class])
 				}
 				if table[form] == nil {
 					table[form] = map[string]bool{}
