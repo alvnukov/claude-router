@@ -18,10 +18,9 @@ func CheckUpstream(u *url.URL, allowAny bool, logf func(string, ...any)) error {
 	// Only ASCII letters, digits, dots and hyphens: a non-ASCII letter can lower
 	// to ASCII here and still dial as punycode, and ':' or '%' marks an IPv6
 	// literal whose zone may end in .anthropic.com.
+	const ldhChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"
 	host := u.Hostname()
-	ldh := !strings.ContainsFunc(host, func(r rune) bool {
-		return !('a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || r == '.' || r == '-')
-	})
+	ldh := !strings.ContainsFunc(host, func(r rune) bool { return !strings.ContainsRune(ldhChars, r) })
 	if ldh && u.Scheme == "https" && u.User == nil && strings.HasSuffix(strings.ToLower(host), ".anthropic.com") {
 		return nil
 	}
