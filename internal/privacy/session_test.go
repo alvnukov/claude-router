@@ -48,7 +48,7 @@ func TestMapUnique(t *testing.T) {
 		}
 	})
 	t.Run("bad-key", func(t *testing.T) {
-		p := filepath.Join(s.dir, "broken.jsonl")
+		p := filepath.Join(s.versionDir(prfV2), "broken.jsonl")
 		if err := os.WriteFile(p, []byte(`{"kind":"key","key":"`+hex.EncodeToString([]byte{1})+`"}`+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}

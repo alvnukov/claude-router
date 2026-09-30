@@ -2,12 +2,9 @@ package privacy
 
 import (
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -122,62 +119,38 @@ func TestFixedPointAlarm(t *testing.T) {
 	})
 }
 
-// Through the engine: sessions on the old PRF leave /16 networks of 10/8 in
-// place about 6.7% of the time and raise the alarm; the same traffic on
-// version 2 does not.
+// Through the engine: twelve sessions on version 2, each masking all 256 /16
+// networks of 10/8, stay silent. The old PRF left about 6.7% of them in place;
+// its alarm is shown on the counter itself, since no session runs it now.
 func TestFixedPointAlarmSessions(t *testing.T) {
 	var nets []string
 	for i := range 256 {
 		nets = append(nets, fmt.Sprintf("10.%d.0.0/16", i))
 	}
 	text := strings.Join(nets, " ")
-	for _, version := range []int{prfV1, prfV2} {
-		t.Run(fmt.Sprint("version ", version), func(t *testing.T) {
-			r, err := ParseRules([]byte(`{}`))
-			if err != nil {
-				t.Fatal(err)
-			}
-			next := uint64(2000)
-			e, err := Open(t.TempDir(), r, Options{Home: "/home/testlogin", Hostname: "test-host.local", newKey: func() ([]byte, error) {
-				next++
-				return fixedKey(next), nil
-			}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var lines []string
-			e.counts.logf = func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
-			for i := range 12 {
-				id := fmt.Sprint("s", i)
-				if version == prfV1 {
-					writeV1Session(t, e, id, fixedKey(3000+uint64(i)))
-				}
-				mustMask(t, e, requestBody(id, text))
-			}
-			c := e.Counters()
-			if c.Permuted[KindCIDR4][8] != 12*256 {
-				t.Fatalf("permuted %v", c.Permuted)
-			}
-			f := float64(c.Fixed[KindCIDR4][8])
-			want := version == prfV1
-			if c.Alarms[KindCIDR4] != want || (len(lines) == 1) != want {
-				t.Fatalf("fixed %v of %d (E=%.1f, limit %.1f), alarm %v, lines %q", f, 12*256, 12.0, 12+3*math.Sqrt(12), c.Alarms, lines)
-			}
-		})
-	}
-}
-
-func writeV1Session(t *testing.T, e *Engine, id string, key []byte) {
-	t.Helper()
-	line, err := json.Marshal(map[string]string{"kind": "key", "key": hex.EncodeToString(key)})
+	r, err := ParseRules([]byte(`{}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(e.store.dir, 0o700); err != nil {
+	next := uint64(2000)
+	e, err := Open(t.TempDir(), r, Options{Home: "/home/testlogin", Hostname: "test-host.local", newKey: func() ([]byte, error) {
+		next++
+		return fixedKey(next), nil
+	}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(e.store.dir, id+".jsonl"), append(line, '\n'), 0o600); err != nil {
-		t.Fatal(err)
+	var lines []string
+	e.counts.logf = func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+	for i := range 12 {
+		mustMask(t, e, requestBody(fmt.Sprint("s", i), text))
+	}
+	c := e.Counters()
+	if c.Permuted[KindCIDR4][8] != 12*256 {
+		t.Fatalf("permuted %v", c.Permuted)
+	}
+	if c.Alarms[KindCIDR4] || len(lines) != 0 {
+		t.Fatalf("fixed %d of %d (E=12, limit %.1f), alarm %v, lines %q", c.Fixed[KindCIDR4][8], 12*256, 12+3*math.Sqrt(12), c.Alarms, lines)
 	}
 }
 
@@ -191,5 +164,29 @@ func TestSelfPseudonymRuleRejected(t *testing.T) {
 	}
 	if _, err := Open(t.TempDir(), r, Options{}); err == nil || !strings.Contains(err.Error(), "pseudonym collision") {
 		t.Fatalf("self pseudonym accepted: %v", err)
+	}
+}
+
+// Verdict 3, item 3: a recognised value whose substitution comes back equal to
+// itself leaves as a placeholder, for any class, and the request restores it.
+// Rules refuse such a pseudonym at parse time; a session entry reaches past
+// that check.
+func TestSubstitutionFailureStub(t *testing.T) {
+	e := testEngine(t, corpusRules(t))
+	const email = "olga.smirnova@vasilek.example"
+	req := &Request{engine: e, secrets: make(map[string]string), spellings: make(map[string]string), stats: Stats{Masked: make(map[Kind]int)}}
+	sd := &sessionData{key: fixedKey(1), entries: make(map[string]mapRecord)}
+	m := &mapper{e: e, view: &sessionView{session: sd}, req: req}
+	m.init()
+	sd.entries[entityKey(KindEmail, email)] = mapRecord{Kind: KindEmail, Real: email, Pseudo: email}
+	edits, err := m.maskText("mail "+email, fieldKind{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edits) != 1 || !strings.HasPrefix(edits[0].value, "<secret:email:") {
+		t.Fatalf("value equal to itself left as is: %+v", edits)
+	}
+	if req.secrets[edits[0].value] != email {
+		t.Fatalf("placeholder does not restore: %q", req.secrets[edits[0].value])
 	}
 }

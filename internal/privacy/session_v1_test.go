@@ -5,14 +5,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
-// A session file written before key versions existed keeps its pseudonyms:
-// testdata/session_v1 was recorded on the old code, and masking the same text
-// in that session must give the recorded body byte for byte and restore it.
-func TestSessionV1FixtureStable(t *testing.T) {
+// After the update a session file of version 1 is not read at all:
+// testdata/session_v1 was recorded on the old code. The same session id starts
+// afresh with a new key at the version 2 path, the old file stays untouched,
+// and the addresses of its history pass back byte for byte.
+func TestSessionV1NotRead(t *testing.T) {
 	r, err := ParseRules([]byte(`{"entries":[{"kind":"person","forms":["Zorvex"]}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestSessionV1FixtureStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", "session_v1", "masked.json"))
+	history, err := os.ReadFile(filepath.Join("testdata", "session_v1", "masked.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,30 +34,28 @@ func TestSessionV1FixtureStable(t *testing.T) {
 	}
 	body := requestBody("v1fixture", "hosts 10.8.3.17 10.8.44.201 192.168.5.9 fd00:1234::7 10.8.0.0/16 172.16.4.0/24 02:42:ac:11:00:02")
 	masked, req := mustMask(t, e, body)
-	if !bytes.Equal(masked, want) {
-		t.Fatalf("v1 session pseudonyms changed:\n got %s\nwant %s", masked, want)
+	if bytes.Equal(masked, history) {
+		t.Fatal("v1 session key was read")
 	}
-	back, err := e.UnmaskJSON(req, masked)
-	if err != nil || !bytes.Equal(back, body) {
-		t.Fatalf("v1 session roundtrip changed (%v):\n%s\n%s", err, body, back)
+	if v := req.Stats().Version; v != prfV2 {
+		t.Fatalf("session reported as version %d", v)
 	}
-	if _, err := os.Stat(filepath.Join(e.store.dir, "v2", "v1fixture.jsonl")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("v1 session copied to the version 2 path (%v)", err)
+	if got := e.Counters().Sessions; got[prfV1] != 0 || got[prfV2] != 1 {
+		t.Fatalf("sessions by version = %v, want no v1 session", got)
 	}
-	// New mappings of a v1 session are appended at the version 1 path.
-	mustMask(t, e, requestBody("v1fixture", "Zorvex"))
-	if v := req.Stats().Version; v != prfV1 {
-		t.Fatalf("v1 session reported as version %d", v)
-	}
-	if got := e.Counters().Sessions; len(got) != 1 || got[prfV1] != 1 {
-		t.Fatalf("sessions by version = %v, want one v1 session", got)
-	}
-	after, err := os.ReadFile(filepath.Join(e.store.dir, "v1fixture.jsonl"))
+	v2, err := os.ReadFile(filepath.Join(e.store.dir, "v2", "v1fixture.jsonl"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("session missing at the version 2 path: %v", err)
 	}
-	if !bytes.HasPrefix(after, file) || len(after) == len(file) {
-		t.Fatalf("v1 session not extended in place:\n%s", after)
+	if bytes.HasPrefix(v2, bytes.SplitAfter(file, []byte("\n"))[0]) {
+		t.Fatal("version 2 session reuses the v1 key")
+	}
+	if after, err := os.ReadFile(filepath.Join(e.store.dir, "v1fixture.jsonl")); err != nil || !bytes.Equal(after, file) {
+		t.Fatalf("v1 file changed (%v)", err)
+	}
+	back, err := e.UnmaskJSON(req, history)
+	if err != nil || !bytes.Equal(back, history) {
+		t.Fatalf("v1 history addresses changed (%v):\n%s\n%s", err, history, back)
 	}
 }
 
@@ -83,23 +81,5 @@ func TestSessionV2Path(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(e.store.dir, "v2", "fresh.jsonl")); err != nil {
 		t.Fatalf("new session missing at the version 2 path: %v", err)
-	}
-}
-
-// After a rollback and a roll forward one id can exist in both versions. The
-// store refuses it rather than choosing a key.
-func TestSessionInTwoVersionsRejected(t *testing.T) {
-	r, err := ParseRules([]byte(`{}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := fixedKeyEngine(t, r, fixedKey(1))
-	mustMask(t, e, requestBody("twice", "net 10.8.0.0/16"))
-	line := []byte(`{"kind":"key","key":"` + strings.Repeat("ab", 32) + `"}` + "\n")
-	if err := os.WriteFile(filepath.Join(e.store.dir, "twice.jsonl"), line, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := e.Mask(requestBody("twice", "net 10.8.0.0/16")); err == nil || !strings.Contains(err.Error(), "two versions") {
-		t.Fatalf("session in two versions accepted: %v", err)
 	}
 }

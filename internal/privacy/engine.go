@@ -193,12 +193,12 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 	req := &Request{engine: e, secrets: make(map[string]string), spellings: make(map[string]string), stats: Stats{Scope: "request", Masked: make(map[Kind]int), Unmasked: make(map[Kind]int)}}
 	var masked []byte
 	transform := func(view *sessionView) error {
-		ip, err := newIPMapper(subkey(view.session.key, "ip"), e.rules, view.session.version)
+		ip, err := newIPMapper(subkey(view.session.key, "ip"), e.rules)
 		if err != nil {
 			return err
 		}
 		req.ip = ip
-		req.stats.Version = view.session.version
+		req.stats.Version = prfV2
 		m := &mapper{e: e, view: view, req: req}
 		m.init()
 		// Reserve every detected real value before issuing any pseudonym.
@@ -230,6 +230,7 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 		for _, record := range view.session.entries {
 			req.undo.add(record.Pseudo, matchValue{real: record.Real, kind: record.Kind})
 		}
+		req.issued = &sessionData{key: view.session.key, networks: maps.Clone(view.session.networks)}
 		for pseudo, real := range req.secrets {
 			req.undo.add(pseudo, matchValue{real: real, kind: KindSecret, secret: true})
 		}
@@ -250,7 +251,7 @@ func (e *Engine) Mask(body []byte) ([]byte, *Request, error) {
 		if keyErr != nil {
 			return nil, nil, keyErr
 		}
-		sd := &sessionData{key: key, version: prfV2, entries: make(map[string]mapRecord)}
+		sd := &sessionData{key: key, entries: make(map[string]mapRecord)}
 		err = transform(&sessionView{session: sd, all: map[string]*sessionData{"": sd}})
 	}
 	if err != nil {

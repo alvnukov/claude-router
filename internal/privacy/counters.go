@@ -20,6 +20,9 @@ type Counters struct {
 	// Same counts values of a substitution class left equal to themselves,
 	// explicit rules aside. The expected count is zero.
 	Same map[Kind]int
+	// Unparsed counts values in the shape of their class that do not parse,
+	// each left as a placeholder. The expected count is zero.
+	Unparsed map[Kind]int
 	// Alarms marks the classes whose counts are out of line: for a
 	// permutation class E = Σ n_k·2^-k ≥ 10 and f > E + 3√E, for a
 	// substitution class the first match.
@@ -32,7 +35,7 @@ type counters struct {
 	sessions        map[int]int
 	values          map[[16]byte]bool
 	permuted, fixed map[Kind]map[int]int
-	same            map[Kind]int
+	same, unparsed  map[Kind]int
 	alarms          map[Kind]bool
 	logged          bool
 	logf            func(string, ...any)
@@ -42,7 +45,7 @@ func (c *counters) init() {
 	if c.seen == nil {
 		c.seen, c.sessions, c.values = make(map[string]bool), make(map[int]int), make(map[[16]byte]bool)
 		c.permuted, c.fixed = make(map[Kind]map[int]int), make(map[Kind]map[int]int)
-		c.same, c.alarms = make(map[Kind]int), make(map[Kind]bool)
+		c.same, c.unparsed, c.alarms = make(map[Kind]int), make(map[Kind]int), make(map[Kind]bool)
 	}
 }
 
@@ -102,6 +105,16 @@ func (c *counters) substitution(kind Kind, same bool) {
 	c.alarm(kind)
 }
 
+// unparsedShape records one value in the shape of kind that does not parse;
+// the first one alarms.
+func (c *counters) unparsedShape(kind Kind) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.init()
+	c.unparsed[kind]++
+	c.alarm(kind)
+}
+
 // alarm marks kind and writes one log line per engine, without values.
 func (c *counters) alarm(kind Kind) {
 	c.alarms[kind] = true
@@ -120,7 +133,7 @@ func (c *counters) alarm(kind Kind) {
 func (e *Engine) Counters() Counters {
 	e.counts.mu.Lock()
 	defer e.counts.mu.Unlock()
-	out := Counters{Sessions: maps.Clone(e.counts.sessions), Permuted: map[Kind]map[int]int{}, Fixed: map[Kind]map[int]int{}, Same: maps.Clone(e.counts.same), Alarms: maps.Clone(e.counts.alarms)}
+	out := Counters{Sessions: maps.Clone(e.counts.sessions), Permuted: map[Kind]map[int]int{}, Fixed: map[Kind]map[int]int{}, Same: maps.Clone(e.counts.same), Unparsed: maps.Clone(e.counts.unparsed), Alarms: maps.Clone(e.counts.alarms)}
 	for kind, n := range e.counts.permuted {
 		out.Permuted[kind], out.Fixed[kind] = maps.Clone(n), maps.Clone(e.counts.fixed[kind])
 	}

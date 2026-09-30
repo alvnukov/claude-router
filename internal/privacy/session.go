@@ -32,9 +32,9 @@ type keyRecord struct {
 }
 type sessionData struct {
 	key          []byte
-	version      int
 	entries      map[string]mapRecord
 	fingerprints map[string]bool
+	networks     map[string]bool
 	pending      []mapRecord
 	validBytes   int64
 }
@@ -69,10 +69,11 @@ type sessionView struct {
 	hold    func() func()
 }
 
-// Session files of PRF version 1 stay in the sessions directory, which the
-// code before versions reads; version 2 files live in its v2 subdirectory,
-// which that code skips. A binary rolled back below version 2 therefore starts
-// such a session with a fresh key instead of reading it with the old PRF.
+// Session files of PRF version 1 lie in the sessions directory; they are not
+// read after the update, only pruned and forgotten, so no session continues
+// on the old PRF. Version 2 files live in its v2 subdirectory, which the code
+// before versions skips: a binary rolled back below version 2 starts such a
+// session with a fresh key instead of reading it with the old PRF.
 const (
 	prfV1 = 1
 	prfV2 = 2
@@ -94,21 +95,13 @@ func newSessionStore(home string, now func() time.Time) *sessionStore {
 func (s *sessionStore) readAll() (map[string]*sessionData, error) {
 	all := make(map[string]*sessionData)
 	pseudos := make(map[string]mapRecord)
-	for _, version := range []int{prfV1, prfV2} {
-		if err := s.readDir(version, all, pseudos); err != nil {
-			return nil, err
-		}
-	}
-	return all, nil
-}
-func (s *sessionStore) readDir(version int, all map[string]*sessionData, pseudos map[string]mapRecord) error {
-	dir := s.versionDir(version)
+	dir := s.versionDir(prfV2)
 	files, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return all, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, f := range files {
 		if !strings.HasSuffix(f.Name(), ".jsonl") {
@@ -116,43 +109,39 @@ func (s *sessionStore) readDir(version int, all map[string]*sessionData, pseudos
 		}
 		id := strings.TrimSuffix(f.Name(), ".jsonl")
 		if !sessionIDRE.MatchString(id) {
-			return errors.New("privacy: invalid session filename")
+			return nil, errors.New("privacy: invalid session filename")
 		}
 		path := filepath.Join(dir, f.Name())
 		info, err := os.Lstat(path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !info.Mode().IsRegular() {
-			return errors.New("privacy: session is not a regular file")
+			return nil, errors.New("privacy: session is not a regular file")
 		}
 		if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
-			return errors.New("privacy: session file permissions must be 0600")
+			return nil, errors.New("privacy: session file permissions must be 0600")
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		sd, err := readSession(data)
 		if err != nil {
-			return fmt.Errorf("privacy: session %s: %w", id, err)
+			return nil, fmt.Errorf("privacy: session %s: %w", id, err)
 		}
 		for _, r := range sd.entries {
 			p := strings.ToLower(r.Pseudo)
 			if issued, ok := pseudos[p]; ok {
 				if issued.Kind != r.Kind || issued.Real != r.Real || issued.Pseudo != r.Pseudo || explicitPseudonym(s.rules, r.Kind, r.Real) != r.Pseudo {
-					return errors.New("privacy: duplicate pseudonym in session index")
+					return nil, errors.New("privacy: duplicate pseudonym in session index")
 				}
 			}
 			pseudos[p] = r
 		}
-		if _, ok := all[id]; ok {
-			return fmt.Errorf("privacy: session %s exists in two versions", id)
-		}
-		sd.version = version
 		all[id] = sd
 	}
-	return nil
+	return all, nil
 }
 func readSession(data []byte) (*sessionData, error) {
 	end := bytes.LastIndexByte(data, '\n')
@@ -186,6 +175,17 @@ func readSession(data []byte) (*sessionData, error) {
 			sd.fingerprints[r.Fingerprint] = true
 			continue
 		}
+		if networkKind(r.Kind) {
+			digest, err := hex.DecodeString(r.Fingerprint)
+			if err != nil || len(digest) != 32 || r.Real != "" || r.Pseudo != "" {
+				return nil, errors.New("invalid network fingerprint")
+			}
+			if sd.networks == nil {
+				sd.networks = make(map[string]bool)
+			}
+			sd.networks[r.Fingerprint] = true
+			continue
+		}
 		if r.Real == "" || r.Pseudo == "" || !mappedKind(r.Kind) {
 			return nil, errors.New("invalid session mapping")
 		}
@@ -203,6 +203,30 @@ func mappedKind(k Kind) bool {
 		return true
 	}
 	return false
+}
+func networkKind(k Kind) bool {
+	switch k {
+	case KindIPv4, KindIPv6, KindCIDR4, KindCIDR6, KindMAC:
+		return true
+	}
+	return false
+}
+
+// issueNetwork records a network pseudonym the session issued. Neither the
+// value nor its pseudonym reaches the file, only a keyed fingerprint next to
+// the class: restore inverts the permutation for a pseudonym in the set.
+func (s *sessionData) issueNetwork(kind Kind, pseudo string) {
+	digest := s.fingerprint("network:" + string(kind) + ":" + pseudo)
+	if s.networks == nil {
+		s.networks = make(map[string]bool)
+	}
+	if !s.networks[digest] {
+		s.networks[digest] = true
+		s.pending = append(s.pending, mapRecord{Kind: kind, Fingerprint: digest})
+	}
+}
+func (s *sessionData) issuedNetwork(kind Kind, pseudo string) bool {
+	return s != nil && s.networks[s.fingerprint("network:"+string(kind)+":"+pseudo)]
 }
 func (s *sessionStore) locked(fn func() error) error {
 	s.shared.Lock()
@@ -249,7 +273,7 @@ func (s *sessionStore) transaction(id string, resume bool, fn func(*sessionView)
 			if len(key) != 32 {
 				return errors.New("privacy: invalid generated key")
 			}
-			sd = &sessionData{key: key, version: prfV2, entries: make(map[string]mapRecord)}
+			sd = &sessionData{key: key, entries: make(map[string]mapRecord)}
 			all[id] = sd
 		}
 		hold := func() func() {
@@ -269,7 +293,7 @@ func (s *sessionStore) transaction(id string, resume bool, fn func(*sessionView)
 		if err := fn(&sessionView{sd, all, hold}); err != nil {
 			return err
 		}
-		path := filepath.Join(s.versionDir(sd.version), id+".jsonl")
+		path := filepath.Join(s.versionDir(prfV2), id+".jsonl")
 		if fresh {
 			line, _ := json.Marshal(keyRecord{"key", hex.EncodeToString(sd.key)})
 			line = append(line, '\n')

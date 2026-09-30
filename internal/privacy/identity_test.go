@@ -86,7 +86,7 @@ func TestAliasSubstringNotRewritten(t *testing.T) {
 
 func TestAllowedNetworkCollisionRejected(t *testing.T) {
 	r := corpusRules(t)
-	m, err := newIPMapper(subkey(testIPKey, "ip"), r, prfV2)
+	m, err := newIPMapper(subkey(testIPKey, "ip"), r)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,12 +25,13 @@ type ipMapper struct {
 	blocks []netBlock
 }
 
-func newIPMapper(key []byte, r *Rules, version int) (*ipMapper, error) {
-	newPan := cryptopan.NewV2
-	if version == prfV1 {
-		newPan = cryptopan.New
+// newIPMapper checks the PRF on its known answers before it takes the key, so
+// a broken build never masks.
+func newIPMapper(key []byte, r *Rules) (*ipMapper, error) {
+	if err := cryptopan.SelfTest(); err != nil {
+		return nil, err
 	}
-	pan, err := newPan(key)
+	pan, err := cryptopan.NewV2(key)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +70,33 @@ func (m *ipMapper) permute(b []byte, prefix int, inverse bool) []byte {
 func (m *ipMapper) maskAddr(a netip.Addr) (netip.Addr, bool)   { return m.address(a, false) }
 func (m *ipMapper) unmaskAddr(a netip.Addr) (netip.Addr, bool) { return m.address(a, true) }
 
+// embedded4 returns the IPv4 address an IPv6 one carries, mapped
+// (::ffff:a.b.c.d) or compatible (::a.b.c.d, but not :: or ::1), in whatever
+// notation it is written (decision dca157c). Such an address is masked exactly
+// as the bare IPv4.
+func embedded4(a netip.Addr) (netip.Addr, bool) {
+	if a.Is4In6() {
+		return a.Unmap(), true
+	}
+	b := a.As16()
+	if a.Is6() && !a.IsUnspecified() && !a.IsLoopback() && [12]byte(b[:12]) == [12]byte{} {
+		return netip.AddrFrom4([4]byte(b[12:])), true
+	}
+	return a, false
+}
+
+// rewrap puts v4 back into the IPv6 form of a.
+func rewrap(a, v4 netip.Addr) netip.Addr {
+	b := a.As16()
+	copy(b[12:], v4.AsSlice())
+	return netip.AddrFrom16(b).WithZone(a.Zone())
+}
+
 func (m *ipMapper) address(a netip.Addr, inverse bool) (netip.Addr, bool) {
+	if v4, ok := embedded4(a); ok {
+		out, ok := m.address(v4, inverse)
+		return rewrap(a, out), ok
+	}
 	for _, block := range m.blocks {
 		from, to := block.Real, block.Pseudo
 		if inverse {
@@ -97,6 +124,10 @@ func (m *ipMapper) maskPrefix(p netip.Prefix) (netip.Prefix, bool)   { return m.
 func (m *ipMapper) unmaskPrefix(p netip.Prefix) (netip.Prefix, bool) { return m.prefix(p, true) }
 
 func (m *ipMapper) prefix(p netip.Prefix, inverse bool) (netip.Prefix, bool) {
+	if v4, ok := embedded4(p.Addr()); ok && p.Bits() >= 96 {
+		out, ok := m.prefix(netip.PrefixFrom(v4, p.Bits()-96), inverse)
+		return netip.PrefixFrom(rewrap(p.Addr(), out.Addr()), out.Bits()+96), ok
+	}
 	for _, b := range m.blocks {
 		from := b.Real
 		if inverse {
@@ -143,6 +174,9 @@ func (m *ipMapper) freeBits(value string) (k int, under, ok bool) {
 		a, bits = a.WithZone(""), a.BitLen()
 	} else {
 		return 0, false, false
+	}
+	if v4, ok := embedded4(a); ok && bits >= 96 {
+		a, bits = v4, bits-96
 	}
 	for _, b := range m.blocks {
 		if b.Real.Contains(a) && bits >= b.Real.Bits() {

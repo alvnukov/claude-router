@@ -32,6 +32,7 @@ type Request struct {
 	secrets, spellings map[string]string
 	rawSpellings       map[string][]byte
 	undo               trieNode
+	issued             *sessionData
 	stats              Stats
 	release            func()
 	closed             bool
@@ -72,6 +73,7 @@ func (r *Request) Close() {
 	r.spellings = nil
 	r.rawSpellings = nil
 	r.undo = trieNode{}
+	r.issued = nil
 	r.ip = nil
 	r.mu.Unlock()
 	if release != nil {
@@ -169,10 +171,12 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 			if _, seen := r.spellings[s.Value]; supportedOnly && !seen {
 				continue
 			}
-			value, _ = mapNetwork(r.ip, s.Value, true)
-			if _, seen := r.spellings[s.Value]; field.toolInput && !seen && value != s.Value {
-				return nil, correctionError()
+			// Only a whole token this session issued comes back; a value
+			// merely shaped like a pseudonym passes byte for byte.
+			if !wholeToken(text, s) || !r.issued.issuedNetwork(s.Kind, s.Value) {
+				continue
 			}
+			value, _ = mapNetwork(r.ip, s.Value, true)
 		}
 		if original, ok := r.spellings[s.Value]; ok {
 			value = original
@@ -190,4 +194,37 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 		return nil, err
 	}
 	return edits, nil
+}
+
+// wholeToken reports whether the span stands alone in its class, so that
+// 10.23.4.5 is not taken from inside 10.23.4.55 (decision 997b362). A
+// neighbour extends the token when it is a character of the class, or a
+// separator of the class with such a character beyond it; the dot that ends a
+// sentence and the colon before a port leave an address whole.
+func wholeToken(text string, s Span) bool {
+	digit := func(b byte) bool { return b >= '0' && b <= '9' }
+	char, beyond := digit, map[byte]func(byte) bool{'.': digit}
+	switch s.Kind {
+	case KindCIDR4:
+		beyond['/'] = digit
+	case KindIPv6, KindCIDR6:
+		char, beyond = isHex, map[byte]func(byte) bool{':': func(b byte) bool { return isHex(b) || b == ':' }}
+		if s.Kind == KindCIDR6 {
+			beyond['/'] = digit
+		}
+	case KindMAC:
+		char, beyond = isHex, map[byte]func(byte) bool{':': isHex, '-': isHex}
+	}
+	extends := func(i, step int) bool {
+		if i < 0 || i >= len(text) {
+			return false
+		}
+		if char(text[i]) {
+			return true
+		}
+		next, sep := beyond[text[i]]
+		j := i + step
+		return sep && j >= 0 && j < len(text) && next(text[j])
+	}
+	return !extends(s.Start-1, -1) && !extends(s.End, 1)
 }

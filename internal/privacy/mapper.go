@@ -188,11 +188,11 @@ func (m *mapper) maskText(text string, field fieldKind) ([]textEdit, error) {
 			original = k.value.real
 			value, err = m.mapValue(original, s.Kind)
 		} else {
-			switch s.Kind {
-			case KindIPv4, KindIPv6, KindCIDR4, KindCIDR6, KindMAC:
+			switch {
+			case networkKind(s.Kind):
 				network = true
 				value, err = m.mapNetwork(s)
-			case KindSecret:
+			case s.Kind == KindSecret:
 				m.view.session.rememberSecret(s.Value)
 				value, err = m.placeholder(secretFamily(s.Value), s.Value)
 			default:
@@ -204,6 +204,13 @@ func (m *mapper) maskText(text string, field fieldKind) ([]textEdit, error) {
 		}
 		if !network {
 			m.e.counts.substitution(s.Kind, value == original)
+			// A recognised value never leaves as itself: a substitution
+			// that failed leaves as a placeholder instead.
+			if value == original {
+				if value, err = m.placeholder(string(s.Kind), original); err != nil {
+					return nil, err
+				}
+			}
 		}
 		if value != s.Value && m.e.detectors.allowed(value) {
 			return nil, &RejectError{Reason: "pseudonym collides with an allowed value"}
@@ -232,8 +239,13 @@ func (m *mapper) placeholder(family, value string) (string, error) {
 
 // mapNetwork masks an address, a network or a MAC. A value under the
 // threshold leaves as a placeholder, and so does one no block handles
-// (counted as unhandled) rather than leave equal to itself.
+// (counted as unhandled) rather than leave equal to itself, and one in the
+// shape of its class that does not parse (counted as unparsed).
 func (m *mapper) mapNetwork(s Span) (string, error) {
+	if unparsedAddress(s.Value) {
+		m.e.counts.unparsedShape(s.Kind)
+		return m.placeholder(string(s.Kind), s.Value)
+	}
 	k, under, ok := m.req.ip.freeBits(s.Value)
 	value := s.Value
 	if ok && !under {
@@ -246,6 +258,11 @@ func (m *mapper) mapNetwork(s Span) (string, error) {
 		return m.placeholder(string(s.Kind), s.Value)
 	}
 	m.e.counts.permutation(s.Kind, k, value == s.Value, m.view.session.fingerprint(string(s.Kind)+":"+s.Value))
+	// A fixed point stays out of the set: it passes back as is, which is
+	// its original.
+	if value != s.Value {
+		m.view.session.issueNetwork(s.Kind, value)
+	}
 	return value, nil
 }
 

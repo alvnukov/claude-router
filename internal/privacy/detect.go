@@ -126,6 +126,64 @@ func networkSpan(s string) (netip.Addr, Kind, bool) {
 	}
 	return a, k, true
 }
+
+var macShapeRE = regexp.MustCompile(`^(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$`)
+
+// addressShape returns the class a value has the shape of (decision 0432ab7):
+// IPv4 is four groups of up to three digits; IPv6 has "::", exactly seven
+// colons, or six with an IPv4 shape after the last (decision dca157c); a MAC
+// is six groups of two hex digits split by ':' or '-'; a network is an
+// address shape, '/' and a number. A time, a version or a port has none.
+func addressShape(s string) (Kind, bool) {
+	if macShapeRE.MatchString(s) {
+		return KindMAC, true
+	}
+	addr, bits, network := strings.Cut(s, "/")
+	if network && (bits == "" || strings.Trim(bits, "0123456789") != "") {
+		return "", false
+	}
+	addr, _, _ = strings.Cut(addr, "%")
+	colons := strings.Count(addr, ":")
+	switch {
+	case ipv4Shape(addr) && network:
+		return KindCIDR4, true
+	case ipv4Shape(addr):
+		return KindIPv4, true
+	case strings.Contains(addr, "::") || colons == 7 || colons == 6 && ipv4Shape(addr[strings.LastIndexByte(addr, ':')+1:]):
+		if network {
+			return KindCIDR6, true
+		}
+		return KindIPv6, true
+	}
+	return "", false
+}
+
+func ipv4Shape(s string) bool {
+	groups := strings.Split(s, ".")
+	if len(groups) != 4 {
+		return false
+	}
+	for _, g := range groups {
+		if g == "" || len(g) > 3 || strings.Trim(g, "0123456789") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// unparsedAddress reports a value in the shape of an address class that does
+// not parse. It leaves as a placeholder and is counted, never passed.
+func unparsedAddress(s string) bool {
+	if _, _, ok := networkSpan(s); ok {
+		return false
+	}
+	if _, ok := parseMAC(s); ok {
+		return false
+	}
+	_, ok := addressShape(s)
+	return ok
+}
+
 func (d regexDetector) Detect(text string) []Span {
 	p := d.policy
 	if p == nil {
@@ -194,18 +252,25 @@ func (d regexDetector) Network(text string) []Span {
 					start += i + 1
 				}
 			}
+			// The IPv6 pattern takes the dots that end a sentence; they are
+			// not part of the address.
+			for end > start && text[end-1] == '.' {
+				end--
+			}
 			if !wordBoundary(text, start, end, false) || start > 0 && text[start-1] == '.' || end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
 				continue
 			}
 			value := text[start:end]
 			if _, k, ok := networkSpan(value); ok {
 				out = append(out, Span{start, end, k, value})
+			} else if k, ok := addressShape(value); ok && k != KindMAC {
+				out = append(out, Span{start, end, k, value})
 			}
 		}
 	}
 	for _, v := range p.mac.FindAllStringIndex(text, -1) {
 		s := text[v[0]:v[1]]
-		if _, ok := parseMAC(s); ok && wordBoundary(text, v[0], v[1], false) {
+		if _, ok := parseMAC(s); (ok || unparsedAddress(s)) && wordBoundary(text, v[0], v[1], false) {
 			out = append(out, Span{v[0], v[1], KindMAC, s})
 		}
 	}

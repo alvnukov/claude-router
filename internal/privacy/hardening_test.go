@@ -40,7 +40,13 @@ func TestToolCorrectionInsteadOfRepair(t *testing.T) {
 	masked, req := mustMask(t, e, requestBody("correction", "password=FAKE-password-1234\nРомашка 10.1.2.3"))
 	text, _ := lookupString(masked, "system")
 	secret := strings.TrimPrefix(strings.Split(text, "\n")[0], "password=")
-	for _, invalid := range []string{"<secret:credential:00000000>", strings.ToUpper(secret), base64.StdEncoding.EncodeToString([]byte(secret)), "10.123.45.67"} {
+	// An address the session did not issue is not a pseudonym: it passes as
+	// is, in tool input as well.
+	b, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "tool_use", "input": map[string]string{"command": "ping 10.123.45.67"}}}})
+	if out, err := e.UnmaskJSON(req, b); err != nil || !bytes.Equal(out, b) {
+		t.Errorf("foreign address in tool input: %s, %v", out, err)
+	}
+	for _, invalid := range []string{"<secret:credential:00000000>", strings.ToUpper(secret), base64.StdEncoding.EncodeToString([]byte(secret))} {
 		b, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "tool_use", "input": map[string]string{"command": invalid}}}})
 		out, err := e.UnmaskJSON(req, b)
 		if err == nil || out != nil {
