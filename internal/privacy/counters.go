@@ -97,7 +97,7 @@ func (c *counters) permutation(kind Kind, k int, fixed bool, digest string) {
 		f += float64(c.fixed[kind][k])
 	}
 	if e >= 10 && f > e+3*math.Sqrt(e) {
-		c.alarm(kind)
+		c.alarm(kind, fixedLine)
 	}
 }
 
@@ -111,7 +111,7 @@ func (c *counters) substitution(kind Kind, same bool) {
 	defer c.mu.Unlock()
 	c.init()
 	c.same[kind]++
-	c.alarm(kind)
+	c.alarm(kind, fixedLine)
 }
 
 // unparsedShape records one value in the shape of kind that does not parse;
@@ -125,11 +125,14 @@ func (c *counters) unparsedShape(kind Kind, ambiguous bool) {
 		return
 	}
 	c.unparsed[kind]++
-	c.alarm(kind)
+	c.alarm(kind, "privacy: a value in the shape of class %s does not parse; see Engine.Counters")
 }
 
-// alarm marks kind and writes one log line per engine, without values.
-func (c *counters) alarm(kind Kind) {
+const fixedLine = "privacy: pseudonyms equal to originals out of line, class %s; see Engine.Counters"
+
+// alarm marks kind and writes one log line per engine, in the words of its
+// cause, without values.
+func (c *counters) alarm(kind Kind, line string) {
 	c.alarms[kind] = true
 	if c.logged {
 		return
@@ -139,7 +142,7 @@ func (c *counters) alarm(kind Kind) {
 	if logf == nil {
 		logf = log.Printf
 	}
-	logf("privacy: pseudonyms equal to originals out of line, class %s; see Engine.Counters", kind)
+	logf(line, kind)
 }
 
 // Counters returns a copy of the running totals.

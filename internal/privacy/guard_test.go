@@ -12,6 +12,26 @@ import (
 
 var placeholderRE = regexp.MustCompile(`<secret:[a-z0-9]+:[a-f0-9]{8}>`)
 
+// The alarm's one line names its cause: a value that does not parse is not
+// reported as a pseudonym equal to its original.
+func TestAlarmLineNamesCause(t *testing.T) {
+	for _, c := range []struct {
+		raise func(*counters)
+		want  string
+	}{
+		{func(c *counters) { c.unparsedShape(KindIPv4, false) }, "privacy: a value in the shape of class ipv4 does not parse; see Engine.Counters"},
+		{func(c *counters) { c.substitution(KindEmail, true) }, "privacy: pseudonyms equal to originals out of line, class email; see Engine.Counters"},
+	} {
+		var cs counters
+		var lines []string
+		cs.logf = func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+		c.raise(&cs)
+		if len(lines) != 1 || lines[0] != c.want {
+			t.Errorf("alarm lines %q, want %q", lines, c.want)
+		}
+	}
+}
+
 // A PRF that fails its known answers refuses the key: nothing is masked with
 // it and nothing leaves, on Mask and on Detect alike.
 func TestBrokenPRFRefused(t *testing.T) {
