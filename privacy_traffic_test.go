@@ -102,13 +102,11 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 			return `{"model":"` + model + `","max_tokens":100,` + controls + `,"messages":[` + messages + `]}`
 		}
 		// The stub answers as Anthropic does: a thinking block without a
-		// signature is refused, and with thinking on, the turn in progress must
-		// begin with thinking.
+		// signature is refused. It no longer demands that the turn in progress
+		// begin with thinking: a live probe on 2026-09-30 got 200 for enabled
+		// thinking and a turn opening with tool_use on sonnet and opus 5.5.
 		refuse := func(wire []byte) string {
 			var req struct {
-				Thinking struct {
-					Type string `json:"type"`
-				} `json:"thinking"`
 				Messages []struct {
 					Role    string          `json:"role"`
 					Content json.RawMessage `json:"content"`
@@ -117,39 +115,13 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 			if err := json.Unmarshal(wire, &req); err != nil {
 				return "invalid request"
 			}
-			blocks := make([][]map[string]json.RawMessage, len(req.Messages))
-			result := func(i int) bool {
-				for _, b := range blocks[i] {
-					if string(b["type"]) == `"tool_result"` {
-						return true
-					}
-				}
-				return false
-			}
-			turn := -1
-			for i, m := range req.Messages {
-				_ = json.Unmarshal(m.Content, &blocks[i]) // a string has no blocks
-				for _, b := range blocks[i] {
+			for _, m := range req.Messages {
+				var blocks []map[string]json.RawMessage
+				_ = json.Unmarshal(m.Content, &blocks) // a string has no blocks
+				for _, b := range blocks {
 					if s := string(b["signature"]); m.Role == "assistant" && string(b["type"]) == `"thinking"` && (s == "" || s == "null" || s == `""`) {
 						return "thinking block without signature"
 					}
-				}
-				if m.Role == "user" && !result(i) {
-					turn = i
-				}
-			}
-			last := len(req.Messages) - 1
-			if req.Thinking.Type != "enabled" || last < 0 || req.Messages[last].Role != "user" || !result(last) {
-				return ""
-			}
-			// Stricter than the docs: there the API quietly turns thinking off
-			// for such a turn rather than refuse it.
-			for i := turn + 1; i < last; i++ {
-				if req.Messages[i].Role == "assistant" {
-					if len(blocks[i]) == 0 || (string(blocks[i][0]["type"]) != `"thinking"` && string(blocks[i][0]["type"]) != `"redacted_thinking"`) {
-						return "the turn in progress must begin with thinking"
-					}
-					break
 				}
 			}
 			return ""
@@ -242,14 +214,14 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 							}
 						}
 					}},
-					{"open turn after Codex tool_use", "/v1/messages", request("test", open), 1, func(t *testing.T, got [][]byte) {
-						if !bytes.Contains(got[0], []byte(`"thinking":{"type":"disabled"}`)) || bytes.Contains(got[0], []byte(`"context_management"`)) || !bytes.Contains(got[0], []byte(`[`+toolUse+`]`)) {
-							t.Errorf("open turn not disabled: %s", got[0])
+					{"open turn after Codex tool_use keeps thinking", "/v1/messages", request("test", open), 1, func(t *testing.T, got [][]byte) {
+						if !bytes.Contains(got[0], []byte(`"thinking":{"type":"enabled"`)) || !bytes.Contains(got[0], []byte(`"context_management"`)) || !bytes.Contains(got[0], []byte(`[`+toolUse+`]`)) {
+							t.Errorf("open turn lost its thinking controls: %s", got[0])
 						}
 					}},
-					{"open turn continues", "/v1/messages", request("test", open+more), 1, func(t *testing.T, got [][]byte) {
-						if !bytes.Contains(got[0], []byte(`"thinking":{"type":"disabled"}`)) || bytes.Contains(got[0], []byte(`"context_management"`)) {
-							t.Errorf("continuation not disabled: %s", got[0])
+					{"open turn continues with thinking", "/v1/messages", request("test", open+more), 1, func(t *testing.T, got [][]byte) {
+						if !bytes.Contains(got[0], []byte(`"thinking":{"type":"enabled"`)) || !bytes.Contains(got[0], []byte(`"context_management"`)) {
+							t.Errorf("continuation lost its thinking controls: %s", got[0])
 						}
 					}},
 					{"signed only", "/v1/messages", signedOnly, 1, func(t *testing.T, got [][]byte) {
