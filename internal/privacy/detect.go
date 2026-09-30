@@ -257,15 +257,21 @@ func (d regexDetector) Network(text string) []Span {
 			for end > start && text[end-1] == '.' {
 				end--
 			}
-			if !wordBoundary(text, start, end, false) || start > 0 && text[start-1] == '.' || end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
+			value := text[start:end]
+			_, k, ok := networkSpan(value)
+			if !ok {
+				k, ok = addressShape(value)
+				ok = ok && k != KindMAC
+			}
+			// A dot before an IPv4 value joins a longer value only after a
+			// digit; before IPv6 it is always a boundary. Unlike restore, a
+			// colon after a name does not drop an IPv6 here: masking it is
+			// the safe side.
+			v4 := k == KindIPv4 || k == KindCIDR4
+			if !ok || !wordBoundary(text, start, end, false) || v4 && start > 1 && text[start-1] == '.' && text[start-2] >= '0' && text[start-2] <= '9' || end+1 < len(text) && text[end] == '.' && text[end+1] >= '0' && text[end+1] <= '9' {
 				continue
 			}
-			value := text[start:end]
-			if _, k, ok := networkSpan(value); ok {
-				out = append(out, Span{start, end, k, value})
-			} else if k, ok := addressShape(value); ok && k != KindMAC {
-				out = append(out, Span{start, end, k, value})
-			}
+			out = append(out, Span{start, end, k, value})
 		}
 	}
 	for _, v := range p.mac.FindAllStringIndex(text, -1) {

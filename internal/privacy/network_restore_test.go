@@ -248,6 +248,37 @@ func TestNetworkBeforeDots(t *testing.T) {
 	}
 }
 
+// A dot before an address joins it to a longer value only when a character of
+// the class stands before the dot; after a name it is a boundary, and for IPv6
+// it always is. The same rule decides what is masked and what comes back.
+func TestNetworkAfterDot(t *testing.T) {
+	r, err := ParseRules([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := fixedKeyEngine(t, r, fixedKey(1))
+	for _, c := range []struct{ in, addr string }{
+		{"host.10.1.2.3", "10.1.2.3"},
+		{"x.fd00::1", "fd00::1"},
+		{"see 1.fd00::1 now", "fd00::1"},
+	} {
+		body := requestBody("dot", c.in)
+		masked, req := mustMask(t, e, body)
+		if bytes.Contains(masked, []byte(c.addr)) {
+			t.Errorf("%q left in clear: %s", c.addr, masked)
+		}
+		back, err := e.UnmaskJSON(req, masked)
+		if err != nil || !bytes.Equal(back, body) {
+			t.Errorf("%q not restored: %s, %v", c.in, back, err)
+		}
+	}
+	// Five dotted numbers are one longer value, not an address.
+	body := requestBody("dot", "build 1.10.1.2.3")
+	if masked, _ := mustMask(t, e, body); !bytes.Equal(masked, body) {
+		t.Errorf("longer value changed: %s", masked)
+	}
+}
+
 // An IPv4-mapped IPv6 address is masked exactly as the bare IPv4 inside it:
 // the same block, the same pseudonym, a public one stays open. It used to
 // leave in clear: no block holds the ::ffff: form.
