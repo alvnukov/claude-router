@@ -25,6 +25,10 @@ func TestCheckUpstream(t *testing.T) {
 		{"userinfo", "https://user:pw@api.anthropic.com", false, false},
 		{"empty host", "https://", false, false},
 		{"no scheme", "api.anthropic.com", false, false},
+		{"opaque", "https:api.anthropic.com", false, false},
+		// U+0130 lowers to an ASCII i, but the transport dials its punycode.
+		{"non-ASCII letter that lowers to ASCII", "https://api.anthropİc.com", false, false},
+		{"IPv6 zone ending in anthropic.com", "https://[::1%25x.anthropic.com]", false, false},
 		{"bypass admits a local stub", "http://127.0.0.1:1", true, true},
 	}
 	for _, c := range cases {
