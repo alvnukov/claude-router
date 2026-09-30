@@ -11,10 +11,10 @@ import (
 // comes back as the same slice; otherwise the blocks go, a message left empty
 // goes with them, and everything else keeps its bytes.
 //
-// A signature cannot be made up, so when thinking is on and the turn in
-// progress no longer begins with thinking, thinking is turned off for the
-// request, as the API itself does when thinking is toggled mid-turn. Adaptive
-// thinking carries no such requirement and is left alone.
+// With thinking on, the turn in progress must begin with thinking, and a
+// signature cannot be made up. So when that turn no longer begins with
+// thinking, thinking is turned off for the request. Adaptive thinking carries
+// no such requirement and is left alone.
 func DropUnsignedThinking(body []byte) []byte {
 	root, err := scanJSON(body)
 	if err != nil || root.kind != '{' {

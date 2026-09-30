@@ -181,12 +181,15 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 		}
 		seedTwoConnections(t)
 		var codexCalls atomic.Int32
+		var codexBody atomic.Value
 		codex := func(next http.RoundTripper) http.RoundTripper {
 			return usageTransport(func(r *http.Request) (*http.Response, error) {
 				if r.URL.Host != "chatgpt.com" {
 					return next.RoundTrip(r)
 				}
 				codexCalls.Add(1)
+				b, _ := io.ReadAll(r.Body)
+				codexBody.Store(b)
 				return usageResponse(200, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"codex reasoning\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"codex answer\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r-codex\",\"status\":\"completed\"}}\n\n"), nil
 			})
 		}
@@ -348,6 +351,9 @@ func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
 					got := drain()
 					if n := codexCalls.Load() - calls; n != 2 || len(got) != 1 || bytes.Contains(got[0], []byte("codex reasoning")) {
 						t.Fatalf("Codex calls %d, want 2; Anthropic got %q", n, got)
+					}
+					if last, _ := codexBody.Load().([]byte); len(last) == 0 || bytes.Contains(last, []byte("codex reasoning")) || bytes.Contains(last, []byte("claude reasoning")) || bytes.Contains(last, []byte("sig-1")) {
+						t.Fatalf("thinking reached Codex: %s", last)
 					}
 				})
 			})
