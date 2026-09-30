@@ -64,7 +64,10 @@ func (c *counters) session(id string, version int) {
 
 // permutation records one masked value of a permutation class with k free bits.
 // digest is the value's keyed fingerprint in its session: history is masked
-// again on every request, and a repeat is not a new observation.
+// again on every request, and a repeat is not a new observation. The alarm is
+// blind until E >= 10, that is 10·2^k masked values of a class: about 655
+// thousand at k = 16 and 168 million at k = 24; a broken permutation is not
+// visible to it before that.
 func (c *counters) permutation(kind Kind, k int, fixed bool, digest string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

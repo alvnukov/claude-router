@@ -155,7 +155,9 @@ func (m *ipMapper) prefix(p netip.Prefix, inverse bool) (netip.Prefix, bool) {
 // minFreeBits is the threshold k >= 8. A pseudonym inside a masked class
 // keeps the class open and hides the k = L - bits(class) bits after it, no
 // more; below a whole octet the value would be guessed better than 1/256, so
-// it leaves as a placeholder without Crypto-PAn.
+// it leaves as a placeholder without Crypto-PAn. The trade-off: at least 8
+// bits are hidden; how guessable a value is from a dictionary inside the
+// prefix it keeps is neither measured nor promised.
 const minFreeBits = 8
 
 // freeBits returns the k bits the pseudonym of value hides: the length after
