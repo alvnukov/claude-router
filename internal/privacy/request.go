@@ -213,7 +213,7 @@ func wholeToken(text string, s Span) bool {
 			beyond['/'] = digit
 		}
 	case KindMAC:
-		char, beyond = isHex, map[byte]func(byte) bool{':': isHex, '-': isHex}
+		char, beyond = isHex, map[byte]func(byte) bool{':': isHex, '-': isHex, '.': isHex}
 	}
 	extends := func(i, step int) bool {
 		if i < 0 || i >= len(text) {

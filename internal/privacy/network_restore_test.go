@@ -115,6 +115,20 @@ func TestRestoreWholeTokenOnly(t *testing.T) {
 			t.Errorf("pseudonym restored inside %q: %q", v, got)
 		}
 	}
+	// A MAC written in dotted groups: the dot joins a longer value too.
+	masked, dotted := mustMask(t, e, requestBody("net", "aabb.ccdd.eeff"))
+	var mac struct{ System string }
+	if err := json.Unmarshal(masked, &mac); err != nil || mac.System == "aabb.ccdd.eeff" || strings.Count(mac.System, ".") != 2 {
+		t.Fatalf("dotted MAC masked to %q, %v", mac.System, err)
+	}
+	for _, v := range []string{mac.System + ".0011", "0011." + mac.System} {
+		if got := unmaskSystem(t, e, dotted, "x "+v+" y"); got != "x "+v+" y" {
+			t.Errorf("dotted MAC pseudonym restored inside %q: %q", v, got)
+		}
+	}
+	if got := unmaskSystem(t, e, dotted, "x "+mac.System+". y"); got != "x aabb.ccdd.eeff. y" {
+		t.Errorf("dotted MAC before a sentence dot: %q", got)
+	}
 	// A separator without a character of the class beyond it ends the token:
 	// the dot of a sentence, the colon before a port.
 	for _, c := range []struct{ in, want string }{
