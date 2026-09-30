@@ -30,11 +30,11 @@ func (ctx *Cryptopan) DeanonymizeBytes(b []byte) []byte {
 	copy(obfsAddr[:], b)
 	copy(input[:], ctx.pad[:])
 
-	ctx.aesImpl.Encrypt(output[:], input[:])
+	ctx.encrypt(&output, &input, 0)
 	origAddr.SetBit(0, obfsAddr.Bit(0)^output.Bit(0))
 	for pos := uint(1); pos < addrBits; pos++ {
 		input.SetBit(pos-1, origAddr.Bit(pos-1))
-		ctx.aesImpl.Encrypt(output[:], input[:])
+		ctx.encrypt(&output, &input, pos)
 		origAddr.SetBit(pos, obfsAddr.Bit(pos)^output.Bit(0))
 	}
 	return append([]byte(nil), origAddr[:len(b)]...)

@@ -26,8 +26,8 @@
  */
 
 // Vendored from https://github.com/Yawning/cryptopan at commit 65bca51288fe
-// (module version v0.0.0-20170504040949-65bca51288fe), unchanged but for this
-// note. inverse.go is ours.
+// (module version v0.0.0-20170504040949-65bca51288fe). Ours: this note, the
+// version 2 PRF input (distinct, encrypt, NewV2) and inverse.go.
 
 // Package cryptopan implements the Crypto-PAn prefix-preserving IP address
 // sanitization algorithm as specified by J. Fan, J. Xu, M. Ammar, and S. Moon.
@@ -102,6 +102,22 @@ func (v *bitvector) Bit(idx uint) uint {
 type Cryptopan struct {
 	aesImpl cipher.Block
 	pad     bitvector
+	// distinct selects version 2: step pos inverts pad bit pos in the AES
+	// input. In version 1 an address bit equal to its pad bit leaves the
+	// input as it was, so the pad bit repeats: a zero mask on k bits has
+	// probability 1/2*(3/4)^(k-1), not 2^-k. With the inversion, steps i < j
+	// always differ in bit j.
+	distinct bool
+}
+
+func (ctx *Cryptopan) encrypt(output, input *bitvector, pos uint) {
+	if !ctx.distinct {
+		ctx.aesImpl.Encrypt(output[:], input[:])
+		return
+	}
+	in := *input
+	in.SetBit(pos, 1^in.Bit(pos))
+	ctx.aesImpl.Encrypt(output[:], in[:])
 }
 
 // Anonymize anonymizes the provided IP address with the Crypto-PAn algorithm.
@@ -130,7 +146,7 @@ func (ctx *Cryptopan) anonymize(addr net.IP) []byte {
 	copy(input[:], ctx.pad[:])
 
 	// The first bit does not take any bits from orig_addr.
-	ctx.aesImpl.Encrypt(output[:], input[:])
+	ctx.encrypt(&output, &input, 0)
 	toXor.SetBit(0, output.Bit(0))
 
 	// The rest of the one time pad is build by copying orig_addr into the AES
@@ -140,7 +156,7 @@ func (ctx *Cryptopan) anonymize(addr net.IP) []byte {
 		input.SetBit(pos-1, origAddr.Bit(pos-1))
 
 		// ECB-AES128 the input, only one bit of output is used per iteration.
-		ctx.aesImpl.Encrypt(output[:], input[:])
+		ctx.encrypt(&output, &input, pos)
 
 		// Note: Per David Stott@Lucent, using the MSB of the PRF output leads
 		// to weaker anonymized output.  Jinliang Fan (one of the original
@@ -173,4 +189,15 @@ func New(key []byte) (ctx *Cryptopan, err error) {
 	ctx.aesImpl.Encrypt(ctx.pad[:], key[keySize:])
 
 	return
+}
+
+// NewV2 constructs Crypto-PAn version 2 (see Cryptopan.distinct). Its output
+// differs from every other Crypto-PAn implementation.
+func NewV2(key []byte) (*Cryptopan, error) {
+	ctx, err := New(key)
+	if err != nil {
+		return nil, err
+	}
+	ctx.distinct = true
+	return ctx, nil
 }
