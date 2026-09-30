@@ -53,6 +53,22 @@ func TestCodexValidateRequiresAuthID(t *testing.T) {
 }
 
 func TestCodexStartupAssignsIDsOnceWithBackup(t *testing.T) {
+	t.Run("upstream outside anthropic.com is refused at startup", func(t *testing.T) {
+		t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(t.TempDir(), "providers.json"))
+		t.Setenv("ROUTER_UPSTREAM_URL", "https://evil.example")
+		t.Setenv("ROUTER_UPSTREAM_ALLOW_ANY", "")
+		if _, err := loadConfigChecked(); err == nil || !strings.Contains(err.Error(), "ROUTER_UPSTREAM_ALLOW_ANY") {
+			t.Fatalf("err = %v, want a refusal naming ROUTER_UPSTREAM_ALLOW_ANY", err)
+		}
+	})
+	t.Run("ROUTER_UPSTREAM_ALLOW_ANY=1 admits a local stub", func(t *testing.T) {
+		t.Setenv("ROUTER_PROVIDERS_FILE", filepath.Join(t.TempDir(), "providers.json"))
+		t.Setenv("ROUTER_UPSTREAM_URL", "http://127.0.0.1:1")
+		t.Setenv("ROUTER_UPSTREAM_ALLOW_ANY", "1")
+		if c, err := loadConfigChecked(); err != nil || c.Upstream.Host != "127.0.0.1:1" {
+			t.Fatalf("err = %v, upstream = %v", err, c.Upstream)
+		}
+	})
 	path := filepath.Join(t.TempDir(), "providers.json")
 	raw := `{"providers":[{"name":"codex","type":"codex","base_url":"` + conf.CodexBaseURL + `"},{"name":"work","type":"codex","base_url":"` + conf.CodexBaseURL + `"}]}`
 	writeRaw(t, path, raw)

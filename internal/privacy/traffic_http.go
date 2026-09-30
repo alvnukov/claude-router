@@ -306,6 +306,7 @@ func serveProtectedLocal(w http.ResponseWriter, r *http.Request, body []byte, ro
 
 func serveProtectedDirect(w http.ResponseWriter, r *http.Request, body []byte, route HTTPRoute, policy *Policy, deps HTTPDeps, limits LifecycleLimits, controller *http.ResponseController, reject func(int, string, string)) {
 	badInput := func() { reject(400, "invalid_request_error", "privacy: invalid protocol headers") }
+	// The *.anthropic.com allowlist is checked once at startup (config.CheckUpstream); a new source of Upstream must check it too.
 	if route.Upstream == nil || (route.Upstream.Scheme != "https" && route.Upstream.Scheme != "http") || route.Upstream.Host == "" || route.Upstream.User != nil || route.Upstream.Opaque != "" {
 		reject(503, "api_error", "privacy: upstream not configured for protected transport")
 		return

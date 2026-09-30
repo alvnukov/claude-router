@@ -77,6 +77,9 @@ func loadConfigChecked() (config, error) {
 	if err != nil {
 		return config{}, fmt.Errorf("bad ROUTER_UPSTREAM_URL: %w", err)
 	}
+	if err := conf.CheckUpstream(up, env("ROUTER_UPSTREAM_ALLOW_ANY", "") == "1", log.Printf); err != nil {
+		return config{}, err
+	}
 	local, assigned, err := conf.LoadLocal(conf.ProvidersPath())
 	if err != nil {
 		return config{}, err

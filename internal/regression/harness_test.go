@@ -536,7 +536,7 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 		"HOME=" + home, "TMPDIR=" + os.Getenv("TMPDIR"), "XDG_CONFIG_HOME=" + filepath.Join(home, "xdg"),
 		"CLAUDE_CONFIG_DIR=" + filepath.Join(home, "claude"), "CODEX_HOME=" + filepath.Join(home, "codex"), "ROUTER_HOME=" + home,
 		"ROUTER_LISTEN=" + apiAddr, "ROUTER_PUBLIC_LISTEN=" + apiAddr, "ROUTER_UI_LISTEN=" + uiAddr,
-		"ROUTER_LOCAL_PROBE_INTERVAL=0", "ROUTER_UPSTREAM_URL=" + cloud.server.URL, "ROUTER_PROVIDERS_FILE=" + configPath,
+		"ROUTER_LOCAL_PROBE_INTERVAL=0", "ROUTER_UPSTREAM_URL=" + cloud.server.URL, "ROUTER_UPSTREAM_ALLOW_ANY=1", "ROUTER_PROVIDERS_FILE=" + configPath,
 		"ROUTER_ENV_FILE=" + filepath.Join(home, "env"), "ROUTER_UI_HISTORY_FILE=" + filepath.Join(home, "history.jsonl"),
 		"ROUTER_ANTHROPIC_LIMITS_FILE=" + filepath.Join(home, "limits.json"), "ROUTER_CODEX_AUTH_FILE=" + catalog.auth,
 		"ROUTER_CATALOG_SYNTHETIC_MANIFEST=" + catalog.manifest,
