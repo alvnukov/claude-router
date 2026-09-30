@@ -91,7 +91,8 @@ func TestAllowedNetworkCollisionRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	const real = "10.1.2.3"
-	r.Allow = append(r.Allow, mapNetwork(m, real, false))
+	alias, _ := mapNetwork(m, real, false)
+	r.Allow = append(r.Allow, alias)
 	e := testEngine(t, r)
 	e.store.newKey = func() ([]byte, error) { return bytes.Clone(testIPKey), nil }
 	out, req, err := e.Mask(requestBody("allow-collision", real))

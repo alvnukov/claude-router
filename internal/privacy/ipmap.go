@@ -121,6 +121,38 @@ func (m *ipMapper) prefix(p netip.Prefix, inverse bool) (netip.Prefix, bool) {
 	return p, false
 }
 
+// minFreeBits is the threshold k >= 8. A pseudonym inside a masked class
+// keeps the class open and hides the k = L - bits(class) bits after it, no
+// more; below a whole octet the value would be guessed better than 1/256, so
+// it leaves as a placeholder without Crypto-PAn.
+const minFreeBits = 8
+
+// freeBits returns the k bits the pseudonym of value hides: the length after
+// the block for an address or a network, 24 for a MAC. A declared network
+// replaces its block as well, so the threshold does not apply there (under
+// is false). ok is false when no block handles value.
+func (m *ipMapper) freeBits(value string) (k int, under, ok bool) {
+	if _, ok := parseMAC(value); ok {
+		return 24, false, true
+	}
+	var a netip.Addr
+	bits := 0
+	if p, err := netip.ParsePrefix(value); err == nil {
+		a, bits = p.Addr(), p.Bits()
+	} else if a, err = netip.ParseAddr(value); err == nil {
+		a, bits = a.WithZone(""), a.BitLen()
+	} else {
+		return 0, false, false
+	}
+	for _, b := range m.blocks {
+		if b.Real.Contains(a) && bits >= b.Real.Bits() {
+			k = bits - b.Real.Bits()
+			return k, b.Real == b.Pseudo && k < minFreeBits, true
+		}
+	}
+	return 0, false, false
+}
+
 func (m *ipMapper) maskMAC(a [6]byte) [6]byte   { return [6]byte(m.permute(a[:], 24, false)) }
 func (m *ipMapper) unmaskMAC(a [6]byte) [6]byte { return [6]byte(m.permute(a[:], 24, true)) }
 func isEUI64(b []byte) bool                     { return len(b) == 8 && b[3] == 0xff && b[4] == 0xfe }

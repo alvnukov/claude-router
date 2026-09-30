@@ -178,7 +178,7 @@ func (m *mapper) maskText(text string, field fieldKind) ([]textEdit, error) {
 	spans = resolve(spans)
 	var edits []textEdit
 	for _, s := range spans {
-		value := ""
+		value, network := "", false
 		original := s.Value
 		var err error
 		if k, ok := lookup[s.Start]; ok && k.end == s.End {
@@ -190,22 +190,20 @@ func (m *mapper) maskText(text string, field fieldKind) ([]textEdit, error) {
 		} else {
 			switch s.Kind {
 			case KindIPv4, KindIPv6, KindCIDR4, KindCIDR6, KindMAC:
-				value = mapNetwork(m.req.ip, s.Value, false)
+				network = true
+				value, err = m.mapNetwork(s)
 			case KindSecret:
 				m.view.session.rememberSecret(s.Value)
-				h := hmac.New(sha256.New, subkey(m.view.session.key, "secret"))
-				h.Write([]byte(s.Value))
-				value = "<secret:" + secretFamily(s.Value) + ":" + hex.EncodeToString(h.Sum(nil)[:4]) + ">"
-				if old, ok := m.req.secrets[value]; ok && old != s.Value {
-					return nil, errors.New("privacy: secret placeholder collision")
-				}
-				m.req.secrets[value] = s.Value
+				value, err = m.placeholder(secretFamily(s.Value), s.Value)
 			default:
 				value, err = m.mapValue(s.Value, s.Kind)
 			}
 		}
 		if err != nil {
 			return nil, err
+		}
+		if !network {
+			m.e.counts.substitution(s.Kind, value == original)
 		}
 		if value != s.Value && m.e.detectors.allowed(value) {
 			return nil, &RejectError{Reason: "pseudonym collides with an allowed value"}
@@ -218,32 +216,66 @@ func (m *mapper) maskText(text string, field fieldKind) ([]textEdit, error) {
 	}
 	return edits, nil
 }
-func mapNetwork(m *ipMapper, value string, inverse bool) string {
-	if mac, ok := parseMAC(value); ok {
+
+// placeholder is the tier-1 stand-in <secret:family:hmac8> for a value that
+// leaves in no form; the request restores it from req.secrets.
+func (m *mapper) placeholder(family, value string) (string, error) {
+	h := hmac.New(sha256.New, subkey(m.view.session.key, "secret"))
+	h.Write([]byte(value))
+	out := "<secret:" + family + ":" + hex.EncodeToString(h.Sum(nil)[:4]) + ">"
+	if old, ok := m.req.secrets[out]; ok && old != value {
+		return "", errors.New("privacy: secret placeholder collision")
+	}
+	m.req.secrets[out] = value
+	return out, nil
+}
+
+// mapNetwork masks an address, a network or a MAC. A value under the
+// threshold leaves as a placeholder, and so does one no block handles
+// (counted as unhandled) rather than leave equal to itself.
+func (m *mapper) mapNetwork(s Span) (string, error) {
+	k, under, ok := m.req.ip.freeBits(s.Value)
+	value := s.Value
+	if ok && !under {
+		value, ok = mapNetwork(m.req.ip, s.Value, false)
+	}
+	if !ok {
+		m.req.stats.Unhandled++
+	}
+	if !ok || under {
+		return m.placeholder(string(s.Kind), s.Value)
+	}
+	m.e.counts.permutation(s.Kind, k, value == s.Value, m.view.session.fingerprint(string(s.Kind)+":"+s.Value))
+	return value, nil
+}
+
+func mapNetwork(m *ipMapper, value string, inverse bool) (string, bool) {
+	ok := false
+	if mac, isMAC := parseMAC(value); isMAC {
 		if inverse {
 			mac = m.unmaskMAC(mac)
 		} else {
 			mac = m.maskMAC(mac)
 		}
-		return formatMACLike(value, mac)
+		return formatMACLike(value, mac), true
 	}
 	if p, err := netip.ParsePrefix(value); err == nil {
 		if inverse {
-			p, _ = m.unmaskPrefix(p)
+			p, ok = m.unmaskPrefix(p)
 		} else {
-			p, _ = m.maskPrefix(p)
+			p, ok = m.maskPrefix(p)
 		}
-		return p.String()
+		return p.String(), ok
 	}
 	if a, err := netip.ParseAddr(value); err == nil {
 		if inverse {
-			a, _ = m.unmaskAddr(a)
+			a, ok = m.unmaskAddr(a)
 		} else {
-			a, _ = m.maskAddr(a)
+			a, ok = m.maskAddr(a)
 		}
-		return a.String()
+		return a.String(), ok
 	}
-	return value
+	return value, false
 }
 
 // Unicode case folding preserves rune count, not UTF-8 byte length (K / K).

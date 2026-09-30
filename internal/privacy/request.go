@@ -15,6 +15,9 @@ type Stats struct {
 	Scope            string
 	Masked, Unmasked map[Kind]int
 	Unexpected       int
+	// Unhandled counts network values no block handled; each left as a
+	// placeholder instead of equal to itself.
+	Unhandled int
 	// Version is the PRF version of the request's session.
 	Version int
 }
@@ -166,7 +169,7 @@ func (r *Request) unmaskText(text string, field fieldKind) ([]textEdit, error) {
 			if _, seen := r.spellings[s.Value]; supportedOnly && !seen {
 				continue
 			}
-			value = mapNetwork(r.ip, s.Value, true)
+			value, _ = mapNetwork(r.ip, s.Value, true)
 			if _, seen := r.spellings[s.Value]; field.toolInput && !seen && value != s.Value {
 				return nil, correctionError()
 			}
