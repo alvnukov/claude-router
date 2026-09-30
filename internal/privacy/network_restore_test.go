@@ -364,6 +364,44 @@ func TestShapeWithoutParse(t *testing.T) {
 	}
 }
 
+// An IPv4 with leading zeros reads both as decimal and as octal (inet_aton
+// takes 010 for 8), so it has no canonical form to be masked as. It always
+// leaves as a placeholder. That is a rule, not a parse defect: it counts as
+// ambiguous, not unparsed, and raises no alarm, so a real defect still gets
+// the alarm's log line.
+func TestLeadingZerosAmbiguous(t *testing.T) {
+	r, err := ParseRules([]byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := fixedKeyEngine(t, r, fixedKey(1))
+	var lines []string
+	e.counts.logf = func(f string, a ...any) { lines = append(lines, fmt.Sprintf(f, a...)) }
+	for i, v := range []string{"192.168.001.010", "010.001.002.003"} {
+		body := requestBody("zeros", "v "+v+" w")
+		masked, req := mustMask(t, e, body)
+		var got struct{ System string }
+		if err := json.Unmarshal(masked, &got); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(got.System, v) || !strings.Contains(got.System, "<secret:ipv4:") {
+			t.Errorf("%q not a placeholder: %q", v, got.System)
+		}
+		if back, err := e.UnmaskJSON(req, masked); err != nil || !bytes.Equal(back, body) {
+			t.Errorf("%q not restored: %s, %v", v, back, err)
+		}
+		c := e.Counters()
+		if c.Ambiguous[KindIPv4] != i+1 || len(c.Unparsed) != 0 || len(c.Alarms) != 0 || len(lines) != 0 {
+			t.Errorf("%q: ambiguous %v, unparsed %v, alarms %v, log %q", v, c.Ambiguous, c.Unparsed, c.Alarms, lines)
+		}
+	}
+	// Leading zeros around a real parse defect stay a defect.
+	mustMask(t, e, requestBody("zeros", "v 256.001.1.1 w"))
+	if c := e.Counters(); c.Unparsed[KindIPv4] != 1 || !c.Alarms[KindIPv4] || len(lines) != 1 {
+		t.Errorf("defect with zeros: unparsed %v, alarms %v, log %q", c.Unparsed, c.Alarms, lines)
+	}
+}
+
 // The way an address is
 // written does not change what the router does with it. Every form of a
 // generated private, public or loopback address, bare and before a dot, gets

@@ -50,7 +50,7 @@ func (e *Engine) Detect(body []byte) (map[Kind]int, error) {
 		for _, span := range resolve(spans) {
 			counts[span.Kind]++
 			if networkKind(span.Kind) && unparsedAddress(span.Value) {
-				e.counts.unparsedShape(span.Kind)
+				e.counts.unparsedShape(span.Kind, ambiguousAddress(span.Value))
 			}
 		}
 		return nil, nil

@@ -1,6 +1,7 @@
 package privacy
 
 import (
+	"cmp"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -237,13 +238,37 @@ func (m *mapper) placeholder(family, value string) (string, error) {
 	return out, nil
 }
 
+// ambiguousAddress reports a value that does not parse only for leading zeros
+// in its dotted groups: 010.001.002.003 reads as 10.1.2.3 and, the inet_aton
+// way, as 8.1.2.3. It has no canonical form to be masked as.
+func ambiguousAddress(s string) bool {
+	end := len(s)
+	if i := strings.IndexAny(s, "/%"); i >= 0 {
+		end = i
+	}
+	start := strings.LastIndexByte(s[:end], ':') + 1
+	if !ipv4Shape(s[start:end]) {
+		return false
+	}
+	groups := strings.Split(s[start:end], ".")
+	zeros := false
+	for i, g := range groups {
+		if t := strings.TrimLeft(g, "0"); t != g && g != "0" {
+			zeros = true
+			groups[i] = cmp.Or(t, "0")
+		}
+	}
+	_, _, ok := networkSpan(s[:start] + strings.Join(groups, ".") + s[end:])
+	return zeros && ok
+}
+
 // mapNetwork masks an address, a network or a MAC. A value under the
 // threshold leaves as a placeholder, and so does one no block handles
 // (counted as unhandled) rather than leave equal to itself, and one in the
 // shape of its class that does not parse (counted as unparsed).
 func (m *mapper) mapNetwork(s Span) (string, error) {
 	if unparsedAddress(s.Value) {
-		m.e.counts.unparsedShape(s.Kind)
+		m.e.counts.unparsedShape(s.Kind, ambiguousAddress(s.Value))
 		return m.placeholder(string(s.Kind), s.Value)
 	}
 	k, under, ok := m.req.ip.freeBits(s.Value)
