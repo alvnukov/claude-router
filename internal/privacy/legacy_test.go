@@ -1,9 +1,12 @@
 package privacy
 
 import (
+	"bytes"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -166,10 +169,80 @@ func TestCleanLegacy(t *testing.T) {
 		kept(t, fileLink)
 		kept(t, target)
 	})
+	t.Run("failure keeps going", func(t *testing.T) {
+		f, stuck := setup(t, legacyNamespace, "privacy", "sessions", "abc.jsonl")
+		next := writeLegacyFixture(t, f.root, "p3-"+strings.Repeat("ef", 32), "privacy", "sessions", "abc.jsonl")
+		readOnlyDir(t, filepath.Dir(stuck))
+		removed, _, err := f.run()
+		if err == nil || removed != 1 {
+			t.Fatalf("cleanLegacy = %d, %v; want 1 and the error", removed, err)
+		}
+		kept(t, stuck)
+		gone(t, next)
+	})
 	t.Run("missing runtime dir", func(t *testing.T) {
 		removed, unknown, err := cleanLegacy(filepath.Join(t.TempDir(), "privacy-runtime"))
 		if err != nil || removed != 0 || unknown != 0 {
 			t.Fatalf("cleanLegacy = %d, %d, %v; want 0, 0, nil", removed, unknown, err)
 		}
 	})
+}
+
+// readOnlyDir makes dir refuse removals of its entries until the test ends or
+// the returned func restores it.
+func readOnlyDir(t *testing.T, dir string) func() {
+	t.Helper()
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("directory permissions do not stop removal here")
+	}
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	restore := func() { _ = os.Chmod(dir, 0o700) }
+	t.Cleanup(restore)
+	return restore
+}
+
+func TestCleanLegacyFailureVisible(t *testing.T) {
+	var logs bytes.Buffer
+	prev, flags := log.Writer(), log.Flags()
+	log.SetOutput(&logs)
+	log.SetFlags(0)
+	t.Cleanup(func() { log.SetOutput(prev); log.SetFlags(flags) })
+
+	home := t.TempDir()
+	runtimeConfig(t, home, `{}`)
+	old := writeLegacyFixture(t, filepath.Join(home, "privacy-runtime"), legacyNamespace, "privacy", "sessions", "abc.jsonl")
+	restore := readOnlyDir(t, filepath.Dir(old))
+	rt := NewRuntime(home)
+	if _, err := rt.Snapshot(); err != nil {
+		t.Fatalf("Snapshot = %v; a failed cleanup must not stop traffic", err)
+	}
+	if _, err := os.Lstat(old); err != nil {
+		t.Fatalf("fixture: %v; want it still there after a refused removal", err)
+	}
+	line := logs.String()
+	if !strings.Contains(line, "legacy cleanup failed") {
+		t.Fatalf("router.log = %q; want the failure named", line)
+	}
+	for _, leak := range []string{home, "abc", "synthetic-legacy-value", legacyNamespace} {
+		if strings.Contains(line, leak) {
+			t.Fatalf("router.log = %q; carries %q", line, leak)
+		}
+	}
+	if state := rt.State(); state.LegacyErrors != 1 {
+		t.Fatalf("LegacyErrors = %d; want 1", state.LegacyErrors)
+	}
+
+	restore()
+	runtimeConfig(t, home, `{"filters":{"phone":false}}`)
+	if _, err := rt.Snapshot(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fixture after the next policy: %v; want the retry to remove it", err)
+	}
+	if state := rt.State(); state.LegacyErrors != 1 || state.LegacyRemoved < 1 {
+		t.Fatalf("state = %d errors, %d removed; want 1, ≥1", state.LegacyErrors, state.LegacyRemoved)
+	}
 }

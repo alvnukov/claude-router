@@ -14,14 +14,22 @@ import (
 // never opened. Only regular files on a legacy path go; a symlink, an unknown
 // file or a file on an unexpected path stays and is counted, so a leftover is
 // visible instead of silently lost. Directories left empty afterwards go too.
+// A failure on one entry does not stop the rest; the first one is returned.
 func cleanLegacy(runtimeDir string) (removed, unknown int, err error) {
 	var dirs []string
+	var failed error
+	fail := func(err error) {
+		if failed == nil {
+			failed = err
+		}
+	}
 	err = filepath.WalkDir(runtimeDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == runtimeDir && errors.Is(walkErr, fs.ErrNotExist) {
 				return fs.SkipAll
 			}
-			return walkErr
+			fail(walkErr)
+			return nil
 		}
 		rel, err := filepath.Rel(runtimeDir, path)
 		if err != nil {
@@ -36,12 +44,14 @@ func cleanLegacy(runtimeDir string) (removed, unknown int, err error) {
 		}
 		info, err := os.Lstat(path)
 		if err != nil {
-			return err
+			fail(err)
+			return nil
 		}
 		switch {
 		case legacySessionPath(parts) && info.Mode().IsRegular():
 			if err := os.Remove(path); err != nil {
-				return err
+				fail(err)
+				return nil
 			}
 			removed++
 		case currentSessionPath(parts):
@@ -59,11 +69,21 @@ func cleanLegacy(runtimeDir string) (removed, unknown int, err error) {
 	for _, dir := range dirs {
 		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
 			if err := os.Remove(dir); err != nil {
-				return removed, unknown, err
+				fail(err)
 			}
 		}
 	}
-	return removed, unknown, nil
+	return removed, unknown, failed
+}
+
+// legacyFailure names what failed without the path: file and directory
+// names under privacy-runtime carry session ids and the home.
+func legacyFailure(err error) string {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + ": " + pathErr.Err.Error()
+	}
+	return "walk failed"
 }
 
 // legacySessionPath matches <namespace>/privacy/sessions/<file> and

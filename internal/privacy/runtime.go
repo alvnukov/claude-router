@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log"
 	"maps"
 	"os"
 	"path/filepath"
@@ -41,6 +42,7 @@ type RuntimeState struct {
 	Buffered        bool         `json:"buffered"`
 	LegacyRemoved   int          `json:"legacy_removed,omitempty"`
 	LegacyUnknown   int          `json:"legacy_unknown,omitempty"`
+	LegacyErrors    int          `json:"legacy_errors,omitempty"`
 }
 type Policy struct {
 	config         *Profiles
@@ -80,12 +82,16 @@ func (r *Runtime) Snapshot() (*Policy, error) {
 	}
 	if !r.legacyCleaned && r.home != "" {
 		// Once per process and before any engine opens: old session files
-		// hold real values. A failure leaves them as they were and is tried
+		// hold real values. A failure leaves the rest as it was and is tried
 		// again with the next policy; traffic does not depend on it.
 		removed, unknown, err := cleanLegacy(filepath.Join(r.home, "privacy-runtime"))
 		r.stats.LegacyRemoved += removed
 		r.stats.LegacyUnknown = unknown
 		r.legacyCleaned = err == nil
+		if err != nil {
+			r.stats.LegacyErrors++
+			log.Printf("privacy: legacy cleanup failed (%s) after removing %d files; retry with the next policy", legacyFailure(err), removed)
+		}
 	}
 	p := &Policy{config: snapshot.Config, engines: map[string]*Engine{}, clientControls: r.clientControls.clone(), runtime: r}
 	if p.Enabled() {
