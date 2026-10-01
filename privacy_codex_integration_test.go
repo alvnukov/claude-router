@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	codexprovider "localrouter/internal/providers/codex"
 )
@@ -20,21 +21,36 @@ func privateCodexHandler(t *testing.T) http.Handler {
 	t.Helper()
 	home := t.TempDir()
 	writeTrafficConfig(t, home, `{}`)
-	base, _ := url.Parse(codexBaseURL)
-	cfg := config{upstream: base, local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, firstByte: time.Second}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	base, _ := url.Parse(conf.CodexBaseURL)
+	cfg := config{Upstream: base, Local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, FirstByte: time.Second}
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st, hl := history.New(10, ""), newHealth("")
 	return newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
 }
 
 func TestPrivacyCodexDoesNotImportOrPersistOpaqueState(t *testing.T) {
+	testPrivacyCodexDoesNotImportOrPersistOpaqueState(t, false)
+}
+func TestChatGPTPlanPrivacyDoesNotImportOrPersistOpaqueState(t *testing.T) {
+	testPrivacyCodexDoesNotImportOrPersistOpaqueState(t, true)
+}
+func testPrivacyCodexDoesNotImportOrPersistOpaqueState(t *testing.T, plan bool) {
 	seedTwoConnections(t)
 	p := provider{Name: "codex", Type: "codex"}
 	auth, err := codexStoreFor(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope := codexprovider.SessionKey("codex/good\x00acct-a\x00" + codexprovider.SessionKey("private-session"))
+	if plan {
+		if err := auth.save(planFixture(t, "https://auth.openai.com", true, time.Now().Add(time.Hour))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credential, err := auth.credentialFor(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := codexprovider.SessionKey("codex/good\x00" + credential.accountKey() + "\x00" + codexprovider.SessionKey("private-session"))
 	state, err := codexprovider.Capture(scope, []byte(`{"model":"good","input":[{"type":"message","role":"user","content":"hi"}]}`), codexprovider.Completion{Calls: 1, ResponseIDs: []string{"legacy-response"}, Text: "Ready", Output: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + trafficCanary + `"}`), json.RawMessage(`{"type":"message","role":"assistant","content":"Ready"}`)}})
 	if err != nil {
 		t.Fatal(err)

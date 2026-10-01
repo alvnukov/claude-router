@@ -105,7 +105,7 @@ const env={...process.env};
 for(const key of Object.keys(env)) if(key.startsWith('ROUTER_')) delete env[key];
 Object.assign(env,{
   ROUTER_LISTEN:`127.0.0.1:${apiPort}`,ROUTER_UI_LISTEN:`127.0.0.1:${uiPort}`,ROUTER_PUBLIC_LISTEN:`127.0.0.1:${apiPort}`,
-  ROUTER_UPSTREAM_URL:upstreamURL, ROUTER_PROVIDERS_FILE:join(home,'providers.json'),
+  ROUTER_UPSTREAM_URL:upstreamURL, ROUTER_UPSTREAM_ALLOW_ANY:'1', ROUTER_PROVIDERS_FILE:join(home,'providers.json'),
   ROUTER_ENV_FILE:join(home,'env'),ROUTER_UI_HISTORY_FILE:join(home,'history.jsonl'),
   ROUTER_ANTHROPIC_LIMITS_FILE:join(home,'limits.json'),ROUTER_CODEX_AUTH_FILE:join(home,'codex-auth.json'),
   ROUTER_STATE_FILE:join(home,'state.json'),CLAUDE_CONFIG_DIR:join(home,'claude'),

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
 
@@ -60,13 +61,13 @@ func TestPrivacyAnthropicLimits(t *testing.T) {
 				defer up.Close()
 				home := t.TempDir()
 				base, _ := url.Parse(up.URL)
-				cfg := config{upstream: base, firstByte: time.Second, local: oneProvider(up.URL, "good")}
+				cfg := config{Upstream: base, FirstByte: time.Second, Local: oneProvider(up.URL, "good")}
 				route := modelRoute{Mode: "anthropic"}
 				if tc.local {
 					route = modelRoute{Mode: "model", Model: "p/good"}
 				}
-				cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": route}}
-				cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+				cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": route}}
+				cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 				privacyMode := mode
 				if mode == "off" {
 					privacyMode = "mask"

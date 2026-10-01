@@ -138,6 +138,7 @@ def run(binary, fixtures):
                         'ROUTER_ACTIVE_SLOT_FILE': str(router_home / 'active-slot'),
                         'ROUTER_CODEX_TEST_STUB_URL': f'http://127.0.0.1:{stub_port}',
                         'ROUTER_UPSTREAM_URL': f'http://127.0.0.1:{stub_port}',
+                        'ROUTER_UPSTREAM_ALLOW_ANY': '1',
                         'ROUTER_LISTEN': f'127.0.0.1:{api}',
                         'ROUTER_UI_LISTEN': f'127.0.0.1:{ui}',
                         'ROUTER_LOCAL_FAILOVER': '0',

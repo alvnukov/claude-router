@@ -20,3 +20,4 @@ node_modules/
 internal/ui/web/test-results/
 internal/ui/web/playwright-report/
 /.worktreers/
+!internal/config/testdata/compat/**

@@ -1,0 +1,87 @@
+{
+  "family_routes": null,
+  "catalog": {
+    "anthropic": [
+      "claude-opus-5",
+      "claude-sonnet-5"
+    ],
+    "anthropic_updated": "2026-09-01T10:00:00Z",
+    "providers": {
+      "codex": {
+        "models": [
+          {
+            "id": "gpt-6-sol",
+            "name": "GPT-6 Sol",
+            "efforts": [
+              "low",
+              "high"
+            ]
+          }
+        ],
+        "updated_at": "2026-09-01T10:00:00Z"
+      },
+      "down": {
+        "models": [
+          {
+            "id": "tiny"
+          }
+        ],
+        "updated_at": "2026-09-01T10:00:00Z"
+      },
+      "lab": {
+        "models": [
+          {
+            "id": "old-coder"
+          },
+          {
+            "id": "qwen-coder"
+          }
+        ],
+        "updated_at": "2026-09-01T10:00:00Z"
+      }
+    },
+    "codex_seen": {
+      "codex": [
+        "gpt-6-sol"
+      ]
+    },
+    "checked_at": "2026-09-01T10:00:00Z"
+  },
+  "providers": [
+    {
+      "name": "codex",
+      "type": "codex",
+      "base_url": "https://chatgpt.com/backend-api/codex"
+    },
+    {
+      "name": "lab",
+      "base_url": "http://lab.test/v1",
+      "api_key": "sk-test-lab-0001"
+    },
+    {
+      "name": "down",
+      "base_url": "http://down.test/v1",
+      "api_key": "sk-test-down-0001"
+    }
+  ],
+  "models": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-sol"
+    },
+    {
+      "provider": "lab",
+      "model": "qwen-coder"
+    },
+    {
+      "provider": "lab",
+      "model": "old-coder"
+    },
+    {
+      "provider": "down",
+      "model": "tiny"
+    }
+  ],
+  "routes": null,
+  "model_pools": null
+}

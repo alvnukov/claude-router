@@ -14,6 +14,7 @@ import (
 	"localrouter/internal/buildinfo"
 	"localrouter/internal/chatgptplan"
 	"localrouter/internal/codextesttransport"
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 	codexprovider "localrouter/internal/providers/codex"
@@ -40,7 +41,7 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 	}
 	account := credential.accountKey()
 	planMode := credential.AuthMode == chatgptplan.AuthMode
-	endpoint := codexBaseURL + "/responses"
+	endpoint := conf.CodexBaseURL + "/responses"
 	if planMode {
 		endpoint = chatgptplan.ResponsesURL
 	}
@@ -80,7 +81,15 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 			return codexAttemptError(r, start, err)
 		}
 	}
-	client := &http.Client{Transport: codextesttransport.Transport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	transport := codextesttransport.Transport()
+	if transport == nil {
+		transport = upstreamHTTP
+	}
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// Codex always streams, so its raw body is bounded like any streamed
+	// answer; the watch keeps the gaps of the last request sent.
+	ctx, cancel := context.WithCancel(markStream(r.Context(), true))
+	var watch *bodyWatch
 	sent := false
 	send := func(ctx context.Context, body []byte, headers http.Header) (*http.Response, error) {
 		if protected && sent {
@@ -111,6 +120,10 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 			return nil, err
 		}
 		response, err := store.doWithReauth(client, request)
+		if err == nil {
+			watch = watchBody(response.Body, cfg.StartTimeout, cfg.IdleTimeout, func(error) { cancel() })
+			response.Body = watch
+		}
 		if err == nil && protected {
 			privacy.ObserveProviderHeaders(r)
 			if privacy.FromRequest(r).MaskExpected() {
@@ -120,8 +133,7 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 		}
 		return response, err
 	}
-	ctx, cancel := context.WithCancel(r.Context())
-	options := codexprovider.Options{SessionKey: sessionKey, TurnState: turnState, FirstEventTimeout: cfg.firstByte}
+	options := codexprovider.Options{SessionKey: sessionKey, TurnState: turnState, FirstEventTimeout: cfg.FirstByte}
 	if planMode {
 		options.TurnState = ""
 	}
@@ -150,9 +162,11 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 		_ = native.Close()
 		cancel()
 		_, _ = native.Result()
-		return codexAttemptError(r, start, err)
+		result := codexAttemptError(r, start, err)
+		result.watch = watch
+		return result
 	}
-	return attemptResult{resp: &http.Response{StatusCode: http.StatusOK, Body: &responseReader{Reader: ready, close: native.Close}}, cancel: cancel, native: native, replayScope: scope, ttfb: time.Since(start)}
+	return attemptResult{resp: &http.Response{StatusCode: http.StatusOK, Body: &responseReader{Reader: ready, close: native.Close}}, cancel: cancel, native: native, replayScope: scope, ttfb: time.Since(start), watch: watch}
 }
 
 func codexAttemptError(r *http.Request, start time.Time, err error) attemptResult {
@@ -168,5 +182,9 @@ func codexAttemptError(r *http.Request, start time.Time, err error) attemptResul
 	}
 	// Transport errors may follow billable generation. Never automatically replay
 	// them on another account; explicit transient server rejections may fail over.
+	// An upstream silent from its headers on never started, so the next may try.
+	if errors.Is(err, errUpstreamIdle) && !idleMidAnswer(err) {
+		result.retryable = true
+	}
 	return result
 }

@@ -14,6 +14,9 @@ func TestRestoreRunsOnlyNetworkDetectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := testEngine(t, r)
+	// A random Crypto-PAn permutation can leave a canonical /16 unchanged.
+	// Use the established fixture key so the masking assertions are deterministic.
+	e.store.newKey = func() ([]byte, error) { return bytes.Clone(testIPKey), nil }
 	body := requestBody("", "Zorvex 10.2.3.4 fd00:1234::7 10.8.0.0/16 02:42:ac:11:00:02\npassword=shh-SYNTHETIC-secret")
 	masked, req := mustMask(t, e, body)
 	for _, real := range []string{"10.2.3.4", "fd00:1234::7", "10.8.0.0/16", "02:42:ac:11:00:02", "shh-SYNTHETIC-secret"} {

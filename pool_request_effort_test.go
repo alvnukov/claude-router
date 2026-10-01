@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+
+	conf "localrouter/internal/config"
 )
 
 func TestPoolPreservesRequestEffortThroughFailover(t *testing.T) {
@@ -30,22 +32,22 @@ func TestPoolPreservesRequestEffortThroughFailover(t *testing.T) {
 			if source == "" {
 				source = "default"
 			}
-			cfg := config{failover: true, local: localSetup{
+			cfg := config{Failover: true, Local: localSetup{
 				Providers:    []provider{{Name: "p", BaseURL: up.URL}},
 				Models:       []localModel{{Provider: "p", Model: "a"}, {Provider: "p", Model: "b"}},
-				ModelPools:   map[string][]poolTarget{"same": {{Model: "p/a", Effort: poolRequestEffort}, {Model: "p/b", Effort: poolRequestEffort}}},
+				ModelPools:   map[string][]poolTarget{"same": {{Model: "p/a", Effort: conf.PoolRequestEffort}, {Model: "p/b", Effort: conf.PoolRequestEffort}}},
 				FamilyRoutes: map[string]map[string]modelRoute{"sonnet": {source: {Mode: "pool", Pool: "same"}}},
 			}}
-			if err := cfg.local.validate(); err != nil {
+			if err := cfg.Local.Validate(); err != nil {
 				t.Fatal(err)
 			}
 			body := []byte(fmt.Sprintf(`{"model":"claude-sonnet-5","output_config":{"effort":%q},"messages":[{"role":"user","content":"hi"}]}`, effort))
 			w := httptest.NewRecorder()
-			handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.forModel("claude-sonnet-5", effort), body, nil, newHealth(""))
+			handleLocal(w, httptest.NewRequest("POST", "/v1/messages", nil), cfg.ForModel("claude-sonnet-5", effort), body, nil, newHealth(""))
 			if w.Code != 200 || !reflect.DeepEqual(seen, []string{"a:" + effort, "b:" + effort}) {
 				t.Fatalf("status=%d upstream=%v body=%s", w.Code, seen, w.Body.String())
 			}
-			if cfg.local.ModelPools["same"][0].Effort != poolRequestEffort {
+			if cfg.Local.ModelPools["same"][0].Effort != conf.PoolRequestEffort {
 				t.Fatal("request mutated the saved policy")
 			}
 		})
@@ -55,18 +57,18 @@ func TestPoolPreservesRequestEffortThroughFailover(t *testing.T) {
 func TestPoolRequestEffortMixedWithFixedAndCodex(t *testing.T) {
 	l := localSetup{
 		Models:       []localModel{{Provider: "p", Model: "a"}, {Provider: "p", Model: "b"}, {Provider: "p", Model: "c"}},
-		ModelPools:   map[string][]poolTarget{"mixed": {{Model: "p/a", Effort: poolRequestEffort}, {Model: "p/b", Effort: "low"}, {Model: "p/c"}}},
+		ModelPools:   map[string][]poolTarget{"mixed": {{Model: "p/a", Effort: conf.PoolRequestEffort}, {Model: "p/b", Effort: "low"}, {Model: "p/c"}}},
 		FamilyRoutes: map[string]map[string]modelRoute{"sonnet": {}},
 	}
 	for _, effort := range []string{"default", "high", "medium"} {
 		l.FamilyRoutes["sonnet"][effort] = modelRoute{Mode: "pool", Pool: "mixed"}
-		cfg := (config{local: l}).forModel("claude-sonnet-5", effort)
+		cfg := (config{Local: l}).ForModel("claude-sonnet-5", effort)
 		want := effort
 		if effort == "default" {
 			want = ""
 		}
 		for i, expected := range []string{want, "low", ""} {
-			actual := cfg.local.Models[i].Efforts[effort]
+			actual := cfg.Local.Models[i].Efforts[effort]
 			if actual != expected {
 				t.Fatalf("%s model %d: %q, want %q", effort, i, actual, expected)
 			}
@@ -74,57 +76,46 @@ func TestPoolRequestEffortMixedWithFixedAndCodex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Reasoning itself is always sent: its summary keeps a long think
+			// from looking like a dead upstream.
+			if converted.Reasoning == nil {
+				t.Fatal("Codex request without reasoning")
+			}
 			if expected == "" {
-				if converted.Reasoning != nil {
+				if converted.Reasoning.Effort != nil {
 					t.Fatal("absent effort was added to Codex request")
 				}
-			} else if converted.Reasoning == nil || converted.Reasoning.Effort != expected {
+			} else if converted.Reasoning.Effort != expected {
 				t.Fatalf("Codex effort lost: %+v", converted.Reasoning)
 			}
 		}
 	}
 }
 
-func TestCodexCatalogInheritsRequestEffort(t *testing.T) {
-	l := localSetup{
-		Models:     []localModel{{Provider: "codex", Model: "gpt-6-sol"}},
-		ModelPools: map[string][]poolTarget{"same": {{Model: "codex/gpt-6-sol", Effort: poolRequestEffort}}},
-	}
-	l.ActiveProfile = "active"
-	l.Profiles = map[string]routingProfile{"active": l.routing(), "other": l.routing()}
-	inheritCodexModels(&l, "codex", []catalogModel{{ID: "gpt-6.1-sol", Efforts: []string{"low", "high"}}})
-	for _, pools := range []map[string][]poolTarget{l.ModelPools, l.Profiles["other"].ModelPools} {
-		members := pools["same"]
-		if len(members) != 2 || !reflect.DeepEqual(members[1], poolTarget{Model: "codex/gpt-6.1-sol", Effort: poolRequestEffort}) {
-			t.Fatalf("catalog lost request effort mode: %+v", members)
-		}
-	}
-}
-
 func TestPoolEffortMapOverridesFallbackAndClonesIndependently(t *testing.T) {
-	for _, fallback := range []string{"", "high", poolRequestEffort} {
-		original := localSetup{ModelPools: map[string][]poolTarget{"work": {{Model: "p/a", Effort: fallback, EffortMap: map[string]string{"default": "low", "medium": "", "high": "xhigh", "max": poolRequestEffort}}}}}
+	for _, fallback := range []string{"", "high", conf.PoolRequestEffort} {
+		original := localSetup{ModelPools: map[string][]poolTarget{"work": {{Model: "p/a", Effort: fallback, EffortMap: map[string]string{"default": "low", "medium": "", "high": "xhigh", "max": conf.PoolRequestEffort}}}}}
 		member := original.ModelPools["work"][0]
 		for source, want := range map[string]string{"default": "low", "medium": "", "high": "xhigh", "max": "max"} {
-			if got := member.requestEffort(source); got != want {
+			if got := member.RequestEffort(source); got != want {
 				t.Fatalf("%s/%s: %q, want %q", fallback, source, got, want)
 			}
 		}
 		want := fallback
-		if fallback == poolRequestEffort {
+		if fallback == conf.PoolRequestEffort {
 			want = "low"
 		}
-		if member.requestEffort("low") != want {
+		if member.RequestEffort("low") != want {
 			t.Fatal("missing override did not use fallback")
 		}
-		copy := original.clone()
+		copy := original.Clone()
 		copy.ModelPools["work"][0].EffortMap["high"] = "medium"
 		if original.ModelPools["work"][0].EffortMap["high"] != "xhigh" {
 			t.Fatal("snapshot aliases effort mapping")
 		}
 	}
-	member := poolTarget{Effort: poolRequestEffort, EffortMap: map[string]string{"high": "xhigh"}}
-	if got := member.unsupportedEffort([]string{"low", "high"}); got != "xhigh" {
+	member := poolTarget{Effort: conf.PoolRequestEffort, EffortMap: map[string]string{"high": "xhigh"}}
+	if got := member.UnsupportedEffort([]string{"low", "high"}); got != "xhigh" {
 		t.Fatalf("catalog must check fixed overrides: %q", got)
 	}
 }

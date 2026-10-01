@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 )
@@ -28,13 +29,13 @@ func trafficFixture(t *testing.T, up *httptest.Server, local bool) (http.Handler
 	t.Helper()
 	home := t.TempDir()
 	base, _ := url.Parse(up.URL)
-	cfg := config{upstream: base, firstByte: time.Second, failover: true, local: oneProvider(up.URL, "good")}
+	cfg := config{Upstream: base, FirstByte: time.Second, Failover: true, Local: oneProvider(up.URL, "good")}
 	route := modelRoute{Mode: "anthropic"}
 	if local {
 		route = modelRoute{Mode: "model", Model: "p/good"}
 	}
-	cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": route}}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": route}}
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st := history.New(10, filepath.Join(home, "history.jsonl"))
 	hl := newHealth("")
 	writeTrafficConfig(t, home, `{}`)
@@ -85,6 +86,253 @@ func trafficCall(h http.Handler, path, body string) *httptest.ResponseRecorder {
 const trafficBody = `{"model":"test","max_tokens":100,"metadata":{"user_id":"{\"session_id\":\"private-session\",\"email\":\"Canary-credential-123\"}"},"messages":[{"role":"user","content":"password=Canary-credential-123"}]}`
 
 func TestPrivacyTrafficAnthropicAndOpenAI(t *testing.T) {
+	t.Run("unsigned thinking reaches Anthropic", func(t *testing.T) {
+		const (
+			controls = `"thinking":{"type":"enabled","budget_tokens":16,"display":"omitted"},"context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}`
+			signed   = `{"type":"thinking","thinking":"claude reasoning","signature":"sig-1"}`
+			past     = `{"role":"user","content":"first"},{"role":"assistant","content":[{"type":"thinking","thinking":"codex a"},{"type":"text","text":"one"}]},` +
+				`{"role":"user","content":"second"},{"role":"assistant","content":[{"type":"thinking","thinking":"codex b","signature":null},{"type":"text","text":"two"}]},` +
+				`{"role":"user","content":"third"},{"role":"assistant","content":[{"type":"thinking","thinking":"codex c","signature":""},{"type":"text","text":"three"}]},{"role":"user","content":"fourth"}`
+			toolUse = `{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}`
+			open    = `{"role":"user","content":"run it"},{"role":"assistant","content":[{"type":"thinking","thinking":"codex plan"},` + toolUse + `]},` +
+				`{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"a.txt"}]}`
+			more = `,{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"pwd"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":"/tmp"}]}`
+		)
+		request := func(model, messages string) string {
+			return `{"model":"` + model + `","max_tokens":100,` + controls + `,"messages":[` + messages + `]}`
+		}
+		// The stub answers as Anthropic does: a thinking block without a
+		// signature is refused. It no longer demands that the turn in progress
+		// begin with thinking: a live probe on 2026-09-30 got 200 for enabled
+		// thinking and a turn opening with tool_use on sonnet and opus 5.5.
+		refuse := func(wire []byte) string {
+			var req struct {
+				Messages []struct {
+					Role    string          `json:"role"`
+					Content json.RawMessage `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.Unmarshal(wire, &req); err != nil {
+				return "invalid request"
+			}
+			for _, m := range req.Messages {
+				var blocks []map[string]json.RawMessage
+				_ = json.Unmarshal(m.Content, &blocks) // a string has no blocks
+				for _, b := range blocks {
+					if s := string(b["signature"]); m.Role == "assistant" && string(b["type"]) == `"thinking"` && (s == "" || s == "null" || s == `""`) {
+						return "thinking block without signature"
+					}
+				}
+			}
+			return ""
+		}
+		bodies := make(chan []byte, 64)
+		stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			wire, _ := io.ReadAll(r.Body)
+			bodies <- wire
+			w.Header().Set("Content-Type", "application/json")
+			if reason := refuse(wire); reason != "" {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"`+reason+`"}}`)
+				return
+			}
+			if r.URL.Path == "/v1/messages/count_tokens" {
+				_, _ = io.WriteString(w, `{"input_tokens":12}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"id":"msg_stub","type":"message","role":"assistant","model":"test","content":[`+signed+`,{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		}))
+		defer stub.Close()
+		drain := func() (got [][]byte) {
+			for {
+				select {
+				case b := <-bodies:
+					got = append(got, b)
+				default:
+					return got
+				}
+			}
+		}
+		seedTwoConnections(t)
+		var codexCalls atomic.Int32
+		var codexBody atomic.Value
+		codex := func(next http.RoundTripper) http.RoundTripper {
+			return usageTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Host != "chatgpt.com" {
+					return next.RoundTrip(r)
+				}
+				codexCalls.Add(1)
+				b, _ := io.ReadAll(r.Body)
+				codexBody.Store(b)
+				return usageResponse(200, "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"codex reasoning\"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"codex answer\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r-codex\",\"status\":\"completed\"}}\n\n"), nil
+			})
+		}
+		useUpstreamHTTP(t, codex(upstreamHTTP))
+		old := http.DefaultTransport
+		t.Cleanup(func() { http.DefaultTransport = old })
+		http.DefaultTransport = codex(old)
+		for _, mode := range []string{"off", "mask", "detect"} {
+			t.Run(mode, func(t *testing.T) {
+				home := t.TempDir()
+				switch mode {
+				case "off":
+					if err := os.WriteFile(filepath.Join(home, "privacy-profiles.json"), []byte(`{"version":1,"enabled":false,"profiles":[],"bindings":[]}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "mask":
+					writeTrafficConfig(t, home, `{}`)
+				case "detect":
+					writeTrafficConfig(t, home, `{}`)
+					b, err := os.ReadFile(filepath.Join(home, "privacy-profiles.json"))
+					if err == nil {
+						err = os.WriteFile(filepath.Join(home, "privacy-profiles.json"), bytes.Replace(b, []byte(`"rules":`), []byte(`"mode":"detect","rules":`), 1), 0600)
+					}
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				base, _ := url.Parse(stub.URL)
+				cfg := config{Upstream: base, FirstByte: time.Second, Local: localSetup{
+					Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}},
+					Models:    []localModel{{Provider: "codex", Model: "gpt"}},
+					Routes:    map[string]map[string]modelRoute{"test": {"default": {Mode: "anthropic"}}, "local-model": {"default": {Mode: "model", Model: "codex/gpt"}}},
+				}}
+				cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
+				st, hl := history.New(10, ""), newHealth("")
+				h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
+				drain()
+				signedOnly := request("test", `{"role":"user","content":"hi"},{"role":"assistant","content":[`+signed+`,{"type":"text","text":"hello"}]},{"role":"user","content":"next"}`)
+				for _, c := range []struct {
+					name, path, body string
+					calls            int
+					check            func(t *testing.T, got [][]byte)
+				}{
+					{"past turn", "/v1/messages", request("test", past), 1, func(t *testing.T, got [][]byte) {
+						for _, text := range []string{"one", "two", "three"} {
+							if !bytes.Contains(got[0], []byte(`[{"type":"text","text":"`+text+`"}]`)) {
+								t.Errorf("neighbour of the unsigned block changed: %s", got[0])
+							}
+						}
+					}},
+					{"open turn after Codex tool_use keeps thinking", "/v1/messages", request("test", open), 1, func(t *testing.T, got [][]byte) {
+						if !bytes.Contains(got[0], []byte(`"thinking":{"type":"enabled"`)) || !bytes.Contains(got[0], []byte(`"context_management"`)) || !bytes.Contains(got[0], []byte(`[`+toolUse+`]`)) {
+							t.Errorf("open turn lost its thinking controls: %s", got[0])
+						}
+					}},
+					{"open turn continues with thinking", "/v1/messages", request("test", open+more), 1, func(t *testing.T, got [][]byte) {
+						if !bytes.Contains(got[0], []byte(`"thinking":{"type":"enabled"`)) || !bytes.Contains(got[0], []byte(`"context_management"`)) {
+							t.Errorf("continuation lost its thinking controls: %s", got[0])
+						}
+					}},
+					{"signed only", "/v1/messages", signedOnly, 1, func(t *testing.T, got [][]byte) {
+						if mode == "off" && string(got[0]) != signedOnly || !bytes.Contains(got[0], []byte(`[`+signed+`,`)) {
+							t.Errorf("signed history changed: %s", got[0])
+						}
+					}},
+					{"same bytes twice", "/v1/messages", request("test", past), 2, func(t *testing.T, got [][]byte) {
+						if !bytes.Equal(got[0], got[1]) {
+							t.Errorf("same history, different bytes:\n%s\n%s", got[0], got[1])
+						}
+					}},
+					{"normal turn keeps thinking", "/v1/messages", request("test", past+`,{"role":"assistant","content":[`+signed+`,`+toolUse+`]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"a.txt"}]}`+more), 1, func(t *testing.T, got [][]byte) {
+						if !bytes.Contains(got[0], []byte(controls)) {
+							t.Errorf("thinking changed in a normal turn: %s", got[0])
+						}
+					}},
+					{"count_tokens", "/v1/messages/count_tokens?beta=true", request("test", past), 1, nil},
+				} {
+					t.Run(c.name, func(t *testing.T) {
+						defer drain()
+						for range c.calls {
+							if w := trafficCall(h, c.path, c.body); w.Code != http.StatusOK {
+								t.Fatalf("status=%d body=%s", w.Code, w.Body)
+							}
+						}
+						got := drain()
+						if len(got) != c.calls {
+							t.Fatalf("Anthropic got %d requests, want %d", len(got), c.calls)
+						}
+						for _, b := range got {
+							if bytes.Contains(b, []byte(`"thinking":"codex`)) {
+								t.Errorf("unsigned thinking reached Anthropic: %s", b)
+							}
+						}
+						if c.check != nil {
+							c.check(t, got)
+						}
+					})
+				}
+				t.Run("Codex, Anthropic, Codex", func(t *testing.T) {
+					defer drain()
+					calls := codexCalls.Load()
+					// Codex reasoning reaches the client only on a stream; fold it
+					// into the content a client keeps, as Claude Code does.
+					fold := func(stream string) string {
+						var order []int
+						blocks := map[int]map[string]any{}
+						for _, line := range strings.Split(stream, "\n") {
+							var e struct {
+								Type         string            `json:"type"`
+								Index        int               `json:"index"`
+								ContentBlock map[string]any    `json:"content_block"`
+								Delta        map[string]string `json:"delta"`
+							}
+							if data, ok := strings.CutPrefix(line, "data: "); !ok || json.Unmarshal([]byte(data), &e) != nil {
+								continue
+							}
+							switch b := blocks[e.Index]; {
+							case e.Type == "content_block_start":
+								order, blocks[e.Index] = append(order, e.Index), e.ContentBlock
+							case e.Type == "content_block_delta" && b != nil:
+								for _, field := range []string{"thinking", "text", "signature"} {
+									if v, ok := e.Delta[field]; ok {
+										prev, _ := b[field].(string)
+										b[field] = prev + v
+									}
+								}
+							}
+						}
+						content := make([]map[string]any, 0, len(order))
+						for _, i := range order {
+							content = append(content, blocks[i])
+						}
+						out, _ := json.Marshal(content)
+						return string(out)
+					}
+					messages := `{"role":"user","content":"start"}`
+					for i, model := range []string{"local-model", "test", "local-model"} {
+						body := request(model, messages)
+						if model != "test" {
+							body = strings.Replace(body, `"max_tokens":100,`, `"max_tokens":100,"stream":true,`, 1)
+						}
+						w := trafficCall(h, "/v1/messages", body)
+						var answer struct {
+							Content json.RawMessage `json:"content"`
+						}
+						if model != "test" {
+							answer.Content = json.RawMessage(fold(w.Body.String()))
+						} else if json.Unmarshal(w.Body.Bytes(), &answer) != nil {
+							w.Code = 0
+						}
+						if w.Code != http.StatusOK {
+							t.Fatalf("step %d (%s): status=%d body=%s", i+1, model, w.Code, w.Body)
+						}
+						if i == 0 && !bytes.Contains(answer.Content, []byte(`"thinking":"codex reasoning"`)) {
+							t.Fatalf("Codex reasoning did not reach the client: %s", w.Body)
+						}
+						messages += `,{"role":"assistant","content":` + string(answer.Content) + `},{"role":"user","content":"next"}`
+					}
+					got := drain()
+					if n := codexCalls.Load() - calls; n != 2 || len(got) != 1 || bytes.Contains(got[0], []byte("codex reasoning")) {
+						t.Fatalf("Codex calls %d, want 2; Anthropic got %q", n, got)
+					}
+					if last, _ := codexBody.Load().([]byte); len(last) == 0 || bytes.Contains(last, []byte("codex reasoning")) || bytes.Contains(last, []byte("claude reasoning")) || bytes.Contains(last, []byte("sig-1")) {
+						t.Fatalf("thinking reached Codex: %s", last)
+					}
+				})
+			})
+		}
+	})
 	for _, local := range []bool{false, true} {
 		t.Run(map[bool]string{false: "anthropic", true: "openai"}[local], func(t *testing.T) {
 			var seen atomic.Int32
@@ -289,14 +537,14 @@ func TestPrivacyTrafficFailoverUsesActualTargetAndFrozenPolicy(t *testing.T) {
 	}))
 	defer up.Close()
 	base, _ := url.Parse(up.URL)
-	cfg := config{upstream: base, firstByte: time.Second, failover: true, local: oneProvider(up.URL, "a", "b")}
-	cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "pool", Pool: "both"}}}
-	cfg.local.ModelPools = map[string][]poolTarget{"both": {{Model: "p/a"}, {Model: "p/b"}}}
+	cfg := config{Upstream: base, FirstByte: time.Second, Failover: true, Local: oneProvider(up.URL, "a", "b")}
+	cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "pool", Pool: "both"}}}
+	cfg.Local.ModelPools = map[string][]poolTarget{"both": {{Model: "p/a"}, {Model: "p/b"}}}
 	setup := `{"version":1,"enabled":true,"default":"a","profiles":[{"id":"a","name":"A","enabled":true,"rules":{"entries":[{"kind":"org","forms":["AlphaCanary"]}]}},{"id":"b","name":"B","enabled":true,"rules":{"entries":[{"kind":"org","forms":["BetaCanary"]}]}}],"bindings":[{"kind":"model","target":"p/b","profile":"b"}]}`
 	if err := os.WriteFile(filepath.Join(home, "privacy-profiles.json"), []byte(setup), 0600); err != nil {
 		t.Fatal(err)
 	}
-	cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+	cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 	st := history.New(10, "")
 	hl := newHealth("")
 	h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
@@ -408,9 +656,9 @@ func TestPrivacyTrafficCodexJSONAndStream(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		home := t.TempDir()
 		writeTrafficConfig(t, home, `{}`)
-		base, _ := url.Parse(codexBaseURL)
-		cfg := config{upstream: base, local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, firstByte: time.Second}
-		cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+		base, _ := url.Parse(conf.CodexBaseURL)
+		cfg := config{Upstream: base, Local: localSetup{Providers: []provider{{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}, Models: []localModel{{Provider: "codex", Model: "good"}}, Routes: map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "codex/good"}}}}, FirstByte: time.Second}
+		cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 		st := history.New(10, "")
 		hl := newHealth("")
 		h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
@@ -538,9 +786,9 @@ func TestPrivacyTrafficReviewLateErrorDiagnosticsAndTrailingJSON(t *testing.T) {
 		home := t.TempDir()
 		writeTrafficConfig(t, home, `{}`)
 		base, _ := url.Parse(up.URL)
-		cfg := config{upstream: base, local: oneProvider(up.URL, "good"), firstByte: time.Second}
-		cfg.local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "p/good"}}}
-		cs := newConfigStore(cfg, filepath.Join(home, "providers.json"))
+		cfg := config{Upstream: base, Local: oneProvider(up.URL, "good"), FirstByte: time.Second}
+		cfg.Local.Routes = map[string]map[string]modelRoute{"test": {"default": {Mode: "model", Model: "p/good"}}}
+		cs := conf.NewStore(cfg, filepath.Join(home, "providers.json"))
 		hl := newHealth("")
 		st := history.New(10, "")
 		h := newMainHandler(cfg, cs, st, hl, newUIServer(st, cs, hl))
@@ -577,7 +825,7 @@ func TestPrivacyTrafficReviewStreamDiagnostics(t *testing.T) {
 	log.SetOutput(&logs)
 	defer log.SetOutput(before)
 	r := io.MultiReader(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"prefix\"}}]}\n\n"), privacyBrokenStream{errors.New("decode Codex event: " + trafficCanary)})
-	if err := streamResponse(&privacyBuffer{header: make(http.Header)}, r, "test"); err == nil {
+	if err := streamResponse(&privacyBuffer{header: make(http.Header)}, r, "test", "local/test"); err == nil {
 		t.Fatal("expected stream failure")
 	}
 	if strings.Contains(logs.String(), trafficCanary) {

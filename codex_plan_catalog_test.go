@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"localrouter/internal/catalogstartup"
+	conf "localrouter/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,7 +22,7 @@ func TestChatGPTPlanCatalogRefreshAndPersistence(t *testing.T) {
 	}
 	overview := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`<button>claude-opus-5-5</button>`)) }))
 	defer overview.Close()
-	deps := catalogstartup.Production(overview.URL, codexBaseURL)
+	deps := catalogstartup.Production(overview.URL, conf.CodexBaseURL)
 	defer deps.Close()
 	failed := false
 	hits := 0
@@ -36,15 +37,16 @@ func TestChatGPTPlanCatalogRefreshAndPersistence(t *testing.T) {
 		return usageResponse(200, `{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT 6.1 Sol","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]},{"slug":"gpt-6-sol","display_name":"GPT 6 Sol","visibility":"list"},{"slug":"hidden","visibility":"hide"}]}`), nil
 	}))
 	u.catalog = &deps
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
+	provPath := filepath.Join(t.TempDir(), "providers.json")
+	u.cs = conf.NewStore(u.cs.Get(), provPath)
 	if err := u.refreshModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	cat := u.cs.get().local.Catalog.Providers["codex"]
+	cat := u.cs.Get().Local.Catalog.Providers["codex"]
 	if len(cat.Models) != 2 || cat.Models[0].ID != "gpt-6.1-sol" || cat.Models[0].Efforts[0] != "high" || cat.UpdatedAt.IsZero() {
 		t.Fatalf("new account model lost: %+v", cat)
 	}
-	raw, err := os.ReadFile(u.cs.provPath)
+	raw, err := os.ReadFile(provPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +58,7 @@ func TestChatGPTPlanCatalogRefreshAndPersistence(t *testing.T) {
 	if err = u.refreshModels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	retained := u.cs.get().local.Catalog.Providers["codex"]
+	retained := u.cs.Get().Local.Catalog.Providers["codex"]
 	if hits != 2 || len(retained.Models) != 2 || retained.Models[0].ID != "gpt-6.1-sol" || retained.Error == "" {
 		t.Fatal("failed refresh discarded last successful catalog")
 	}

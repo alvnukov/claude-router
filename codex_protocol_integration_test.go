@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,12 +17,27 @@ import (
 )
 
 func TestCodexNativeReplaySurvivesRouterRestart(t *testing.T) {
+	testCodexNativeReplaySurvivesRouterRestart(t, false)
+}
+func TestChatGPTPlanReplaySurvivesRouterRestart(t *testing.T) {
+	testCodexNativeReplaySurvivesRouterRestart(t, true)
+}
+func testCodexNativeReplaySurvivesRouterRestart(t *testing.T, plan bool) {
 	for _, stream := range []bool{false, true} {
 		for _, change := range []string{"same", "cleared-history", "account", "session", "prefix"} {
 			t.Run(fmt.Sprintf("stream=%v/%s", stream, change), func(t *testing.T) {
 				seedTwoConnections(t)
+				if plan {
+					auth, err := codexStoreFor(provider{Name: "codex", Type: "codex"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err = auth.save(planFixture(t, "https://auth.openai.com", true, time.Now().Add(time.Hour))); err != nil {
+						t.Fatal(err)
+					}
+				}
 				cfg := twoCodexPool()
-				cfg.failover = false
+				cfg.Failover = false
 				path := filepath.Join(t.TempDir(), "history.jsonl")
 				hist := history.New(20, path)
 				calls := 0
@@ -40,6 +56,14 @@ func TestCodexNativeReplaySurvivesRouterRestart(t *testing.T) {
 							"data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"type\":\"message\",\"id\":\"msg_1\",\"role\":\"assistant\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Reading\"}]}}\n\n"+
 							"data: {\"type\":\"response.output_item.done\",\"output_index\":2,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"Read\",\"arguments\":\"{\\\"path\\\":\\\"a\\\"}\"}}\n\n"+
 							"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"end_turn\":false,\"usage\":{\"input_tokens\":100,\"input_tokens_details\":{\"cached_tokens\":80},\"output_tokens\":7}}}\n\n")
+						if plan {
+							raw, err := io.ReadAll(response.Body)
+							if err != nil {
+								t.Fatal(err)
+							}
+							response.Body.Close()
+							response.Body = io.NopCloser(strings.NewReader(strings.Replace(string(raw), `"name":"Read"`, `"namespace":"functions","name":"Read"`, 1)))
+						}
 						response.Header.Set("x-codex-turn-state", "sticky")
 						return response, nil
 					}
@@ -57,7 +81,7 @@ func TestCodexNativeReplaySurvivesRouterRestart(t *testing.T) {
 						t.Errorf("opaque replay=%v, context change=%s", found, change)
 					}
 					wantState := ""
-					if replayExpected {
+					if replayExpected && !plan {
 						wantState = "sticky"
 					}
 					if got := r.Header.Get("x-codex-turn-state"); got != wantState {
@@ -107,6 +131,14 @@ func TestCodexNativeReplaySurvivesRouterRestart(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					if plan {
+						next := planFixture(t, "https://auth.openai.com", true, time.Now().Add(time.Hour))
+						next.Plan.Subject = "different-person"
+						if err := store.save(next); err != nil {
+							t.Fatal(err)
+						}
+						break
+					}
 					credential, _ := json.Marshal(usageCredential("different-account"))
 					if err := os.WriteFile(store.cliPath, credential, 0600); err != nil {
 						t.Fatal(err)
@@ -118,6 +150,14 @@ func TestCodexNativeReplaySurvivesRouterRestart(t *testing.T) {
 					session = "session-b"
 				case "prefix":
 					user["content"] = "edited"
+				}
+				if plan {
+					prior, err := codexStoreFor(provider{Name: "codex", Type: "codex"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					// A restarted process must reload the persisted registration.
+					codexAuth = &codexAuthStore{path: prior.path, cliPath: prior.cliPath, issuer: prior.issuer, client: prior.client}
 				}
 				assistant := map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "Reading"}, map[string]any{"type": "tool_use", "id": "call_1", "name": "Read", "input": map[string]string{"path": "a"}}}}
 				tool := map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call_1", "content": []any{map[string]string{"type": "text", "text": "file"}, map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}}}}}}

@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	webui "localrouter/internal/ui"
 )
@@ -40,9 +41,11 @@ func TestUIJSONStateDoesNotProbeOrExposeCredentials(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; http.Error(w, "unexpected probe", 500) }))
 	defer remote.Close()
 	u, _ := testUI(t)
-	u.cs.c.local.Providers[0].BaseURL = remote.URL + "/v1?key=URL-SECRET"
-	u.cs.c.local.Providers[0].APIKey = "API-SECRET"
-	u.cs.c.local.Providers[0].AuthID = "AUTH-SECRET"
+	c := u.cs.Get()
+	c.Local.Providers[0].BaseURL = remote.URL + "/v1?key=URL-SECRET"
+	c.Local.Providers[0].APIKey = "API-SECRET"
+	c.Local.Providers[0].AuthID = "AUTH-SECRET"
+	u.cs = conf.NewStore(c, u.cs.Path())
 	w := apiCall(t, u.handler(), "GET", "/api/ui/state", nil)
 	if w.Code != 200 {
 		t.Fatal(w.Code)
@@ -66,9 +69,11 @@ func TestUIJSONStateDoesNotProbeOrExposeCredentials(t *testing.T) {
 
 func TestUIJSONHistoryErrorsHideCredentials(t *testing.T) {
 	u, h := testUI(t)
-	p := &u.cs.c.local.Providers[0]
+	c := u.cs.Get()
+	p := &c.Local.Providers[0]
 	p.APIKey = "REVIEW-API-SECRET"
 	p.BaseURL = "http://localhost:1/v1?key=REVIEW-URL-SECRET"
+	u.cs = conf.NewStore(c, u.cs.Path())
 	message := "Post " + p.BaseURL + "/chat/completions: transport failed; key=" + p.APIKey
 	rec := &history.Record{Start: time.Now(), Model: "claude-opus-5", Route: "local", Session: "review-session", Served: "p/m1", ReqBody: []byte(`{"model":"claude-opus-5","messages":[]}`)}
 	u.st.Add(rec)
@@ -93,8 +98,10 @@ func TestUIJSONHistoryErrorsHideCredentials(t *testing.T) {
 
 func TestUIJSONDistinguishesDisabledAndAbsentRoutes(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.c.local.FamilyRoutes = map[string]map[string]modelRoute{"sonnet": {"high": {Mode: "disabled"}}}
-	u.cs.c.local.Routes = map[string]map[string]modelRoute{"claude-sonnet-custom": {"high": {Mode: "disabled"}}}
+	c := u.cs.Get()
+	c.Local.FamilyRoutes = map[string]map[string]modelRoute{"sonnet": {"high": {Mode: "disabled"}}}
+	c.Local.Routes = map[string]map[string]modelRoute{"claude-sonnet-custom": {"high": {Mode: "disabled"}}}
+	u.cs = conf.NewStore(c, u.cs.Path())
 	var state webui.State
 	if err := json.Unmarshal(apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
@@ -214,8 +221,8 @@ func TestUIJSONRequestFiltersDetailsAndUTF8(t *testing.T) {
 	})
 	t.Run("no request-text title under privacy profiles", func(t *testing.T) {
 		u, h := testUI(t)
-		u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-		writeTrafficConfig(t, filepath.Dir(u.cs.provPath), `{}`)
+		u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+		writeTrafficConfig(t, filepath.Dir(u.cs.Path()), `{}`)
 		u.st.Add(&history.Record{Start: time.Now(), Model: "claude-sonnet-5", Session: "private-session", Route: "cloud", ReqBody: []byte(`{"messages":[{"role":"user","content":"Секретная задача"}]}`)})
 		body := apiCall(t, h, "GET", "/api/ui/state", nil).Body.Bytes()
 		var state struct {
@@ -263,34 +270,38 @@ func TestUIJSONRequestFiltersDetailsAndUTF8(t *testing.T) {
 }
 func TestUIJSONRejectsReferencedConnectionInInactiveProfile(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-	l := u.cs.c.local
-	l.Profiles = map[string]routingProfile{"active": l.routing(), "other": {ModelPools: map[string][]poolTarget{"work": {{Model: "p/m1"}}}}}
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	c := u.cs.Get()
+	l := c.Local
+	l.Profiles = map[string]conf.Profile{"active": l.Routing(), "other": {ModelPools: map[string][]poolTarget{"work": {{Model: "p/m1"}}}}}
 	l.ActiveProfile = "active"
-	u.cs.c.local = l
+	c.Local = l
+	u.cs = conf.NewStore(c, u.cs.Path())
 	w := apiCall(t, h, "POST", "/api/ui/actions", webui.Action{Action: "connection.edit", Fields: map[string]string{"op": "remove", "name": "p"}})
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "other") || len(u.cs.get().local.Providers) != 1 {
+	if w.Code != 400 || !strings.Contains(w.Body.String(), "other") || len(u.cs.Get().Local.Providers) != 1 {
 		t.Fatalf("referenced delete: %d %s", w.Code, w.Body.String())
 	}
-	if _, err := os.Stat(u.cs.provPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(u.cs.Path()); !os.IsNotExist(err) {
 		t.Fatal("rejected delete wrote configuration")
 	}
 }
 func TestUIJSONSavesDisplayNameWithoutChangingIdentity(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
-	p := u.cs.c.local.Providers[0]
+	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
+	c := u.cs.Get()
+	p := c.Local.Providers[0]
 	p.APIKey = "unchanged-key"
-	u.cs.c.local.Providers[0] = p
+	c.Local.Providers[0] = p
+	u.cs = conf.NewStore(c, u.cs.Path())
 	w := apiCall(t, h, "POST", "/api/ui/actions", webui.Action{Action: "connection.edit", Fields: map[string]string{"op": "update", "orig": p.Name, "name": p.Name, "base_url": p.BaseURL, "display_name": "Рабочий аккаунт"}})
 	if w.Code != 200 {
 		t.Fatalf("save: %d %s", w.Code, w.Body.String())
 	}
-	got := u.cs.get().local.Providers[0]
+	got := u.cs.Get().Local.Providers[0]
 	if got.Name != p.Name || got.APIKey != p.APIKey || got.DisplayName != "Рабочий аккаунт" {
 		t.Fatalf("identity changed: %+v", got)
 	}
-	saved, err := readProviders(u.cs.provPath)
+	saved, err := conf.ReadProviders(u.cs.Path())
 	if err != nil || saved.Providers[0].DisplayName != got.DisplayName {
 		t.Fatalf("display name not persisted: %v", err)
 	}
@@ -306,9 +317,11 @@ func TestUIJSONUsageInvalidatedAfterAccountChange(t *testing.T) {
 	codexAuth.credential.Tokens.AccountID = "new-account"
 	codexAuth.credential.AuthMode = "chatgpt"
 	u, h := testUI(t)
-	p := provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}
-	u.cs.c.local.Providers = []provider{p}
-	u.cs.c.local.Models = nil
+	p := provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}
+	c := u.cs.Get()
+	c.Local.Providers = []provider{p}
+	c.Local.Models = nil
+	u.cs = conf.NewStore(c, u.cs.Path())
 	cache := u.usageCache(p)
 	cache.key = "old-account\x00"
 	cache.view = codexUsageView{Connected: true, Updated: time.Now(), Limits: []codexUsageRow{{ID: "primary", Known: true, Remaining: 77}}}
@@ -331,7 +344,7 @@ func TestUIJSONUsageInvalidatedAfterAccountChange(t *testing.T) {
 
 func TestUIJSONCodexLoginReplacesStaleCatalogError(t *testing.T) {
 	u, h := codexLoginUI(t)
-	p, _ := u.cs.get().local.provider("work")
+	p, _ := u.cs.Get().Local.Provider("work")
 	store, err := codexStoreFor(p)
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +354,9 @@ func TestUIJSONCodexLoginReplacesStaleCatalogError(t *testing.T) {
 	if probe.OK || !strings.Contains(probe.Msg, "no such file or directory") {
 		t.Fatalf("expected missing credential before login: %+v", probe)
 	}
-	u.cs.c.local.Catalog.Providers = map[string]providerCatalog{p.Name: {Error: probe.Msg}}
+	c := u.cs.Get()
+	c.Local.Catalog.Providers = map[string]conf.ProviderCatalog{p.Name: {Error: probe.Msg}}
+	u.cs = conf.NewStore(c, u.cs.Path())
 	login := postForm(h, "/settings/codex/login", url.Values{"provider": {p.Name}})
 	if login.Code != http.StatusSeeOther {
 		t.Fatalf("login: %d", login.Code)
@@ -369,7 +384,7 @@ func TestUIJSONCodexLoginReplacesStaleCatalogError(t *testing.T) {
 func TestUIJSONCodexRetainsCurrentErrors(t *testing.T) {
 	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
 	u, h := codexUI(t)
-	p, _ := u.cs.get().local.provider("work")
+	p, _ := u.cs.Get().Local.Provider("work")
 	store, _ := codexStoreFor(p)
 	if err := store.save(usageCredential("work-account")); err != nil {
 		t.Fatal(err)
@@ -402,7 +417,7 @@ func TestUIJSONCodexRetainsCurrentErrors(t *testing.T) {
 func TestUIJSONCodexAvailableResets(t *testing.T) {
 	useTestCodexHome(t, "http://issuer.invalid", http.DefaultClient)
 	u, h := codexUI(t)
-	p, _ := u.cs.get().local.provider("work")
+	p, _ := u.cs.Get().Local.Provider("work")
 	store, _ := codexStoreFor(p)
 	credential := usageCredential("work-account")
 	if err := store.save(credential); err != nil {
@@ -458,7 +473,9 @@ func TestUIJSONCodexAvailableResets(t *testing.T) {
 
 func TestUIJSONRouteProfileGuard(t *testing.T) {
 	u, h := testUI(t)
-	u.cs.c.local.ActiveProfile = "active"
+	c := u.cs.Get()
+	c.Local.ActiveProfile = "active"
+	u.cs = conf.NewStore(c, u.cs.Path())
 	w := apiCall(t, h, "POST", "/api/ui/actions", webui.Action{Action: "route.save", Fields: map[string]string{"model": "opus", "scope": "family", "profile": "old", "all": "anthropic"}})
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "Активный профиль изменился") {
 		t.Fatal("stale profile accepted")

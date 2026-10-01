@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	conf "localrouter/internal/config"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,7 +56,7 @@ func TestChatGPTPlanTransportPublicToolRoundTrip(t *testing.T) {
 		}
 		return usageResponse(200, codexStreamOK), nil
 	})
-	cand := candidate{Key: "codex/gpt-6.1-sol", Provider: provider{Name: "codex", Type: "codex", BaseURL: codexBaseURL}}
+	cand := candidate{Key: "codex/gpt-6.1-sol", Provider: provider{Name: "codex", Type: "codex", BaseURL: conf.CodexBaseURL}}
 	for i, input := range []string{`[{"type":"message","role":"user","content":"look up"}]`, `[{"type":"message","role":"user","content":"look up"},{"type":"function_call","call_id":"call-1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"done"}]`} {
 		body := []byte(`{"model":"gpt-6.1-sol","instructions":"Be useful","input":` + input + `,"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"lookup"},"store":false,"stream":true}`)
 		a := tryCodexModel(httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(body)), config{}, cand, body, false, "session")

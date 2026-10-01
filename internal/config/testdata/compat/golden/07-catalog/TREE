@@ -1,0 +1,8 @@
+drwx------ - home
+-rw------- 158 home/env
+-rw------- 2500 home/providers.json
+-rw------- 8 home/providers.json.active-profile
+drwx------ - home/providers.json.profiles
+-rw------- 674 home/providers.json.profiles/cloud.json
+-rw------- 1151 home/providers.json.profiles/default.json
+-rw------- 1151 home/providers.json.profiles/night.json

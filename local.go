@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"localrouter/internal/codextesttransport"
+	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
 	"localrouter/internal/providers"
@@ -80,7 +81,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	// the response belongs to that model, and a later failure only counts
 	// against its score.
 	pickCfg := cfg
-	pickCfg.failover = true
+	pickCfg.Failover = true
 	cands := withoutSignedOut(hl.pick(pickCfg))
 	sessionKey := codexprovider.SessionKey(history.SessionOf(body))
 	if privacy.FromRequest(r) != nil {
@@ -91,9 +92,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 	if r.URL.Path == "/v1/messages/count_tokens" {
 		cands = hl.applyExistingAffinity(scope, cands)
 	} else {
-		cands = hl.bindCandidates(scope, poolRoute{cfg.poolName, cfg.poolType}, cands)
+		cands = hl.bindCandidates(scope, poolRoute{cfg.PoolName, cfg.PoolType}, cands)
 	}
-	if !cfg.failover && len(cands) > 1 {
+	if !cfg.Failover && len(cands) > 1 {
 		cands = cands[:1]
 	}
 	if len(cands) == 0 {
@@ -128,9 +129,9 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
 		}
-		if cfg.maxInputChars > 0 {
-			if before, after, notes := fitToBudget(&oreq, cfg.maxInputChars); before != after && privacy.FromRequest(r) == nil {
-				log.Printf("trimmed prompt %d -> %d chars (budget %d): %s", before, after, cfg.maxInputChars, strings.Join(notes, "; "))
+		if cfg.MaxInputChars > 0 {
+			if before, after, notes := fitToBudget(&oreq, cfg.MaxInputChars); before != after && privacy.FromRequest(r) == nil {
+				log.Printf("trimmed prompt %d -> %d chars (budget %d): %s", before, after, cfg.MaxInputChars, strings.Join(notes, "; "))
 				if tr != nil {
 					tr.TrimBefore, tr.TrimAfter, tr.TrimNotes = before, after, notes
 				}
@@ -190,7 +191,8 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			res.detail, res.err = privacy.ScrubLocalFailure(r, res.err, res.detail, res.status)
 		}
 		if tr != nil {
-			tr.Attempts = append(tr.Attempts, history.Attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb})
+			tr.Attempts = append(tr.Attempts, history.Attempt{Model: cand.Key, Err: res.errMsg(), Dur: res.ttfb,
+				Outcome: outcome(r, res, res.err), MaxGap: res.watch.MaxGap()})
 		}
 		if res.err != nil {
 			hl.release(cand.Key)
@@ -200,6 +202,11 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			}
 			hl.record(cand.Key, false, 0, res.err.Error())
 			if !res.retryable || i == len(cands)-1 {
+				// A member that went quiet mid-think loses the session, so the
+				// client's retry goes to the next one.
+				if idleMidAnswer(res.err) && i+1 < len(cands) {
+					hl.moveSession(scope, cand.Key, cands[i+1])
+				}
 				break
 			}
 			log.Printf("local model %s failed (%v), trying %s", cand.Key, res.err, cands[i+1].Key)
@@ -219,7 +226,7 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 			}
 		}
 		if oreq.Stream {
-			werr = streamResponsePolicy(w, responseBody, req.Model, cand.Provider.Type == "codex", usageKnown)
+			werr = streamResponsePolicy(w, responseBody, req.Model, cand.Key, cand.Provider.Type == "codex", usageKnown)
 		} else {
 			werr = blockingResponsePolicy(w, responseBody, req.Model, cand.Provider.Type == "codex", usageKnown)
 		}
@@ -238,19 +245,23 @@ func handleLocal(w http.ResponseWriter, r *http.Request, cfg config, body []byte
 		res.resp.Body.Close()
 		res.cancel()
 		hl.release(cand.Key)
+		if werr != nil && privacy.FromRequest(r) != nil {
+			_, werr = privacy.ScrubLocalFailure(r, werr, werr.Error(), res.status)
+		}
+		if tr != nil {
+			a := &tr.Attempts[len(tr.Attempts)-1]
+			a.Outcome, a.MaxGap = outcome(r, res, werr), res.watch.MaxGap()
+			if werr != nil {
+				a.Err = werr.Error()
+			}
+		}
 		if werr != nil {
-			if privacy.FromRequest(r) != nil {
-				_, werr = privacy.ScrubLocalFailure(r, werr, werr.Error(), res.status)
-			}
-			if tr != nil {
-				tr.Attempts[len(tr.Attempts)-1].Err = werr.Error()
-			}
 			// The client went away mid-answer: no failure, and the session stays.
 			if r.Context().Err() != nil {
 				return
 			}
 			hl.record(cand.Key, false, 0, werr.Error())
-			if cfg.failover && i+1 < len(cands) {
+			if cfg.Failover && i+1 < len(cands) {
 				hl.moveSession(scope, cand.Key, cands[i+1])
 			}
 			return
@@ -273,6 +284,23 @@ type attemptResult struct {
 	detail      string
 	retryable   bool
 	clientGone  bool
+	watch       *bodyWatch // nil when no body arrived
+}
+
+// outcome names how an attempt ended, for the history.
+func outcome(r *http.Request, res attemptResult, err error) string {
+	var protocolErr *codexprovider.ProtocolError
+	switch {
+	case err == nil:
+		return "ok"
+	case r.Context().Err() != nil:
+		return "client_closed"
+	case errors.Is(err, errUpstreamIdle):
+		return "upstream_idle"
+	case res.status >= 400 || errors.As(err, &protocolErr) && protocolErr.Code != "missing_response_completed":
+		return "upstream_error"
+	}
+	return "upstream_closed"
 }
 
 func (a attemptResult) errMsg() string {
@@ -283,13 +311,15 @@ func (a attemptResult) errMsg() string {
 }
 
 // tryModel waits for the first usable response event (not just headers), at most
-// cfg.firstByte. On success the caller owns resp.Body and must call cancel.
+// cfg.FirstByte. On success the caller owns resp.Body and must call cancel.
 func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, stream bool, sessionKey string) attemptResult {
 	model := cand.Key
-	ctx, cancel := context.WithCancel(r.Context())
+	// Codex answers as a stream whatever the client asked for.
+	upstreamStream := stream || cand.Provider.Type == "codex"
+	ctx, cancel := context.WithCancel(markStream(r.Context(), upstreamStream))
 	endpoint := cand.Provider.BaseURL + "/chat/completions"
 	if cand.Provider.Type == "codex" {
-		endpoint = codexBaseURL + "/responses"
+		endpoint = conf.CodexBaseURL + "/responses"
 	}
 	up, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(payload))
 	if err != nil {
@@ -319,14 +349,20 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 
 	var slow atomic.Bool
 	var timer *time.Timer
-	if cfg.firstByte > 0 {
-		timer = time.AfterFunc(cfg.firstByte, func() { slow.Store(true); cancel() })
+	if cfg.FirstByte > 0 {
+		timer = time.AfterFunc(cfg.FirstByte, func() { slow.Store(true); cancel() })
 		defer timer.Stop()
 	}
 	t0 := time.Now()
 	client := http.DefaultClient
 	if cand.Provider.Type == "codex" || privacy.FromRequest(r) != nil {
-		client = &http.Client{Transport: codextesttransport.Transport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		// Only Codex is held to upstreamHTTP's bounds; a local model keeps
+		// the default transport, headers as late as it needs.
+		transport := codextesttransport.Transport()
+		if transport == nil && cand.Provider.Type == "codex" {
+			transport = upstreamHTTP
+		}
+		client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	var resp *http.Response
 	if cand.Provider.Type == "codex" {
@@ -344,7 +380,7 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 			return attemptResult{err: err, clientGone: true}
 		}
 		if slow.Load() {
-			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+			err = fmt.Errorf("%s: no response within %s", model, cfg.FirstByte)
 		}
 		if errors.Is(err, errCodexSignIn) {
 			return attemptResult{err: err, status: http.StatusUnauthorized, detail: err.Error(), ttfb: ttfb, retryable: true}
@@ -384,8 +420,15 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		}
 		return res
 	}
-	original := resp.Body
-	body := original
+	// The watch sits on the raw body: Codex reasoning summaries are bytes
+	// from a live model even though no chat event comes of them. A whole
+	// answer may keep quiet until it is done, so it only has its gaps measured.
+	start, idle := cfg.StartTimeout, cfg.IdleTimeout
+	if !upstreamStream {
+		start, idle = 0, 0
+	}
+	original := watchBody(resp.Body, start, idle, func(error) { cancel() })
+	var body io.ReadCloser = original
 	if p := privacy.FromRequest(r); p != nil && p.MaskExpected() {
 		body = &responseReader{Reader: privacy.NewResponseReader(original), close: original.Close}
 	}
@@ -401,22 +444,25 @@ func tryModel(r *http.Request, cfg config, cand candidate, payload []byte, strea
 		ready = reader
 	}
 	if timer != nil && !timer.Stop() {
-		err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+		err = fmt.Errorf("%s: no response within %s", model, cfg.FirstByte)
 	}
 	if err != nil {
 		body.Close()
 		original.Close()
 		cancel()
 		if r.Context().Err() != nil {
-			return attemptResult{err: err, clientGone: true}
+			return attemptResult{err: err, clientGone: true, watch: original}
 		}
 		if slow.Load() {
-			err = fmt.Errorf("%s: no response within %s", model, cfg.firstByte)
+			err = fmt.Errorf("%s: no response within %s", model, cfg.FirstByte)
 		}
-		return attemptResult{err: err, ttfb: time.Since(t0), retryable: true}
+		// Silence before the start is retried; silence after the model began
+		// is not: another member would make the client wait out a second
+		// idle bound.
+		return attemptResult{err: err, ttfb: time.Since(t0), retryable: !idleMidAnswer(err), watch: original}
 	}
 	resp.Body = &responseReader{Reader: ready, close: func() error { body.Close(); return original.Close() }}
-	return attemptResult{resp: resp, cancel: cancel, ttfb: time.Since(t0)}
+	return attemptResult{resp: resp, cancel: cancel, ttfb: time.Since(t0), watch: original}
 }
 
 func shortDetail(b []byte) string {
@@ -603,6 +649,23 @@ func (s *sseWriter) event(name string, payload any) {
 	}
 }
 
+// failed ends a stream that broke after message_start with an error event
+// of the type Claude Code retries. A client that went away gets nothing.
+func (s sseWriter) failed(member string, err error) {
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+	reason := err.Error()
+	var idle *idleError
+	if errors.As(err, &idle) {
+		reason = idle.Error()
+	}
+	s.event("error", map[string]any{
+		"type":  "error",
+		"error": map[string]any{"type": "overloaded_error", "message": member + ": " + reason},
+	})
+}
+
 type openaiChunk struct {
 	Choices []struct {
 		Delta struct {
@@ -618,11 +681,11 @@ type openaiChunk struct {
 // streamResponse rewrites an OpenAI delta stream as Anthropic SSE. Anthropic
 // keeps at most one content block open at a time, so switching from text to a
 // tool call - or between tool calls - closes the previous block first.
-func streamResponse(w http.ResponseWriter, body io.Reader, model string) error {
-	return streamResponsePolicy(w, body, model, false)
+func streamResponse(w http.ResponseWriter, body io.Reader, model, member string) error {
+	return streamResponsePolicy(w, body, model, member, false)
 }
 
-func streamResponsePolicy(w http.ResponseWriter, body io.Reader, model string, allowEmpty bool, usageKnown ...*bool) error {
+func streamResponsePolicy(w http.ResponseWriter, body io.Reader, model, member string, allowEmpty bool, usageKnown ...*bool) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeAnthropicError(w, http.StatusInternalServerError, "api_error", "streaming unsupported")
@@ -780,10 +843,12 @@ func streamResponsePolicy(w http.ResponseWriter, body io.Reader, model string, a
 	readErr := scanner.Err()
 	if readErr != nil {
 		log.Printf("stream read failed")
+		s.failed(member, readErr)
 		return fmt.Errorf("stream read: %w", readErr)
 	}
 
 	if !completed {
+		s.failed(member, io.ErrUnexpectedEOF)
 		return io.ErrUnexpectedEOF
 	}
 	if len(usageKnown) != 0 && usageKnown[0] != nil {

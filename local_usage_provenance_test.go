@@ -60,7 +60,7 @@ func TestGenericUsageProvenanceSurvivesHistoryRestart(t *testing.T) {
 			store.Add(record)
 			writer := history.NewRecorder(httptest.NewRecorder(), 1<<20)
 			trace := &history.Trace{}
-			handleLocal(writer, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)), config{local: oneProvider(upstream.URL, "model"), firstByte: time.Second}, []byte(body), trace, newHealth(""))
+			handleLocal(writer, httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body)), config{Local: oneProvider(upstream.URL, "model"), FirstByte: time.Second}, []byte(body), trace, newHealth(""))
 			store.Finish(record.ID, writer, trace)
 			if got := store.Get(record.ID); got.Status != http.StatusOK || got.Failed() {
 				t.Fatalf("router response status=%d failed=%v", got.Status, got.Failed())
