@@ -29,7 +29,7 @@ export async function runCodexLoginChecks(browser, base) {
       });
       await page.goto(base + '/#/connections');
       const card = page.locator('.connection-card').filter({ has: page.getByRole('heading', { name: 'Тест входа 6', exact: true }) });
-      await card.getByRole('button', { name: 'Continue with ChatGPT', exact: true }).click();
+      await card.getByRole('button', { name: 'Войти в Codex', exact: true }).click();
       await expect.poll(() => actions.length).toBe(1);
       assert.deepEqual(actions[0], { action: 'codex.login', fields: { provider: 'login-test-6' } });
       if (mode === 'popup') {
@@ -37,10 +37,10 @@ export async function runCodexLoginChecks(browser, base) {
         const popup = context.pages().find(p => p !== page);
         assert(await popup.evaluate(() => window.opener === null), 'authorization page retained access to router');
       } else {
-        const dialog = page.getByRole('dialog', { name: 'Вход с ChatGPT · Тест входа 6', exact: true });
+        const dialog = page.getByRole('dialog', { name: 'Вход в Codex · Тест входа 6', exact: true });
         await expect(dialog).toBeVisible();
         if (mode === 'blocked') {
-          const link = dialog.getByRole('link', { name: 'Continue with ChatGPT ↗', exact: true });
+          const link = dialog.getByRole('link', { name: 'Открыть вход в Codex ↗', exact: true });
           await expect(link).toBeInViewport();
           await link.click();
           await expect.poll(() => context.pages().some(p => p.url().startsWith('https://auth.example.invalid/'))).toBe(true);

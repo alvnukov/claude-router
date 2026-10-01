@@ -9,7 +9,6 @@ import (
 )
 
 type State struct {
-	Version       string       `json:"version"`
 	Now           time.Time    `json:"now"`
 	Started       time.Time    `json:"started"`
 	Lifecycle     string       `json:"lifecycle"`
@@ -46,25 +45,21 @@ type Target struct {
 	EffortMap map[string]string `json:"effortMap,omitempty"`
 }
 type Connection struct {
-	AuthMode            string          `json:"authMode"`
-	SubscriptionEnabled bool            `json:"subscriptionEnabled"`
-	CatalogUpdated      time.Time       `json:"catalogUpdated"`
-	UsageURL            string          `json:"usageURL"`
-	Name                string          `json:"name"`
-	DisplayName         string          `json:"displayName"`
-	Type                string          `json:"type"`
-	BaseURL             string          `json:"baseURL"`
-	KeySet              bool            `json:"keySet"`
-	Connected           bool            `json:"connected"`
-	Pending             bool            `json:"pending"`
-	Error               string          `json:"error"`
-	Models              []string        `json:"models"`
-	Limits              []Limit         `json:"limits"`
-	ResetsKnown         bool            `json:"resetsKnown"`
-	Resets              int64           `json:"resets"`
-	Updated             time.Time       `json:"updated"`
-	Refreshing          bool            `json:"refreshing"`
-	Usage               ConnectionUsage `json:"usage"`
+	Name        string          `json:"name"`
+	DisplayName string          `json:"displayName"`
+	Type        string          `json:"type"`
+	BaseURL     string          `json:"baseURL"`
+	KeySet      bool            `json:"keySet"`
+	Connected   bool            `json:"connected"`
+	Pending     bool            `json:"pending"`
+	Error       string          `json:"error"`
+	Models      []string        `json:"models"`
+	Limits      []Limit         `json:"limits"`
+	ResetsKnown bool            `json:"resetsKnown"`
+	Resets      int64           `json:"resets"`
+	Updated     time.Time       `json:"updated"`
+	Refreshing  bool            `json:"refreshing"`
+	Usage       ConnectionUsage `json:"usage"`
 }
 
 // ConnectionUsage contains only measured counters, never private replay state.

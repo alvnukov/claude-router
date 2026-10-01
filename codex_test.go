@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"localrouter/internal/catalogstartup"
 	conf "localrouter/internal/config"
 	"localrouter/internal/history"
 )
@@ -420,17 +419,12 @@ func postForm(h http.Handler, target string, form url.Values) *httptest.Response
 // codexLoginUI points the login handler at a test issuer and a free port.
 func codexLoginUI(t *testing.T) (*uiServer, http.Handler) {
 	t.Helper()
-	var u *uiServer
-	issuer := planTestIssuer(t, func() string { u.oauthMu.Lock(); defer u.oauthMu.Unlock(); return u.oauthFlow.URL })
+	issuer := codexTestIssuer(t)
 	useTestCodexHome(t, issuer.URL, issuer.Client())
 	old := codexLoginAddr
 	codexLoginAddr = "127.0.0.1:0"
 	t.Cleanup(func() { codexLoginAddr = old })
-	var h http.Handler
-	u, h = codexUI(t)
-	deps := catalogstartup.Dependencies{}
-	deps.SetCodexTestTransport(usageTransport(func(*http.Request) (*http.Response, error) { return usageResponse(200, `{"models":[]}`), nil }))
-	u.catalog = &deps
+	u, h := codexUI(t)
 	u.cs = conf.NewStore(u.cs.Get(), filepath.Join(t.TempDir(), "providers.json"))
 	return u, h
 }
@@ -442,7 +436,7 @@ func completeCodexCallback(t *testing.T, loginURL string) {
 		t.Fatal(err)
 	}
 	q := parsed.Query()
-	resp, err := http.Get(q.Get("redirect_uri") + "?code=one-time-code&client_id=issued-router-client&state=" + url.QueryEscape(q.Get("state")))
+	resp, err := http.Get(q.Get("redirect_uri") + "?code=one-time-code&state=" + url.QueryEscape(q.Get("state")))
 	if err != nil {
 		t.Fatal(err)
 	}

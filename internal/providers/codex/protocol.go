@@ -33,16 +33,6 @@ func protocolError(code string) error {
 func upstreamError(code string, status int) *ProtocolError {
 	e := &ProtocolError{Code: "upstream_error", Status: status, Retryable: status == 408 || status == 429 || status >= 500}
 	switch code {
-	case "subscription_sharing_usage_limit_exceeded":
-		e.Code, e.Status, e.Retryable = code, 429, true
-	case "subscription_sharing_usage_unavailable", "subscription_sharing_user_unavailable":
-		e.Code, e.Status, e.Retryable = code, 503, true
-	case "subscription_sharing_user_not_eligible", "subscription_sharing_route_not_supported", "chatpass_v2_scope_not_authorized", "chatpass_v2_invalid_authorization_context":
-		e.Code, e.Status, e.Retryable = code, 403, false
-	case "subscription_sharing_unsupported_capability":
-		e.Code, e.Status, e.Retryable = code, 400, false
-	case "subscription_sharing_invalid_user":
-		e.Code, e.Status, e.Retryable = code, 401, false
 	case "context_length_exceeded", "invalid_prompt", "invalid_request_error":
 		e.Code, e.Status, e.Retryable = code, 400, false
 	case "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "usage_not_included", "usage_limit_reached":

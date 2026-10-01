@@ -141,7 +141,6 @@
         >{/each}
     </nav>
     <div class="header-tools">
-			{#if data?.version}<small class="muted" title="Версия роутера">{data.version}</small>{/if}
       <label class="theme-control"
         ><span class="sr">Цветовая тема</span><select
           aria-label="Цветовая тема"

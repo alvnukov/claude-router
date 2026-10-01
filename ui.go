@@ -1116,7 +1116,7 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, url, http.StatusSeeOther)
 		return
 	}
-	flow, err := store.startPlanBrowserFlow(r.Context(), "127.0.0.1:0")
+	flow, err := startCodexBrowserFlow(r.Context(), codexLoginAddr, store.issuer)
 	if err != nil {
 		u.oauthStatus, u.oauthError = "failed", err.Error()
 		u.oauthMu.Unlock()
@@ -1144,9 +1144,6 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 			u.probeMu.Lock()
 			u.probe = nil
 			u.probeMu.Unlock()
-			if store.signedIn() {
-				_ = u.refreshModels(context.Background())
-			}
 		}
 	}()
 	http.Redirect(w, r, flow.URL, http.StatusSeeOther)
@@ -1454,23 +1451,8 @@ func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Con
 	if u.catalog != nil {
 		deps = *u.catalog
 	}
-	planMode := false
-	if p.Type == "codex" {
-		store, err := codexStoreFor(p)
-		if err != nil {
-			res.Msg = err.Error()
-			return res
-		}
-		credential, err := store.credentialFor(ctx)
-		if err != nil {
-			res.Msg = err.Error()
-			return res
-		}
-		planMode = credential.AuthMode == "chatgpt-plan"
-		ctx = context.WithValue(ctx, codexAccountContextKey{}, credential.accountKey())
-	}
 	body, msg := deps.FetchModels(ctx, conf.CodexBaseURL+"/models?client_version=0.156.0", catalogstartup.ProbeInput{
-		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey, ChatGPTPlan: planMode,
+		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey,
 	}, func(ctx context.Context, req *http.Request) error {
 		store, err := codexStoreFor(p)
 		if err != nil {

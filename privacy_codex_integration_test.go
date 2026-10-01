@@ -29,28 +29,13 @@ func privateCodexHandler(t *testing.T) http.Handler {
 }
 
 func TestPrivacyCodexDoesNotImportOrPersistOpaqueState(t *testing.T) {
-	testPrivacyCodexDoesNotImportOrPersistOpaqueState(t, false)
-}
-func TestChatGPTPlanPrivacyDoesNotImportOrPersistOpaqueState(t *testing.T) {
-	testPrivacyCodexDoesNotImportOrPersistOpaqueState(t, true)
-}
-func testPrivacyCodexDoesNotImportOrPersistOpaqueState(t *testing.T, plan bool) {
 	seedTwoConnections(t)
 	p := provider{Name: "codex", Type: "codex"}
 	auth, err := codexStoreFor(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan {
-		if err := auth.save(planFixture(t, "https://auth.openai.com", true, time.Now().Add(time.Hour))); err != nil {
-			t.Fatal(err)
-		}
-	}
-	credential, err := auth.credentialFor(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope := codexprovider.SessionKey("codex/good\x00" + credential.accountKey() + "\x00" + codexprovider.SessionKey("private-session"))
+	scope := codexprovider.SessionKey("codex/good\x00acct-a\x00" + codexprovider.SessionKey("private-session"))
 	state, err := codexprovider.Capture(scope, []byte(`{"model":"good","input":[{"type":"message","role":"user","content":"hi"}]}`), codexprovider.Completion{Calls: 1, ResponseIDs: []string{"legacy-response"}, Text: "Ready", Output: []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"` + trafficCanary + `"}`), json.RawMessage(`{"type":"message","role":"assistant","content":"Ready"}`)}})
 	if err != nil {
 		t.Fatal(err)

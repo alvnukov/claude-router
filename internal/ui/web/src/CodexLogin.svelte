@@ -18,8 +18,8 @@
       popup = window.open("about:blank", "_blank");
       if (popup) {
         popup.opener = null;
-        popup.document.title = "Вход с ChatGPT";
-        popup.document.body.textContent = "Открываем страницу входа в ChatGPT…";
+        popup.document.title = "Вход в Codex";
+        popup.document.body.textContent = "Открываем страницу входа в Codex…";
       }
       const result = await act("codex.login", { provider: connection.name });
       if (!result.url) throw new Error("Роутер не вернул ссылку для входа. Повторите попытку.");
@@ -40,15 +40,15 @@
 </script>
 
 <button type="button" class="primary" disabled={busy} onclick={login}>
-  {busy ? "Открываем вход…" : "Continue with ChatGPT"}
+  {busy ? "Открываем вход…" : connection.connected ? "Обновить вход" : "Войти в Codex"}
 </button>
-<dialog bind:this={dialog} aria-label={"Вход с ChatGPT · " + connection.displayName}>
-  <h2>Вход с ChatGPT · {connection.displayName}</h2>
+<dialog bind:this={dialog} aria-label={"Вход в Codex · " + connection.displayName}>
+  <h2>Вход в Codex · {connection.displayName}</h2>
   {#if error}<p class="danger" role="alert">{error}</p>
   {:else}<p>Браузер не открыл новую вкладку. Нажмите кнопку, чтобы продолжить вход.</p>{/if}
   <div class="actions">
     <button type="button" onclick={() => dialog.close()}>Закрыть</button>
     {#if loginURL}<a class="button primary" href={loginURL} target="_blank" rel="noopener noreferrer"
-      >Continue with ChatGPT ↗</a>{/if}
+      >Открыть вход в Codex ↗</a>{/if}
   </div>
 </dialog>

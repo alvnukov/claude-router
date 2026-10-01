@@ -242,13 +242,8 @@ spend subscription quota.
 
 ## Codex subscription
 
-Use **Continue with ChatGPT** on the connection card under **Подключения**.
-The router uses its own official Sign in with ChatGPT registration and a
-temporary callback on `127.0.0.1`; finish consent in the opened browser tab.
-Grant permission to use your ChatGPT subscription. A valid sign-in without that
-permission remains connected but cannot serve inference; repeat the action to
-enable subscription access. No API key is required; subscription eligibility
-and usage limits still apply.
+Use **Войти через браузер** under **Подключения → Подписка Codex**. The router
+starts an OAuth callback on `127.0.0.1:1455`; finish sign-in in the opened tab.
 Add a provider of type **Codex**; the next catalog refresh imports the account
 models. Include the desired models in pools. Its endpoint is fixed and it does not use an API key.
 An existing CLI login can be imported explicitly from the provider pane; it
@@ -258,15 +253,8 @@ The router saves and refreshes its own credential in
 `~/.config/claude-router/codex-auth.json` (0600). `ROUTER_CODEX_AUTH_FILE` changes
 that path.
 
-Each Codex provider has its own sign-in and credential slot. Existing imported
-CLI credentials remain active until verified browser sign-in replaces them.
-New grants use `https://api.openai.com/v1/models` and `/v1/responses`; they never
-use the private Codex catalog, quota endpoint or a fabricated CLI version.
-The account catalog refreshes after enabled sign-in and through the existing
-manual/hourly updater. The UI shows its last successful refresh and the router's
-actual build revision. An unavailable later refresh retains the last good data.
-The stable private `chatgpt-host-id` next to the credentials is reused across
-connections and restarts; do not copy credentials between router hosts.
+Each Codex provider is a separate subscription with its own sign-in, import
+and limits; the **Подписка Codex** section shows one block per connection.
 New connections get an `auth_id`, and their credential lives next to
 `codex-auth.json` as `codex-auth-<hex name>-<auth_id>.json`. Renaming a
 connection is not supported: remove it, add it again and sign in. A removed
@@ -277,12 +265,6 @@ not OpenAI API billing. Availability follows the signed-in account catalog.
 Anthropic credentials are never forwarded to other providers.
 
 ## Codex subscription limits
-
-For the new ChatGPT plan mode, quota percentages are unavailable through this
-integration. The connection links to **ChatGPT settings → Usage** instead of
-polling the private Codex quota endpoint. A subscription usage-limit error does
-not establish a reset time or imply the whole plan is exhausted.
-The following quota controls apply to legacy CLI credentials only.
 
 **Лимиты Codex** opens the subscription section with the connected account’s
 email, plan and account ID. **Обновить лимиты** is the only action that requests
