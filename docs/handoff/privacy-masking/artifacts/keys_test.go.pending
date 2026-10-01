@@ -1,0 +1,210 @@
+package privacy
+
+import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+
+	"localrouter/internal/platform"
+)
+
+// syntheticKey is the fixed session key 00…1f.
+func syntheticKey() []byte {
+	key := make([]byte, 32)
+	for i := range key {
+		key[i] = byte(i)
+	}
+	return key
+}
+
+// filesWith lists the files under dir that hold key raw or in hex.
+func filesWith(t *testing.T, dir string, key []byte) []string {
+	t.Helper()
+	var found []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(data, key) || bytes.Contains(data, []byte(hex.EncodeToString(key))) {
+			found = append(found, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// fakeKeys is a keyStore in memory that counts writes and can fail every call.
+type fakeKeys struct {
+	mu   sync.Mutex
+	keys map[string][]byte
+	puts int
+	err  error
+}
+
+func (f *fakeKeys) put(id string, key []byte) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	if f.keys == nil {
+		f.keys = make(map[string][]byte)
+	}
+	f.puts++
+	f.keys[id] = append([]byte(nil), key...)
+	return nil
+}
+func (f *fakeKeys) get(id string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return nil, f.err
+	}
+	key, ok := f.keys[id]
+	if !ok {
+		return nil, platform.ErrSecretNotFound
+	}
+	return append([]byte(nil), key...), nil
+}
+func (f *fakeKeys) delete(id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.err != nil {
+		return f.err
+	}
+	delete(f.keys, id)
+	return nil
+}
+func (f *fakeKeys) has(id string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.keys[id]
+	return ok
+}
+
+func TestSessionKeyOffDisk(t *testing.T) {
+	const id = "offdisk"
+	body := requestBody(id, "Ромашка admin@romashka.example")
+	open := func(t *testing.T, home string, keys keyStore) *Engine {
+		t.Helper()
+		e, err := Open(home, corpusRules(t), Options{Home: "/home/testlogin", Hostname: "test-host.local", keys: keys, newKey: func() ([]byte, error) { return syntheticKey(), nil }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e
+	}
+	mask := func(t *testing.T, e *Engine) []byte {
+		t.Helper()
+		out, req, err := e.Mask(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Close()
+		return out
+	}
+
+	t.Run("key not in files", func(t *testing.T) {
+		home, keys := t.TempDir(), &fakeKeys{}
+		mask(t, open(t, home, keys))
+		if !keys.has(id) || !bytes.Equal(keys.keys[id], syntheticKey()) {
+			t.Fatal("key not in the store; the check below would prove nothing")
+		}
+		if files := filesWith(t, home, syntheticKey()); len(files) > 0 {
+			t.Fatalf("session key on disk in %v", files)
+		}
+	})
+	t.Run("survives restart", func(t *testing.T) {
+		home, keys := t.TempDir(), &fakeKeys{}
+		first := mask(t, open(t, home, keys))
+		if second := mask(t, open(t, home, keys)); !bytes.Equal(first, second) {
+			t.Fatalf("after restart:\n%s\nwant:\n%s", second, first)
+		}
+		if keys.puts != 1 {
+			t.Fatalf("puts = %d; want 1, the restart reads the key", keys.puts)
+		}
+	})
+	t.Run("deleted with session", func(t *testing.T) {
+		home, keys := t.TempDir(), &fakeKeys{}
+		e := open(t, home, keys)
+		mask(t, e)
+		if err := e.Forget(id); err != nil {
+			t.Fatal(err)
+		}
+		if keys.has(id) {
+			t.Fatal("key kept after Forget")
+		}
+	})
+	t.Run("lost key refuses", func(t *testing.T) {
+		home := t.TempDir()
+		mask(t, open(t, home, &fakeKeys{}))
+		empty := &fakeKeys{}
+		e := open(t, home, empty)
+		_, _, err := e.Mask(body)
+		var reject *RejectError
+		if !errors.As(err, &reject) || reject.Reason != "session key lost" {
+			t.Fatalf("Mask = %v; want RejectError «session key lost»", err)
+		}
+		if n := e.Counters().KeysLost; n != 1 {
+			t.Fatalf("KeysLost = %d; want 1", n)
+		}
+		if empty.puts != 0 {
+			t.Fatalf("puts = %d; a lost key must not be replaced", empty.puts)
+		}
+	})
+	for _, row := range []struct {
+		name, reason string
+		cause        error
+	}{
+		{"no store fails closed", "маска недоступна: нет хранилища секретов ОС", platform.ErrNoSecretStore},
+		{"no logon session fails closed", "маска недоступна: нет сеанса входа пользователя для хранилища секретов ОС", fmt.Errorf("platform: credential read x: %w", platform.ErrNoLogonSession)},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			keys := &fakeKeys{err: row.cause}
+			if _, err := Open(t.TempDir(), corpusRules(t), Options{Home: "/home/testlogin", Hostname: "test-host.local", keys: keys}); !errors.Is(err, platform.ErrNoSecretStore) {
+				t.Fatalf("Open = %v; want ErrNoSecretStore", err)
+			}
+
+			home := t.TempDir()
+			runtimeConfig(t, home, `{}`)
+			rt := NewRuntime(home)
+			var lines []string
+			rt.logf = func(format string, args ...any) { lines = append(lines, fmt.Sprintf(format, args...)) }
+			rt.openKeys = func(string) (keyStore, error) { return keys, nil }
+			for range 2 {
+				if p, err := rt.Snapshot(); !errors.Is(err, errTraffic) || p != nil {
+					t.Fatalf("Snapshot = %v, %v; want no policy and errTraffic", p, err)
+				}
+			}
+			state := rt.State()
+			if state.MaskUnavailable != 2 || state.Unavailable != row.reason {
+				t.Fatalf("state = %d, %q; want 2, %q", state.MaskUnavailable, state.Unavailable, row.reason)
+			}
+			named := 0
+			for _, line := range lines {
+				if strings.Contains(line, row.reason) {
+					named++
+				}
+			}
+			if named != 1 {
+				t.Fatalf("router.log = %q; want the reason exactly once", lines)
+			}
+			if keys.puts != 0 {
+				t.Fatalf("puts = %d; want no key created", keys.puts)
+			}
+		})
+	}
+}

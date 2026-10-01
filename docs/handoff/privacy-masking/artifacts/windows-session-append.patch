@@ -1,0 +1,145 @@
+diff --git a/internal/privacy/session.go b/internal/privacy/session.go
+index dcf98e9..f5a34b0 100644
+--- a/internal/privacy/session.go
++++ b/internal/privacy/session.go
+@@ -8,6 +8,7 @@ import (
+ 	"encoding/json"
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"os"
+ 	"path/filepath"
+ 	"regexp"
+@@ -303,11 +304,16 @@ func (s *sessionStore) transaction(id string, resume bool, fn func(*sessionView)
+ 			sd.validBytes = int64(len(line))
+ 		}
+ 		if len(sd.pending) > 0 {
+-			f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
++			// No O_APPEND: on Windows it leaves the handle without the right
++			// to truncate. The sessions lock keeps other writers out.
++			f, err := os.OpenFile(path, os.O_WRONLY, 0o600)
+ 			if err != nil {
+ 				return err
+ 			}
+ 			err = f.Truncate(sd.validBytes)
++			if err == nil {
++				_, err = f.Seek(sd.validBytes, io.SeekStart)
++			}
+ 			if err == nil {
+ 				for _, r := range sd.pending {
+ 					line, _ := json.Marshal(r)
+diff --git a/internal/privacy/session_test.go b/internal/privacy/session_test.go
+index 9c1ddbc..c56ac8a 100644
+--- a/internal/privacy/session_test.go
++++ b/internal/privacy/session_test.go
+@@ -1,9 +1,12 @@
+ package privacy
+ 
+ import (
++	"bytes"
+ 	"encoding/hex"
++	"encoding/json"
+ 	"os"
+ 	"path/filepath"
++	"strings"
+ 	"testing"
+ 	"time"
+ )
+@@ -25,13 +28,42 @@ func TestMapUnique(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
++	p := filepath.Join(s.versionDir(prfV2), "alpha.jsonl")
++	// appended checks that the session file is prefix followed by one
++	// whole line per name in reals, and returns the file.
++	appended := func(t *testing.T, prefix []byte, reals ...string) []byte {
++		t.Helper()
++		data, err := os.ReadFile(p)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if !bytes.HasPrefix(data, prefix) {
++			t.Fatalf("valid part of the session file changed:\n%q\nwas:\n%q", data, prefix)
++		}
++		lines := strings.SplitAfter(string(data[len(prefix):]), "\n")
++		if len(lines) != len(reals)+1 || lines[len(reals)] != "" {
++			t.Fatalf("want %d whole lines after the valid part, got %q", len(reals), data[len(prefix):])
++		}
++		for i, real := range reals {
++			var r mapRecord
++			if err := json.Unmarshal([]byte(lines[i]), &r); err != nil || r.Real != real {
++				t.Fatalf("line %d after the valid part: %q (%v), want real %q", i, lines[i], err, real)
++			}
++		}
++		return data
++	}
+ 	t.Run("torn-tail", func(t *testing.T) {
+-		p := filepath.Join(s.versionDir(prfV2), "alpha.jsonl")
++		valid, err := os.ReadFile(p)
++		if err != nil {
++			t.Fatal(err)
++		}
+ 		f, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o600)
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
+-		if _, err = f.WriteString(`{"kind":"person","real":"truncated`); err != nil {
++		// Longer than the line written next, so a write from the valid
++		// length without the truncate leaves some of it behind.
++		if _, err = f.WriteString(`{"kind":"person","real":"truncated` + strings.Repeat("x", 512)); err != nil {
+ 			t.Fatal(err)
+ 		}
+ 		f.Close()
+@@ -42,11 +74,52 @@ func TestMapUnique(t *testing.T) {
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
++		appended(t, valid, "beta")
+ 		all, err := s.readAll()
+ 		if err != nil || len(all["alpha"].entries) != 2 {
+ 			t.Fatalf("torn tail: %v", err)
+ 		}
+ 	})
++	t.Run("two transactions", func(t *testing.T) {
++		valid, err := os.ReadFile(p)
++		if err != nil {
++			t.Fatal(err)
++		}
++		for _, add := range []mapRecord{{Kind: KindPerson, Real: "gamma", Pseudo: "kelomaris"}, {Kind: KindPerson, Real: "delta", Pseudo: "tovarelun"}} {
++			err := s.transaction("alpha", false, func(v *sessionView) error {
++				v.session.add(add)
++				return nil
++			})
++			if err != nil {
++				t.Fatal(err)
++			}
++		}
++		appended(t, valid, "gamma", "delta")
++		all, err := s.readAll()
++		if err != nil || len(all["alpha"].entries) != 4 {
++			t.Fatalf("two transactions: %v", err)
++		}
++	})
++	t.Run("empty file", func(t *testing.T) {
++		empty := newSessionStore(t.TempDir(), time.Now)
++		if err := empty.locked(func() error { return nil }); err != nil {
++			t.Fatal(err)
++		}
++		path := filepath.Join(empty.versionDir(prfV2), "empty.jsonl")
++		if err := os.WriteFile(path, nil, 0o600); err != nil {
++			t.Fatal(err)
++		}
++		err := empty.transaction("empty", false, func(v *sessionView) error {
++			v.session.add(mapRecord{Kind: KindPerson, Real: "beta", Pseudo: "zifobareg"})
++			return nil
++		})
++		if err == nil {
++			t.Fatal("a session file without its key accepted")
++		}
++		if info, err := os.Stat(path); err != nil || info.Size() != 0 {
++			t.Fatalf("empty session file written: %v %v", info, err)
++		}
++	})
+ 	t.Run("bad-key", func(t *testing.T) {
+ 		p := filepath.Join(s.versionDir(prfV2), "broken.jsonl")
+ 		if err := os.WriteFile(p, []byte(`{"kind":"key","key":"`+hex.EncodeToString([]byte{1})+`"}`+"\n"), 0o600); err != nil {

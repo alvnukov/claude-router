@@ -1,0 +1,27 @@
+diff --git a/internal/privacy/mapper.go b/internal/privacy/mapper.go
+index 8ec4fec..d5425e7 100644
+--- a/internal/privacy/mapper.go
++++ b/internal/privacy/mapper.go
+@@ -192,7 +192,7 @@ func (m *mapper) maskText(text string, field fieldKind) ([]textEdit, error) {
+ 			switch {
+ 			case networkKind(s.Kind):
+ 				network = true
+-				value, err = m.mapNetwork(s)
++				value, err = m.networkPseudonym(s)
+ 			case s.Kind == KindSecret:
+ 				m.view.session.rememberSecret(s.Value)
+ 				value, err = m.placeholder(secretFamily(s.Value), s.Value)
+@@ -262,11 +262,11 @@ func ambiguousAddress(s string) bool {
+ 	return zeros && ok
+ }
+ 
+-// mapNetwork masks an address, a network or a MAC. A value under the
++// networkPseudonym masks an address, a network or a MAC. A value under the
+ // threshold leaves as a placeholder, and so does one no block handles
+ // (counted as unhandled) rather than leave equal to itself, and one in the
+ // shape of its class that does not parse (counted as unparsed).
+-func (m *mapper) mapNetwork(s Span) (string, error) {
++func (m *mapper) networkPseudonym(s Span) (string, error) {
+ 	if unparsedAddress(s.Value) {
+ 		m.e.counts.unparsedShape(s.Kind, ambiguousAddress(s.Value))
+ 		return m.placeholder(string(s.Kind), s.Value)
