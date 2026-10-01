@@ -22,8 +22,11 @@ func Read(body io.Reader, emit func(Delta) error, progress func()) (Completion, 
 	return readValidated(body, emit, progress, nil)
 }
 
-func readValidated(body io.Reader, emit func(Delta) error, progress func(), validate func([]byte) error) (Completion, error) {
+func readValidated(body io.Reader, emit func(Delta) error, progress func(), validate func([]byte) error, namespaces ...map[string]map[string]bool) (Completion, error) {
 	d := decoder{emit: emit, progress: progress, calls: make(map[int]*streamedCall), seen: make(map[string][sha256.Size]byte)}
+	if len(namespaces) > 0 {
+		d.namespaces = namespaces[0]
+	}
 	err := events(body, d.event, validate)
 	d.result.Text = d.text.String()
 	if err != nil {
@@ -39,6 +42,7 @@ func readValidated(body io.Reader, emit func(Delta) error, progress func(), vali
 }
 
 type decoder struct {
+	namespaces  map[string]map[string]bool
 	result      Completion
 	text        strings.Builder
 	textParts   TextStream
@@ -245,7 +249,7 @@ func (d *decoder) item(index int, raw json.RawMessage) error {
 		if item.CallID == "" || item.Name == "" {
 			return protocolError("invalid_function_call")
 		}
-		if item.Namespace != "" {
+		if item.Namespace != "" && !d.namespaces[item.Namespace][item.Name] {
 			return protocolError("unadvertised_tool_namespace")
 		}
 		if err := validateArguments(item.Arguments); err != nil {

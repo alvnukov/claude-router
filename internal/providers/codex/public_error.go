@@ -25,7 +25,7 @@ func ClassifyFailure(err error, status int) anthropicerror.Failure {
 	case "rate_limit_exceeded", "slow_down":
 		f.Category = anthropicerror.Transient429
 		f.RetryAfter = publicRetryAfter(protocol.retryHeader, protocol.observedAt)
-	case "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "usage_not_included", "usage_limit_reached":
+	case "insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "usage_not_included", "usage_limit_reached", "subscription_sharing_usage_limit_exceeded":
 		f.Category = anthropicerror.Quota429
 	default:
 		f.Category = anthropicerror.Unknown429

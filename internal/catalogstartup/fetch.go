@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"localrouter/internal/chatgptplan"
 	"net/http"
 	"time"
 )
@@ -42,6 +43,7 @@ func (d Dependencies) FetchOfficial(ctx context.Context, fallbackURL string) ([]
 // ProbeInput carries only the provider details needed for a guarded models request.
 type ProbeInput struct {
 	Name, Kind, BaseURL, AuthID, APIKey string
+	ChatGPTPlan                         bool
 }
 
 // FetchModels owns target selection, authorization order and transport policy.
@@ -55,6 +57,9 @@ func (d Dependencies) FetchModels(ctx context.Context, fallbackCodexURL string, 
 		endpoint = d.codexURL
 		if endpoint == "" {
 			endpoint = fallbackCodexURL
+		}
+		if p.ChatGPTPlan {
+			endpoint = chatgptplan.ModelsURL
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)

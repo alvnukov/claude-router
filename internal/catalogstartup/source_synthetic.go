@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/chatgptplan"
 	"localrouter/internal/codextesttransport"
 )
 
@@ -30,16 +31,18 @@ const maxManifestBytes = 64 << 10
 const pinnedCodexModelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=0.156.0"
 
 type syntheticManifest struct {
-	FixtureRoot     string   `json:"fixture_root"`
-	OfficialURL     string   `json:"official_url"`
-	CodexModelsURL  string   `json:"codex_models_url"`
-	ProviderOrigins []string `json:"provider_origins"`
+	FixtureRoot          string   `json:"fixture_root"`
+	OfficialURL          string   `json:"official_url"`
+	CodexModelsURL       string   `json:"codex_models_url"`
+	ChatGPTPlanModelsURL string   `json:"chatgpt_plan_models_url,omitempty"`
+	ProviderOrigins      []string `json:"provider_origins"`
 }
 
 type syntheticTransport struct {
 	base            *http.Transport
 	official        string
 	codex           *url.URL
+	plan            *url.URL
 	codexToken      string
 	providerOrigins map[string]bool
 	mu              sync.RWMutex
@@ -67,11 +70,21 @@ func ForProcess(_, _ string) (Dependencies, error) {
 	if err != nil {
 		return Dependencies{}, err
 	}
+	var plan *url.URL
+	if manifest.ChatGPTPlanModelsURL != "" {
+		plan, err = loopbackURL(manifest.ChatGPTPlanModelsURL)
+		if err != nil || plan.EscapedPath() != "/v1/models" || plan.RawQuery != "" || plan.ForceQuery {
+			return Dependencies{}, errors.New("synthetic ChatGPT plan URL must be /v1/models on numeric loopback")
+		}
+	}
 	providers := make(map[string]bool, len(manifest.ProviderOrigins))
 	allowedHosts := make(map[string]bool, len(manifest.ProviderOrigins)+2)
 	for _, raw := range []string{manifest.OfficialURL, manifest.CodexModelsURL} {
 		u, _ := url.Parse(raw) // Already checked by loopbackURL above.
 		allowedHosts[u.Host] = true
+	}
+	if plan != nil {
+		allowedHosts[plan.Host] = true
 	}
 	for _, raw := range manifest.ProviderOrigins {
 		u, err := loopbackURL(raw + "/")
@@ -92,7 +105,7 @@ func ForProcess(_, _ string) (Dependencies, error) {
 		officialURL: manifest.OfficialURL,
 		codexURL:    pinnedCodexModelsURL,
 		transport:   transport,
-		guard:       &syntheticTransport{base: transport, official: manifest.OfficialURL, codex: codex, codexToken: codexToken, providerOrigins: providers, models: make(map[string]bool)},
+		guard:       &syntheticTransport{base: transport, official: manifest.OfficialURL, codex: codex, plan: plan, codexToken: codexToken, providerOrigins: providers, models: make(map[string]bool)},
 	}, nil
 }
 
@@ -122,14 +135,24 @@ func syntheticCodexToken(root string) (string, error) {
 		return "", errors.New("synthetic Codex auth exceeds size limit")
 	}
 	var auth struct {
-		AuthMode string `json:"auth_mode"`
+		AuthMode string                    `json:"auth_mode"`
+		Plan     *chatgptplan.Registration `json:"plan"`
 		Tokens   struct {
 			AccessToken  string `json:"access_token"`
 			RefreshToken string `json:"refresh_token"`
 			AccountID    string `json:"account_id"`
 		} `json:"tokens"`
 	}
-	if json.Unmarshal(body, &auth) != nil || auth.AuthMode != "chatgpt" || auth.Tokens.RefreshToken != "catalogsynthetic-refresh" || auth.Tokens.AccountID != "catalogsynthetic-account" {
+	if json.Unmarshal(body, &auth) != nil {
+		return "", errors.New("synthetic Codex auth is not a fixture credential")
+	}
+	if auth.AuthMode == chatgptplan.AuthMode {
+		if auth.Plan == nil || !auth.Plan.Valid() || !auth.Plan.SharingEnabled() || auth.Plan.Issuer != chatgptplan.Issuer || auth.Plan.Subject != "catalogsynthetic-account" || auth.Plan.ClientID != "catalogsynthetic-client" || !auth.Plan.ExpiresAt.After(time.Now().Add(30*time.Second)) || auth.Tokens.AccessToken != "catalogsynthetic-plan-access" || auth.Tokens.RefreshToken != "catalogsynthetic-refresh" {
+			return "", errors.New("synthetic ChatGPT auth is not a fixture credential")
+		}
+		return auth.Tokens.AccessToken, nil
+	}
+	if auth.AuthMode != "chatgpt" || auth.Tokens.RefreshToken != "catalogsynthetic-refresh" || auth.Tokens.AccountID != "catalogsynthetic-account" {
 		return "", errors.New("synthetic Codex auth is not a fixture credential")
 	}
 	parts := strings.Split(auth.Tokens.AccessToken, ".")
@@ -183,6 +206,16 @@ func (d Dependencies) ValidateProvider(name, kind, baseURL string, authID ...str
 func (g *syntheticTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req == nil || req.URL == nil || req.Host != req.URL.Host || req.Method != http.MethodGet {
 		return nil, errors.New("synthetic catalog target denied")
+	}
+	if req.URL.String() == chatgptplan.ModelsURL {
+		if g.plan == nil || g.codexToken != "catalogsynthetic-plan-access" || len(req.Header.Values("Authorization")) != 1 || req.Header.Get("Authorization") != "Bearer "+g.codexToken || req.Header.Get("ChatGPT-Account-Id") != "" {
+			return nil, errors.New("synthetic ChatGPT request lacks fixture authorization")
+		}
+		redirected := req.Clone(req.Context())
+		endpoint := *g.plan
+		redirected.URL = &endpoint
+		redirected.Host = endpoint.Host
+		return g.base.RoundTrip(redirected)
 	}
 	if req.URL.String() == pinnedCodexModelsURL {
 		if req.Header.Get("Authorization") != "Bearer "+g.codexToken || req.Header.Get("ChatGPT-Account-Id") != "catalogsynthetic-account" || req.Header.Get("originator") != "claude-router" {

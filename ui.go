@@ -1455,8 +1455,23 @@ func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Con
 	if u.catalog != nil {
 		deps = *u.catalog
 	}
+	planMode := false
+	if p.Type == "codex" {
+		store, err := codexStoreFor(p)
+		if err != nil {
+			res.Msg = err.Error()
+			return res
+		}
+		credential, err := store.credentialFor(ctx)
+		if err != nil {
+			res.Msg = err.Error()
+			return res
+		}
+		planMode = credential.AuthMode == "chatgpt-plan"
+		ctx = context.WithValue(ctx, codexAccountContextKey{}, credential.accountKey())
+	}
 	body, msg := deps.FetchModels(ctx, codexBaseURL+"/models?client_version=0.156.0", catalogstartup.ProbeInput{
-		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey,
+		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey, ChatGPTPlan: planMode,
 	}, func(ctx context.Context, req *http.Request) error {
 		store, err := codexStoreFor(p)
 		if err != nil {

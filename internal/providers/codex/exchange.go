@@ -169,7 +169,7 @@ func sampling(ctx context.Context, payload []byte, headers http.Header, send Sen
 			timer.Stop()
 		}
 	}
-	result, err := readValidated(response.Body, emit, progress, validate)
+	result, err := readValidated(response.Body, emit, progress, validate, advertisedFunctions(payload))
 	if expired.Load() {
 		err = protocolError("first_event_timeout")
 	}

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"localrouter/internal/chatgptplan"
 	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
 	"localrouter/internal/privacy"
@@ -36,7 +37,12 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 	if err != nil {
 		return codexAttemptError(r, start, err)
 	}
-	account := credential.Tokens.AccountID
+	account := credential.accountKey()
+	planMode := credential.AuthMode == chatgptplan.AuthMode
+	endpoint := codexBaseURL + "/responses"
+	if planMode {
+		endpoint = chatgptplan.ResponsesURL
+	}
 	scope := ""
 	if sessionKey != "" {
 		scope = codexprovider.SessionKey(cand.Key + "\x00" + account + "\x00" + sessionKey)
@@ -67,6 +73,12 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 	if err != nil {
 		return codexAttemptError(r, start, err)
 	}
+	if planMode {
+		payload, err = toChatGPTPlanPayload(payload)
+		if err != nil {
+			return codexAttemptError(r, start, err)
+		}
+	}
 	client := &http.Client{Transport: codextesttransport.Transport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	sent := false
 	send := func(ctx context.Context, body []byte, headers http.Header) (*http.Response, error) {
@@ -74,17 +86,27 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 			return nil, errors.New("privacy: native continuation requires validated state provenance")
 		}
 		sent = true
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, codexBaseURL+"/responses", bytes.NewReader(body))
+		if planMode {
+			var err error
+			body, err = toChatGPTPlanPayload(body)
+			if err != nil {
+				return nil, err
+			}
+		}
+		ctx = context.WithValue(ctx, codexAccountContextKey{}, account)
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		request.Header = headers.Clone()
 		request.Header.Set("Content-Type", "application/json")
+		if planMode {
+			for _, key := range []string{"session-id", "thread-id", "x-codex-turn-state", "x-client-request-id", "originator", "ChatGPT-Account-Id", "x-openai-internal-codex-residency"} {
+				request.Header.Del(key)
+			}
+		}
 		if err := store.authorize(ctx, request); err != nil {
 			return nil, err
-		}
-		if request.Header.Get("ChatGPT-Account-Id") != account {
-			return nil, errors.New("аккаунт Codex изменился; повторите запрос")
 		}
 		response, err := store.doWithReauth(client, request)
 		if err == nil && protected {
@@ -98,6 +120,9 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	options := codexprovider.Options{SessionKey: sessionKey, TurnState: turnState, FirstEventTimeout: cfg.firstByte}
+	if planMode {
+		options.TurnState = ""
+	}
 	if protected {
 		options.ValidateEvent = privacy.ValidateObject
 	}
