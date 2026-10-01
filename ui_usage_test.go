@@ -78,6 +78,90 @@ func usageRecord(id, session, served string, at time.Time, input, cached int) *h
 	return &history.Record{ID: id, Session: session, Served: served, Route: "local", Path: "/v1/messages", Start: at, End: at.Add(time.Second), Status: 200, Resp: &history.Response{Usage: usage}}
 }
 
+func TestUIJSONSessionContextAndTotalUsage(t *testing.T) {
+	for _, scenario := range []string{"latest", "pending", "failed", "unknown", "unknown total with known context", "cache unknown", "zero", "native zero", "invalid", "old session"} {
+		t.Run(scenario, func(t *testing.T) {
+			u, h := testUI(t)
+			now := time.Now()
+			old := usageRecord("old", "context-session", "p/m1", now.Add(-48*time.Hour), 20000, 10000)
+			u.st.Add(old)
+			latest := usageRecord("latest", "context-session", "p/m1", now.Add(-time.Minute), 10000, 8000)
+			latest.ProviderState = json.RawMessage(`{"usage_known":true,"calls":2,"scope":"PRIVATE-SCOPE","usage":{"input_tokens":25000,"output_tokens":300,"input_tokens_details":{"cached_tokens":20000}}}`)
+			wantInput, wantCached, wantCacheKnown := int64(10000), int64(8000), true
+			wantTotal, wantContext := int64(45000), true
+			switch scenario {
+			case "pending", "failed":
+				newer := usageRecord("newer", "context-session", "p/m1", now.Add(-30*time.Second), 99000, 0)
+				if scenario == "pending" {
+					newer.End = time.Time{}
+				} else {
+					newer.Status = 500
+				}
+				u.st.Add(newer)
+			case "unknown":
+				latest.ProviderState = json.RawMessage(`{"usage_known":false,"usage":{"input_tokens":25000,"output_tokens":300}}`)
+				latest.Resp.Usage = map[string]int{"input_tokens": 0, "output_tokens": 0}
+				wantTotal, wantContext = 20000, false
+			case "unknown total with known context":
+				latest.ProviderState = json.RawMessage(`{"usage_known":false,"calls":2,"usage":{"input_tokens":10000,"output_tokens":100}}`)
+				wantTotal = 20000
+			case "cache unknown":
+				latest.ProviderState = nil
+				delete(latest.Resp.Usage, "cache_read_input_tokens")
+				wantInput, wantCached, wantCacheKnown, wantTotal = 2000, 0, false, 22000
+			case "zero":
+				latest.ProviderState = nil
+				latest.Resp.Usage = map[string]int{"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0}
+				wantInput, wantCached, wantTotal = 0, 0, 20000
+			case "native zero":
+				latest.Resp.Usage = map[string]int{"input_tokens": 0, "output_tokens": 0}
+				wantInput, wantCached, wantCacheKnown = 0, 0, false
+			case "invalid":
+				latest.Resp.Usage["input_tokens"] = -1
+				wantContext = false
+			case "old session":
+				latest.Start, latest.End = now.Add(-26*time.Hour), now.Add(-26*time.Hour+time.Second)
+			}
+			u.st.Add(latest)
+			u.st.Add(usageRecord("other", "other-session", "p/m1", now.Add(-time.Second), 50000, 0))
+			response := apiCall(t, h, "GET", "/api/ui/state", nil)
+			var state struct {
+				Sessions []struct {
+					ID      string `json:"id"`
+					Context *struct {
+						InputTokens       int64 `json:"inputTokens"`
+						CachedInputTokens int64 `json:"cachedInputTokens"`
+						CacheKnown        bool  `json:"cacheKnown"`
+					} `json:"context"`
+					TotalUsage webui.ConnectionUsage `json:"totalUsage"`
+				} `json:"sessions"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, session := range state.Sessions {
+				if session.ID != "context-session" {
+					continue
+				}
+				found = true
+				if (session.Context != nil) != wantContext {
+					t.Fatalf("context=%+v, want known=%v", session.Context, wantContext)
+				}
+				if wantContext && (session.Context.InputTokens != wantInput || session.Context.CachedInputTokens != wantCached || session.Context.CacheKnown != wantCacheKnown) {
+					t.Fatalf("context=%+v, want input=%d cached=%d cacheKnown=%v", session.Context, wantInput, wantCached, wantCacheKnown)
+				}
+				if session.TotalUsage.InputTokens != wantTotal || !session.TotalUsage.Since.Equal(old.Start) {
+					t.Fatalf("total=%+v, want input=%d since=%v", session.TotalUsage, wantTotal, old.Start)
+				}
+			}
+			if !found {
+				t.Fatal("session missing")
+			}
+		})
+	}
+}
+
 func TestUIUsageConnectionSessionWindowAndCoverage(t *testing.T) {
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	records := []*history.Record{
@@ -100,11 +184,15 @@ func TestUIUsageConnectionSessionWindowAndCoverage(t *testing.T) {
 	if s := view.sessions["one"]; s != v {
 		t.Fatalf("session=%+v, connection=%+v", s, v)
 	}
-	if view.sessions["two"].InputTokens != 30000 || len(cache.entries) != 3 {
+	if view.sessions["two"].InputTokens != 30000 || len(cache.entries) != 4 {
 		t.Fatal("session isolation or cache pruning failed")
 	}
-	if next := cache.view(records, now.Add(24*time.Hour), nil); len(next.connections) != 1 || len(cache.entries) != 1 {
-		t.Fatal("expired measurements retained")
+	if next := cache.view(records, now.Add(24*time.Hour), nil); len(next.connections) != 1 || len(cache.entries) != 5 {
+		t.Fatal("24-hour connection window or retained session measurements incorrect")
+	}
+	cache.view(records[:1], now, nil)
+	if len(cache.entries) != 1 {
+		t.Fatal("measurements for deleted history retained")
 	}
 }
 

@@ -13,15 +13,16 @@ import (
 
 // Completed history records are immutable. Cache the small measurement so UI
 // polling does not repeatedly parse potentially large encrypted replay items.
-// The cache is pruned to the current history window on every snapshot.
+// The cache is pruned to retained history on every snapshot.
 type connectionUsageCache struct {
 	mu      sync.Mutex
 	entries map[string]cachedConnectionUsage
 }
 
 type cachedConnectionUsage struct {
-	end   time.Time
-	usage tokenMeasurement
+	end     time.Time
+	usage   tokenMeasurement
+	context tokenMeasurement
 }
 
 type tokenMeasurement struct {
@@ -41,6 +42,8 @@ type cacheSample struct {
 type connectionUsageView struct {
 	connections map[string]webui.ConnectionUsage
 	sessions    map[string]webui.ConnectionUsage
+	totals      map[string]webui.ConnectionUsage
+	contexts    map[string]*webui.SessionContext
 }
 
 func (c *connectionUsageCache) view(records []*history.Record, now time.Time, providers []provider) connectionUsageView {
@@ -48,6 +51,9 @@ func (c *connectionUsageCache) view(records []*history.Record, now time.Time, pr
 	defer c.mu.Unlock()
 	retained := make(map[string]cachedConnectionUsage)
 	out := connectionUsageView{connections: make(map[string]webui.ConnectionUsage), sessions: make(map[string]webui.ConnectionUsage)}
+	out.totals = make(map[string]webui.ConnectionUsage)
+	out.contexts = make(map[string]*webui.SessionContext)
+	latest := make(map[string]*history.Record)
 	codex := make(map[string]bool)
 	for _, p := range providers {
 		codex[p.Name] = p.Type == "codex"
@@ -55,7 +61,45 @@ func (c *connectionUsageCache) view(records []*history.Record, now time.Time, pr
 	groups := make(map[string]map[string][]cacheSample)
 	since := now.Add(-24 * time.Hour)
 	for _, rec := range records {
-		if !rec.Done() || rec.Start.Before(since) || rec.Start.After(now) || (rec.Path != "" && rec.Path != "/v1/messages") {
+		if !rec.Done() || rec.Start.After(now) || (rec.Path != "" && rec.Path != "/v1/messages") {
+			continue
+		}
+		entry, ok := c.entries[rec.ID]
+		if !ok || rec.ID == "" || !entry.end.Equal(rec.End) {
+			entry = cachedConnectionUsage{end: rec.End, usage: measureTokens(rec)}
+			// The client-visible response carries the final sampling. Native
+			// replay carries billed totals across all continuation calls.
+			final := *rec
+			final.ProviderState = nil
+			if len(rec.ProviderState) != 0 && entry.usage.known {
+				// Every native call reported usage, including an explicit zero
+				// in the final sampling. Preserve that provenance for the parser.
+				known := true
+				final.UsageKnown = &known
+			}
+			entry.context = measureTokens(&final)
+		}
+		if rec.ID != "" {
+			retained[rec.ID] = entry
+		}
+		m := entry.usage
+		if rec.UnrecognizedReason == "" || rec.FallbackPool != "" {
+			v := out.totals[rec.Session]
+			first := v.Since
+			if first.IsZero() || rec.Start.Before(first) {
+				first = rec.Start
+			}
+			out.totals[rec.Session] = addMeasurement(v, m, first)
+			previous := latest[rec.Session]
+			if !rec.Failed() && (previous == nil || rec.Start.After(previous.Start) || (rec.Start.Equal(previous.Start) && rec.Seq > previous.Seq)) {
+				latest[rec.Session] = rec
+				out.contexts[rec.Session] = nil
+				if current := entry.context; current.known {
+					out.contexts[rec.Session] = &webui.SessionContext{InputTokens: current.input, CachedInputTokens: current.cached, CacheKnown: current.cacheKnown, At: rec.End}
+				}
+			}
+		}
+		if rec.Start.Before(since) {
 			continue
 		}
 		name, _, _ := strings.Cut(rec.Served, "/")
@@ -65,14 +109,6 @@ func (c *connectionUsageCache) view(records []*history.Record, now time.Time, pr
 		if name == "" {
 			continue
 		}
-		entry, ok := c.entries[rec.ID]
-		if !ok || rec.ID == "" || !entry.end.Equal(rec.End) {
-			entry = cachedConnectionUsage{end: rec.End, usage: measureTokens(rec)}
-		}
-		if rec.ID != "" {
-			retained[rec.ID] = entry
-		}
-		m := entry.usage
 		out.connections[name] = addMeasurement(out.connections[name], m, since)
 		out.sessions[rec.Session] = addMeasurement(out.sessions[rec.Session], m, since)
 		// Include unknown cache metadata in the series: it must break the

@@ -156,6 +156,17 @@ type Session struct {
 	Error          string          `json:"error"`
 	Requests       int             `json:"requests"`
 	Usage          ConnectionUsage `json:"usage"`
+	Context        *SessionContext `json:"context,omitempty"`
+	TotalUsage     ConnectionUsage `json:"totalUsage"`
+}
+
+// SessionContext describes the final sampling of the latest successful request,
+// not the sum of its internal continuation calls.
+type SessionContext struct {
+	InputTokens       int64     `json:"inputTokens"`
+	CachedInputTokens int64     `json:"cachedInputTokens"`
+	CacheKnown        bool      `json:"cacheKnown"`
+	At                time.Time `json:"at"`
 }
 type Interception struct {
 	Enabled    bool   `json:"enabled"`

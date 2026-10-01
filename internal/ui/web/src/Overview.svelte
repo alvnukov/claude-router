@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tokens, cachePercent } from "./usage";
+  import SessionTokens from "./SessionTokens.svelte";
   import type { UIState } from "./types";
   import { time } from "./api";
   import SessionIdentity from "./SessionIdentity.svelte";
@@ -59,10 +59,7 @@
         ><span class="session-icon" aria-hidden="true">⌘</span>
         <div>
           <SessionIdentity {session} /><small>{session.model || "Модель не определена"}</small>
-          {#if session.usage}<small class="session-token-summary" class:usage-attention={session.usage.lowCache || session.usage.invalidRequests > 0}>
-              {#if session.usage.invalidRequests > 0}Счётчики расходятся · {:else if session.usage.lowCache}Мало кеша · {/if}
-              Кеш {cachePercent(session.usage) === null ? "—" : cachePercent(session.usage) + "%"} · без кеша {session.usage.cacheMeasuredRequests ? tokens(session.usage.uncachedInputTokens) : "—"} · выход {session.usage.measuredRequests ? tokens(session.usage.outputTokens) : "—"} · 24 ч
-            </small>{/if}
+          <SessionTokens {session} />
         </div>
         <div>
           <span

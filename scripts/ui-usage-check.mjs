@@ -48,7 +48,12 @@ const state = {
   now, started: now, lifecycle: "active", activeProfile: "default", defaultPool: "", profiles: [],
   connections: [connection("codex", "Рабочий Codex", usage), connection("second", "Второй Codex", low), connection("unknown", "Старые измерения", unknown), connection("anthropic", "Anthropic", empty, "anthropic")],
   models: [], families: [], routes: [], pools: [], efforts: ["default", "high"],
-  summary: { total: 24, pending: 0, errors5m: 0 }, sessions: [session("good-session-1", usage), session("low-session-2", low)],
+  summary: { total: 24, pending: 0, errors5m: 0 }, sessions: [
+    { ...session("good-session-1", usage), context: { inputTokens: 42000, cachedInputTokens: 33600, cacheKnown: true, at: now }, totalUsage: { ...usage, inputTokens: 2400000, cacheInputTokens: 2400000, cachedInputTokens: 2040000, outputTokens: 90000 } },
+    { ...session("low-session-2", low), context: { inputTokens: 10000, cachedInputTokens: 0, cacheKnown: false, at: now }, totalUsage: low },
+    { ...session("unknown-session-3", empty), totalUsage: { ...empty, requests: 1 } },
+    { ...session("zero-session-4", empty), context: { inputTokens: 10000, cachedInputTokens: 0, cacheKnown: true, at: now }, totalUsage: { ...usage, cachedInputTokens: 0, uncachedInputTokens: 1200000 } },
+  ],
   interception: { enabled: true, canRestore: true, error: "" }, reloadErrors: [],
 };
 const browser = await chromium.launch({ headless: true });
@@ -107,8 +112,28 @@ try {
   await page.setViewportSize({ width: 1440, height: 1080 });
   await page.emulateMedia({ colorScheme: "light" });
   await page.goto(base + "/overview");
-  await expect(page.locator(".session-token-summary")).toHaveCount(2);
-  await expect(page.locator(".session-token-summary.usage-attention")).toContainText("Мало кеша");
+  await expect(page.locator(".session-row .session-context")).toHaveCount(4);
+  await expect(page.locator(".session-node .session-context")).toHaveCount(4);
+  const goodCard = page.locator('.session-node[href*="good-session-1"]');
+  await expect(goodCard.locator('.session-context')).toHaveText(/Контекст: 42.*токенов · кеш 80%/);
+  await expect(goodCard.locator('.session-total')).toHaveText(/За сессию: вход 2,4.* · выход 90.* · кеш 85% · по истории/);
+  const goodSession = page.locator('.session-row[href*="good-session-1"]');
+  await expect(goodSession.locator('.session-context')).toHaveText(/Контекст: 42.*токенов · кеш 80%/);
+  await expect(goodSession.locator('.session-context')).toHaveAttribute('title', /42\s000 токенов/);
+  await expect(goodSession.locator('.session-total')).toHaveText(/За сессию: вход 2,4.* · выход 90.* · кеш 85% · по истории/);
+  await expect(page.locator('.session-row[href*="low-session-2"] .session-context')).toHaveText(/Контекст: 10.*токенов · кеш —/);
+  await expect(page.locator('.session-row[href*="unknown-session-3"] .session-context')).toHaveText('Контекст: — · кеш —');
+  await expect(page.locator('.session-row[href*="unknown-session-3"] .session-total')).toContainText('неполные данные');
+  await expect(page.locator('.session-row[href*="zero-session-4"] .session-context')).toHaveText(/кеш 0%$/);
+  await expect(page.locator(".session-row .session-token-summary.usage-attention")).toContainText("Мало кеша");
+  await capture("overview-light.png");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await capture("overview-dark.png");
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "session metrics overflow on mobile");
+  await capture("overview-mobile.png");
+  await page.setViewportSize({ width: 1440, height: 1080 });
+  await page.emulateMedia({ colorScheme: "light" });
   await page.locator('.session-row[href*="low-session-2"]').click();
   await expect(page.getByRole("region", { name: "Токены сессии за 24 часа" })).toBeVisible();
   await expect(page.locator(".session-usage-panel .usage-notice")).toContainText("Мало кеша");

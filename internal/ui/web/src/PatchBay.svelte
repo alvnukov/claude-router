@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import type { UIState } from "./types";
   import SessionIdentity from "./SessionIdentity.svelte";
+  import SessionTokens from "./SessionTokens.svelte";
   import { modelDestinations } from "./destinations";
   import LimitMeter from "./LimitMeter.svelte";
   let { data }: { data: UIState } = $props();
@@ -93,6 +94,7 @@
             >
           </div>
           <p>{session.preview || "Открыть запросы сессии"}</p>
+          <SessionTokens {session} />
           {#if session.error}<small class="danger">{session.error}</small
             >{/if}</a
         >{/each}{#if !sessions.length}<div class="map-node">

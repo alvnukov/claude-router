@@ -261,6 +261,8 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	for _, s := range sessions {
 		s.Usage = usage.sessions[s.ID]
 		s.Usage.Since = now.Add(-24 * time.Hour)
+		s.Context = usage.contexts[s.ID]
+		s.TotalUsage = usage.totals[s.ID]
 		out.Sessions = append(out.Sessions, *s)
 	}
 	sort.Slice(out.Sessions, func(i, j int) bool { return out.Sessions[i].LastAt.After(out.Sessions[j].LastAt) })

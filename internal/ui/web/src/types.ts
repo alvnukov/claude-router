@@ -96,6 +96,8 @@ export interface Session {
   branch?: string;
   routes?: SessionRoute[];
   usage?: ConnectionUsage;
+  context?: { inputTokens: number; cachedInputTokens: number; cacheKnown: boolean; at: string };
+  totalUsage?: ConnectionUsage;
   requestedModel: string;
   preview: string;
   connection: string;
