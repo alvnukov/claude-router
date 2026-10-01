@@ -1120,7 +1120,7 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, url, http.StatusSeeOther)
 		return
 	}
-	flow, err := startCodexBrowserFlow(r.Context(), codexLoginAddr, store.issuer)
+	flow, err := store.startPlanBrowserFlow(r.Context(), "127.0.0.1:0")
 	if err != nil {
 		u.oauthStatus, u.oauthError = "failed", err.Error()
 		u.oauthMu.Unlock()

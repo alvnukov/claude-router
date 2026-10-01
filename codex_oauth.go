@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/chatgptplan"
 	"localrouter/internal/platform"
 )
 
@@ -28,6 +29,7 @@ const codexCallbackAddr = "127.0.0.1:1455"
 var codexLoginAddr = codexCallbackAddr
 
 type codexBrowserFlow struct {
+	plan        *chatgptplan.Attempt
 	URL         string
 	state       string
 	verifier    string
@@ -40,8 +42,9 @@ type codexBrowserFlow struct {
 }
 
 type browserResult struct {
-	code string
-	err  error
+	code     string
+	clientID string
+	err      error
 }
 
 func randomOAuthString() (string, error) {
@@ -104,6 +107,17 @@ func (f *codexBrowserFlow) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	if f.plan != nil {
+		code, clientID, err := f.plan.Callback(q)
+		f.finish(browserResult{code: code, clientID: clientID, err: err})
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			writeOAuthPage(w, "Ошибка проверки авторизации", false)
+		} else {
+			writeOAuthPage(w, "Вход подтверждён. Вернитесь в панель роутера.", true)
+		}
+		return
+	}
 	if q.Get("error") != "" {
 		f.finish(browserResult{err: errors.New("authorization was denied")})
 		writeOAuthPage(w, "Авторизация отменена", false)
@@ -142,6 +156,9 @@ func (s *codexAuthStore) finishBrowserFlow(ctx context.Context, flow *codexBrows
 	}
 	if result.err != nil {
 		return result.err
+	}
+	if flow.plan != nil {
+		return s.adoptPlanLogin(ctx, flow, result, stillCurrent)
 	}
 	form := url.Values{
 		"grant_type": {"authorization_code"}, "code": {result.code},

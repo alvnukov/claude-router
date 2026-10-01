@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"localrouter/internal/chatgptplan"
 	"localrouter/internal/codextesttransport"
 	"localrouter/internal/platform"
 )
@@ -28,7 +29,8 @@ const (
 // The router owns its ChatGPT OAuth credential. A separate explicit action may
 // import a Codex CLI login without altering the CLI's auth store.
 type codexCredential struct {
-	AuthMode string `json:"auth_mode"`
+	AuthMode string                    `json:"auth_mode"`
+	Plan     *chatgptplan.Registration `json:"plan,omitempty"`
 	Tokens   struct {
 		IDToken      string `json:"id_token"`
 		AccessToken  string `json:"access_token"`
@@ -81,7 +83,14 @@ func readCodexCredential(path string) (codexCredential, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return c, err
 	}
-	if c.AuthMode != "chatgpt" || c.Tokens.AccessToken == "" || c.Tokens.RefreshToken == "" || c.Tokens.AccountID == "" {
+	if c.Tokens.AccessToken == "" || c.Tokens.RefreshToken == "" {
+		return c, errors.New("Codex CLI is not signed in with ChatGPT")
+	}
+	if c.AuthMode == chatgptplan.AuthMode {
+		if c.Plan == nil || !c.Plan.Valid() || c.Tokens.IDToken == "" {
+			return c, errors.New("invalid ChatGPT plan registration")
+		}
+	} else if c.AuthMode != "chatgpt" || c.Tokens.AccountID == "" || c.Plan != nil {
 		return c, errors.New("Codex CLI is not signed in with ChatGPT")
 	}
 	return c, nil
@@ -98,7 +107,7 @@ func (s *codexAuthStore) credentialFor(ctx context.Context) (codexCredential, er
 		s.credential, s.loaded = c, true
 		s.rejectedToken, s.authProblem = "", ""
 	}
-	if jwtExpiry(s.credential.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
+	if s.credential.expiresAt().After(time.Now().Add(30 * time.Second)) {
 		return s.credential, nil
 	}
 	if s.life != nil && !s.life.writesSharedState() {
@@ -115,7 +124,7 @@ func (s *codexAuthStore) refreshLocked(ctx context.Context) error {
 		if disk, err := readCodexCredential(s.path); err == nil {
 			if disk.Tokens.RefreshToken != s.credential.Tokens.RefreshToken || disk.Tokens.AccessToken != s.credential.Tokens.AccessToken {
 				s.credential = disk
-				if jwtExpiry(disk.Tokens.AccessToken).After(time.Now().Add(30 * time.Second)) {
+				if disk.expiresAt().After(time.Now().Add(30 * time.Second)) {
 					return nil
 				}
 			}
@@ -145,6 +154,23 @@ func jwtExpiry(token string) time.Time {
 }
 
 func (s *codexAuthStore) refresh(ctx context.Context) error {
+	if s.credential.AuthMode == chatgptplan.AuthMode {
+		c := s.credential
+		if c.Plan == nil || c.Plan.Issuer != s.issuer {
+			return errors.New("ChatGPT registration issuer changed")
+		}
+		reg, tokens, err := chatgptplan.Renew(ctx, s.client, *c.Plan, chatgptplan.Tokens{AccessToken: c.Tokens.AccessToken, RefreshToken: c.Tokens.RefreshToken, IDToken: c.Tokens.IDToken})
+		if err != nil {
+			return err
+		}
+		c.Plan = &reg
+		c.Tokens.AccessToken, c.Tokens.RefreshToken, c.Tokens.IDToken = tokens.AccessToken, tokens.RefreshToken, tokens.IDToken
+		if err = s.save(c); err != nil {
+			return err
+		}
+		s.credential = c
+		return nil
+	}
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.credential.Tokens.RefreshToken}, "client_id": {codexClientID}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.issuer+"/oauth/token", strings.NewReader(form.Encode()))
 	if err != nil {
@@ -182,10 +208,10 @@ func (s *codexAuthStore) refresh(ctx context.Context) error {
 	if account := codexAccountID(c.Tokens.IDToken); account != "" {
 		c.Tokens.AccountID = account
 	}
-	s.credential = c
 	if err := s.save(c); err != nil {
 		return err
 	}
+	s.credential = c
 	return nil
 }
 
@@ -268,27 +294,34 @@ func (s *codexAuthStore) signedIn() bool {
 		return false
 	}
 	if s.loaded {
-		return true
+		return s.credential.sharingEnabled()
 	}
-	_, err := readCodexCredential(s.path)
-	return err == nil
+	c, err := readCodexCredential(s.path)
+	return err == nil && c.sharingEnabled()
 }
 
 func (s *codexAuthStore) authorize(ctx context.Context, req *http.Request) error {
 	// Subscription tokens must never be sent to a configurable third-party URL.
-	if req.URL.Scheme != "https" || req.URL.Host != "chatgpt.com" || !strings.HasPrefix(req.URL.EscapedPath(), "/backend-api/codex/") || req.URL.User != nil {
+	legacyTarget := req.URL.Scheme == "https" && req.URL.Host == "chatgpt.com" && strings.HasPrefix(req.URL.EscapedPath(), "/backend-api/codex/") && req.URL.User == nil
+	planTarget := (req.Method == http.MethodGet && req.URL.String() == chatgptplan.ModelsURL) || (req.Method == http.MethodPost && req.URL.String() == chatgptplan.ResponsesURL)
+	if !legacyTarget && !planTarget {
 		return errors.New("Codex request target is not the pinned endpoint")
 	}
 	c, err := s.credentialFor(ctx)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Tokens.AccessToken)
-	req.Header.Set("ChatGPT-Account-Id", c.Tokens.AccountID)
-	if residency := codexResidency(c.Tokens.AccessToken); residency != "" {
-		req.Header.Set("x-openai-internal-codex-residency", residency)
+	if (c.AuthMode == chatgptplan.AuthMode && !planTarget) || (c.AuthMode != "chatgpt-plan" && !legacyTarget) {
+		return errors.New("credential mode does not match request target")
 	}
-	req.Header.Set("originator", "claude-router")
+	if !c.sharingEnabled() {
+		return errors.New("разрешите доступ к подписке через Continue with ChatGPT")
+	}
+	if expected, ok := ctx.Value(codexAccountContextKey{}).(string); ok && expected != c.accountKey() {
+		return errors.New("аккаунт ChatGPT изменился; повторите запрос")
+	}
+	*req = *req.WithContext(context.WithValue(req.Context(), codexAccountContextKey{}, c.accountKey()))
+	applyCodexAuthorization(req, c)
 	return nil
 }
 
@@ -327,7 +360,7 @@ var errCodexSignIn = errors.New("сессия Codex недействительн
 func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account string) (codexCredential, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.loaded || s.credential.Tokens.AccountID != account {
+	if !s.loaded || s.credential.accountKey() != account {
 		return codexCredential{}, errors.New("аккаунт Codex изменился; повторите запрос")
 	}
 	if s.credential.Tokens.AccessToken != rejected {
@@ -338,7 +371,7 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 	}
 	s.rejectedToken, s.rejectedAt = rejected, time.Now()
 	if s.life != nil && !s.life.writesSharedState() {
-		if disk, err := readCodexCredential(s.path); err == nil && disk.Tokens.AccessToken != rejected {
+		if disk, err := readCodexCredential(s.path); err == nil && disk.accountKey() == account && disk.Tokens.AccessToken != rejected {
 			s.credential = disk
 			return disk, nil
 		}
@@ -368,11 +401,15 @@ func (s *codexAuthStore) doWithReauth(client *http.Client, req *http.Request) (*
 	if req.GetBody == nil {
 		return nil, errCodexSignIn
 	}
-	credential, err := s.refreshRejected(req.Context(), strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), req.Header.Get("ChatGPT-Account-Id"))
+	account, ok := req.Context().Value(codexAccountContextKey{}).(string)
+	if !ok {
+		account = req.Header.Get("ChatGPT-Account-Id")
+	}
+	credential, err := s.refreshRejected(req.Context(), strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "), account)
 	if err != nil {
 		return nil, err
 	}
-	if credential.Tokens.AccountID != req.Header.Get("ChatGPT-Account-Id") {
+	if credential.accountKey() != account || !credential.sharingEnabled() {
 		return nil, errors.New("аккаунт Codex изменился; повторите запрос")
 	}
 	retry := req.Clone(req.Context())
@@ -380,12 +417,7 @@ func (s *codexAuthStore) doWithReauth(client *http.Client, req *http.Request) (*
 	if err != nil {
 		return nil, errors.New("не удалось повторить запрос Codex")
 	}
-	retry.Header.Set("Authorization", "Bearer "+credential.Tokens.AccessToken)
-	retry.Header.Set("ChatGPT-Account-Id", credential.Tokens.AccountID)
-	retry.Header.Del("x-openai-internal-codex-residency")
-	if residency := codexResidency(credential.Tokens.AccessToken); residency != "" {
-		retry.Header.Set("x-openai-internal-codex-residency", residency)
-	}
+	applyCodexAuthorization(retry, credential)
 	resp, err = client.Do(retry)
 	if err == nil && resp.StatusCode == http.StatusUnauthorized {
 		s.mu.Lock()
