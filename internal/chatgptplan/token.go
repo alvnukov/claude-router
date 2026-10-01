@@ -9,6 +9,7 @@ import (
 	"fmt"
 	oidc "github.com/coreos/go-oidc/v3/oidc"
 	"io"
+	"localrouter/internal/buildinfo"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,9 +25,17 @@ type tokenResponse struct {
 	ID       string          `json:"id_token"`
 	Type     string          `json:"token_type"`
 	Expires  int64           `json:"expires_in"`
-	Scope    *string         `json:"scope"`
+	Scope    json.RawMessage `json:"scope"`
 	Earliest json.RawMessage `json:"earliest_refresh_at"`
 }
+
+// TokenError preserves transient endpoint failures without invalidating sign-in.
+type TokenError struct {
+	Status    int
+	Retryable bool
+}
+
+func (e *TokenError) Error() string { return fmt.Sprintf("ChatGPT token endpoint: HTTP %d", e.Status) }
 
 func exchange(ctx context.Context, client *http.Client, issuer string, form url.Values) (tokenResponse, error) {
 	var token tokenResponse
@@ -35,14 +44,14 @@ func exchange(ctx context.Context, client *http.Client, issuer string, form url.
 		return token, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "claude-router")
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
 	resp, err := safeClient(client).Do(req)
 	if err != nil {
-		return token, errors.New("ChatGPT token endpoint unavailable")
+		return token, &TokenError{Status: http.StatusServiceUnavailable, Retryable: true}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return token, fmt.Errorf("ChatGPT token exchange: HTTP %d; sign in again if authorization was revoked", resp.StatusCode)
+		return token, &TokenError{Status: resp.StatusCode, Retryable: resp.StatusCode >= 500 || resp.StatusCode == 408 || resp.StatusCode == 429}
 	}
 	if json.NewDecoder(resp.Body).Decode(&token) != nil || token.Access == "" || !strings.EqualFold(token.Type, "Bearer") || token.Expires <= 0 || token.Expires > 7*24*3600 {
 		return token, errors.New("invalid ChatGPT token response")
@@ -51,8 +60,12 @@ func exchange(ctx context.Context, client *http.Client, issuer string, form url.
 }
 func applyMetadata(reg *Registration, token tokenResponse) error {
 	reg.ExpiresAt = now().Add(time.Duration(token.Expires) * time.Second)
-	if token.Scope != nil {
-		reg.Scopes = strings.Fields(*token.Scope)
+	if len(token.Scope) > 0 {
+		var scope string
+		if string(token.Scope) != "null" && json.Unmarshal(token.Scope, &scope) != nil {
+			return errors.New("invalid ChatGPT scope response")
+		}
+		reg.Scopes = strings.Fields(scope)
 	}
 	reg.EarliestRefreshAt = time.Time{}
 	if len(token.Earliest) > 0 && string(token.Earliest) != "null" {

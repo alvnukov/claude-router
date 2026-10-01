@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"localrouter/internal/buildinfo"
 	"localrouter/internal/history"
 	webui "localrouter/internal/ui"
 	"localrouter/internal/uisession"
@@ -63,6 +64,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 	records := u.st.List()
 	usage := u.connectionMetrics.view(records, now, c.local.Providers)
 	out := webui.State{Now: now, Started: u.started, Lifecycle: "active", ActiveProfile: c.local.ActiveProfile, Profiles: []webui.Profile{}, Connections: []webui.Connection{}, Models: []webui.Model{}, Families: []webui.RouteRow{}, Routes: []webui.RouteRow{}, Pools: []webui.Pool{}, Efforts: append([]string{}, claudeEfforts...), Sessions: []webui.Session{}, ReloadErrors: []string{}}
+	out.Version = buildinfo.Version()
 	out.DefaultPool = c.local.DefaultPool
 	if u.life != nil {
 		out.Lifecycle = string(u.life.mode())
@@ -105,6 +107,7 @@ func (b uiBackend) State(ctx context.Context) webui.State {
 			v.Type = "openai"
 		}
 		catalog := c.local.Catalog.Providers[p.Name]
+		v.CatalogUpdated = catalog.UpdatedAt
 		v.Updated = catalog.UpdatedAt
 		v.Error = catalog.Error
 		for _, m := range catalog.Models {
@@ -665,6 +668,13 @@ func (u *uiServer) codexUIState(p provider, v *webui.Connection) {
 		credential, err = readCodexCredential(auth.path)
 	}
 	v.Connected = err == nil
+	if err == nil {
+		v.AuthMode = credential.AuthMode
+		if credential.AuthMode == "chatgpt-plan" {
+			v.SubscriptionEnabled = credential.sharingEnabled()
+			v.UsageURL = "https://chatgpt.com/#settings/Usage"
+		}
+	}
 	if auth.authProblem != "" {
 		v.Error = auth.authProblem
 	}

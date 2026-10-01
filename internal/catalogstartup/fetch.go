@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"localrouter/internal/buildinfo"
 	"localrouter/internal/chatgptplan"
 	"net/http"
 	"time"
@@ -73,7 +74,7 @@ func (d Dependencies) FetchModels(ctx context.Context, fallbackCodexURL string, 
 		if err := authorize(req.Context(), req); err != nil {
 			return nil, err.Error()
 		}
-		req.Header.Set("User-Agent", "claude-router")
+		req.Header.Set("User-Agent", buildinfo.UserAgent())
 	} else if p.APIKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.APIKey)
 	}

@@ -20,6 +20,10 @@ export interface Limit {
   blocked: boolean;
 }
 export interface Connection {
+	 authMode?: string;
+	 subscriptionEnabled?: boolean;
+	 catalogUpdated?: string;
+	 usageURL?: string;
   name: string;
   displayName: string;
   type: string;
@@ -109,6 +113,7 @@ export interface Session {
   requests: number;
 }
 export interface UIState {
+	 version?: string;
   defaultPool: string;
   now: string;
   started: string;

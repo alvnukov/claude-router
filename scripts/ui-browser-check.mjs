@@ -12,6 +12,7 @@ import { once } from 'node:events';
 import { runSessionChecks } from './ui-session-check.mjs';
 import { runReviewRegressions } from './ui-review-regressions.mjs';
 import { runCodexLoginChecks } from './ui-codex-login-check.mjs';
+import { runChatGPTPlanChecks } from './ui-chatgpt-plan-check.mjs';
 import { runPrivacyChecks } from './ui-privacy-check.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -142,7 +143,8 @@ try {
     await runPrivacyChecks(browser,base,expect,shots,isWebkit,`http://127.0.0.1:${apiPort}`,upstreamRequests);
     await runReviewRegressions(browser, base);
     await runSessionChecks(browser, base);
-    await runCodexLoginChecks(browser, base);
+  await runCodexLoginChecks(browser, base);
+  await runChatGPTPlanChecks(browser, base);
     const page=await browser.newPage({viewport:{width:1440,height:1000},locale:'ru-RU',colorScheme:'light'});
     async function capture(path){
       await page.evaluate(()=>{if(document.activeElement instanceof HTMLElement) document.activeElement.blur(); window.scrollTo(0,0);});

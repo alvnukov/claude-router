@@ -1148,6 +1148,9 @@ func (u *uiServer) settingsCodexLogin(w http.ResponseWriter, r *http.Request) {
 			u.probeMu.Lock()
 			u.probe = nil
 			u.probeMu.Unlock()
+			if store.signedIn() {
+				_ = u.refreshModels(context.Background())
+			}
 		}
 	}()
 	http.Redirect(w, r, flow.URL, http.StatusSeeOther)

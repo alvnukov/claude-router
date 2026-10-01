@@ -25,7 +25,7 @@ func TestRegistrationAndVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []string{"", "signature", "issuer", "audience", "nonce", "expired", "subject", "iat", "returning-subject", "identity-only"} {
+	for _, bad := range []string{"", "signature", "issuer", "audience", "nonce", "expired", "subject", "iat", "returning-subject", "identity-only", "missing-scope"} {
 		t.Run(bad, func(t *testing.T) {
 			var attempt *Attempt
 			var issuer string
@@ -66,7 +66,11 @@ func TestRegistrationAndVerification(t *testing.T) {
 					if bad == "identity-only" {
 						scope = "openid profile email"
 					}
-					json.NewEncoder(w).Encode(map[string]any{"access_token": "opaque-access", "refresh_token": "rotating-refresh", "id_token": id, "token_type": "Bearer", "expires_in": 3600, "scope": scope})
+					response := map[string]any{"access_token": "opaque-access", "refresh_token": "rotating-refresh", "id_token": id, "token_type": "Bearer", "expires_in": 3600, "scope": scope}
+					if bad == "missing-scope" {
+						delete(response, "scope")
+					}
+					json.NewEncoder(w).Encode(response)
 				default:
 					t.Errorf("unexpected endpoint %s", r.URL.Path)
 					http.NotFound(w, r)
@@ -98,7 +102,7 @@ func TestRegistrationAndVerification(t *testing.T) {
 				t.Fatal(err)
 			}
 			reg, tokens, err := attempt.Exchange(context.Background(), srv.Client(), code, cid)
-			wantOK := bad == "" || bad == "identity-only"
+			wantOK := bad == "" || bad == "identity-only" || bad == "missing-scope"
 			if !wantOK {
 				if err == nil {
 					t.Fatal("unverified identity accepted")
@@ -108,7 +112,7 @@ func TestRegistrationAndVerification(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tokens.AccessToken != "opaque-access" || reg.Subject != "person" || reg.Email != "verified@example.test" || !reg.ExpiresAt.After(time.Now().Add(59*time.Minute)) || reg.SharingEnabled() != (bad != "identity-only") {
+			if tokens.AccessToken != "opaque-access" || reg.Subject != "person" || reg.Email != "verified@example.test" || !reg.ExpiresAt.After(time.Now().Add(59*time.Minute)) || reg.SharingEnabled() != (bad == "") {
 				t.Fatal("invalid verified registration")
 			}
 			if _, _, err = attempt.Exchange(context.Background(), srv.Client(), code, cid); err == nil {
@@ -216,5 +220,19 @@ func TestRenewUsesRegistrationAndRotatesMetadata(t *testing.T) {
 	}
 	if tok.AccessToken != "new-access" || tok.RefreshToken != "new-refresh" || tok.IDToken != "old-id" || reg.SharingEnabled() || !reg.ExpiresAt.After(time.Now()) {
 		t.Fatal("renewal metadata not rotated together")
+	}
+}
+
+func TestRenewExplicitNullScopeDisablesSharing(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"access_token":"new","token_type":"Bearer","expires_in":3600,"scope":null}`)
+	}))
+	defer srv.Close()
+	reg, _, err := Renew(context.Background(), srv.Client(), Registration{Issuer: srv.URL, Subject: "person", ClientID: "issued", Scopes: []string{"chatgpt.tokens.use.direct"}}, Tokens{RefreshToken: "refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reg.SharingEnabled() {
+		t.Fatal("explicitly removed scope kept subscription access")
 	}
 }

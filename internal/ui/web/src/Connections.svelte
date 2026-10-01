@@ -131,15 +131,19 @@
                 : "Ожидает подключения"}</span
         ><small>Обновлено {time(connection.updated)}</small>
       </div>
+		{#if connection.authMode === "chatgpt-plan"}<p class="muted">{connection.subscriptionEnabled ? "Доступ по подписке ChatGPT разрешён" : "Доступ по подписке отключён. Разрешите его при входе с ChatGPT."}</p>
+		{:else if connection.type === "codex" && connection.connected}<p class="muted">Вход Codex CLI. Для актуального каталога войдите с ChatGPT.</p>{/if}
+		{#if connection.catalogUpdated}<small class="muted">Каталог моделей: {time(connection.catalogUpdated)}</small>{/if}
       {#if connection.error}<p class="alert danger">
           {connection.error}
         </p>{/if}{#each connection.limits as limit}<LimitMeter
           {limit}
           now={data.now}
         />{/each}{#if !connection.limits.length}<p class="muted">
-          {connection.refreshing ? "Обновляем лимиты…" : "Лимиты не получены"}
+          {connection.authMode === "chatgpt-plan" ? "Лимиты подписки доступны в настройках ChatGPT." : connection.refreshing ? "Обновляем лимиты…" : "Лимиты не получены"}
         </p>{/if}
-      {#if connection.type === "codex" && connection.connected}<p class="muted">
+		{#if connection.usageURL}<a href={connection.usageURL} target="_blank" rel="noopener noreferrer">Настройки ChatGPT → Usage ↗</a>{/if}
+      {#if connection.type === "codex" && connection.connected && connection.authMode !== "chatgpt-plan"}<p class="muted">
           Доступно сбросов лимита: <strong
             >{connection.resetsKnown ? connection.resets : "не сообщено"}</strong
           >
@@ -151,11 +155,11 @@
             fields={{ provider: connection.name }}
             ><button type="submit">Импортировать вход Codex CLI</button
             ></ActionForm
-          ><ActionForm
+          >{#if connection.authMode !== "chatgpt-plan"}<ActionForm
             action="codex.usage"
             fields={{ provider: connection.name }}
             ><button type="submit">Обновить лимиты</button></ActionForm
-          >
+          >{/if}
         </div>{/if}
       <ConnectionUsage usage={connection.usage} />
       {#if connection.type !== "anthropic"}<div class="section-head">

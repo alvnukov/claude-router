@@ -119,7 +119,7 @@ func (a *Attempt) Exchange(ctx context.Context, client *http.Client, code, clien
 	if err != nil {
 		return Registration{}, Tokens{}, err
 	}
-	if token.ID == "" || token.Refresh == "" || token.Scope == nil {
+	if token.ID == "" || token.Refresh == "" {
 		return Registration{}, Tokens{}, errors.New("incomplete ChatGPT registration response")
 	}
 	reg := Registration{Issuer: a.issuer, ClientID: clientID, HostID: a.hostID}
@@ -139,7 +139,7 @@ func Renew(ctx context.Context, client *http.Client, reg Registration, tokens To
 		return Registration{}, Tokens{}, errors.New("invalid ChatGPT renewal registration")
 	}
 	if reg.EarliestRefreshAt.After(now()) {
-		return Registration{}, Tokens{}, errors.New("ChatGPT renewal is not available yet")
+		return Registration{}, Tokens{}, &TokenError{Status: http.StatusServiceUnavailable, Retryable: true}
 	}
 	token, err := exchange(ctx, client, reg.Issuer, url.Values{"grant_type": {"refresh_token"}, "client_id": {reg.ClientID}, "refresh_token": {tokens.RefreshToken}, "resource": {Resource}})
 	if err != nil {

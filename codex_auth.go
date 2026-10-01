@@ -42,6 +42,7 @@ type codexCredential struct {
 type codexAuthStore struct {
 	rejectedToken string
 	rejectedAt    time.Time
+	rejectedErr   error
 	authProblem   string
 	mu            sync.Mutex
 	life          *lifecycle
@@ -367,9 +368,13 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 		return s.credential, nil
 	}
 	if s.rejectedToken == rejected && time.Since(s.rejectedAt) < time.Minute {
+		if s.rejectedErr != nil {
+			return codexCredential{}, s.rejectedErr
+		}
 		return codexCredential{}, errCodexSignIn
 	}
 	s.rejectedToken, s.rejectedAt = rejected, time.Now()
+	s.rejectedErr = nil
 	if s.life != nil && !s.life.writesSharedState() {
 		if disk, err := readCodexCredential(s.path); err == nil && disk.accountKey() == account && disk.Tokens.AccessToken != rejected {
 			s.credential = disk
@@ -378,6 +383,11 @@ func (s *codexAuthStore) refreshRejected(ctx context.Context, rejected, account 
 		return codexCredential{}, errCodexSignIn
 	}
 	if err := s.refreshLocked(ctx); err != nil {
+		var temporary *chatgptplan.TokenError
+		if s.credential.Plan != nil && errors.As(err, &temporary) && temporary.Retryable {
+			s.rejectedErr = err
+			return codexCredential{}, err
+		}
 		s.authProblem = errCodexSignIn.Error()
 		return codexCredential{}, errCodexSignIn
 	}

@@ -171,3 +171,35 @@ func TestChatGPTPlanRefreshWriteFailurePreservesMemory(t *testing.T) {
 		t.Fatal("unpersisted tokens adopted")
 	}
 }
+
+func TestChatGPTPlanTemporaryRenewalFailureKeepsSignIn(t *testing.T) {
+	hits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(503)
+		fmt.Fprint(w, `{"error":"temporarily_unavailable"}`)
+	}))
+	defer srv.Close()
+	s := newCodexAuthStore()
+	s.path = filepath.Join(t.TempDir(), "auth.json")
+	s.issuer = srv.URL
+	s.client = srv.Client()
+	s.credential = planFixture(t, srv.URL, true, time.Now().Add(time.Hour))
+	s.loaded = true
+	if err := s.save(s.credential); err != nil {
+		t.Fatal(err)
+	}
+	account := s.credential.accountKey()
+	if _, err := s.refreshRejected(context.Background(), "opaque-old", account); err == nil {
+		t.Fatal("renewal failure ignored")
+	}
+	if s.authStatus() != "" || !s.signedIn() {
+		t.Fatal("temporary infrastructure error invalidated sign-in")
+	}
+	if _, err := s.refreshRejected(context.Background(), "opaque-old", account); err == nil {
+		t.Fatal("rejected token silently reused")
+	}
+	if hits != 1 {
+		t.Fatal("temporary renewal repeated without backoff")
+	}
+}

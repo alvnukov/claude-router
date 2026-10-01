@@ -42,7 +42,7 @@ type codexUsagePayload struct {
 	} `json:"additional_rate_limits"`
 	Resets json.RawMessage `json:"rate_limit_reset_credits"`
 }
-type codexAccount struct{ ID, Email, Name, Plan string }
+type codexAccount struct{ ID, Email, Name, Plan, AuthMode string }
 
 func (a codexAccount) key() string { return a.ID + "\x00" + a.Email }
 
@@ -84,6 +84,9 @@ func (cache *codexUsageCache) clock() time.Time {
 }
 
 func accountFromCredential(c codexCredential) codexAccount {
+	if c.AuthMode == "chatgpt-plan" && c.Plan != nil {
+		return codexAccount{ID: c.accountKey(), Email: c.Plan.Email, Name: c.Plan.Name, Plan: "ChatGPT", AuthMode: c.AuthMode}
+	}
 	account := codexAccount{ID: c.Tokens.AccountID}
 	for _, token := range []string{c.Tokens.IDToken, c.Tokens.AccessToken} {
 		parts := strings.Split(token, ".")
@@ -158,6 +161,9 @@ func authorizeCodexUsage(req *http.Request, c codexCredential) error {
 
 func fetchCodexUsage(ctx context.Context, client *http.Client, c codexCredential) (codexUsagePayload, error) {
 	var payload codexUsagePayload
+	if c.AuthMode == "chatgpt-plan" {
+		return payload, errors.New("лимиты подписки доступны в настройках ChatGPT")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, codexUsageURL, nil)
 	if err != nil {
 		return payload, errors.New("не удалось создать запрос лимитов")
@@ -287,6 +293,10 @@ func (cache *codexUsageCache) get(ctx context.Context, auth *codexAuthStore, for
 	if account.key() != cache.key {
 		cache.key = account.key()
 		cache.view = codexUsageView{Connected: true, Account: account, Plan: account.Plan}
+	}
+	if account.AuthMode == "chatgpt-plan" {
+		cache.view = codexUsageView{Connected: true, Account: account, Plan: account.Plan}
+		return cache.view
 	}
 	if force {
 		credential, err := auth.credentialFor(ctx)

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"localrouter/internal/buildinfo"
 	"localrouter/internal/chatgptplan"
 	"localrouter/internal/codextesttransport"
 	"localrouter/internal/history"
@@ -100,6 +101,7 @@ func tryCodexModel(r *http.Request, cfg config, cand candidate, visible []byte, 
 		}
 		request.Header = headers.Clone()
 		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("User-Agent", buildinfo.UserAgent())
 		if planMode {
 			for _, key := range []string{"session-id", "thread-id", "x-codex-turn-state", "x-client-request-id", "originator", "ChatGPT-Account-Id", "x-openai-internal-codex-residency"} {
 				request.Header.Del(key)
@@ -159,6 +161,8 @@ func codexAttemptError(r *http.Request, start time.Time, err error) attemptResul
 	if errors.As(err, &protocolErr) {
 		result.status, result.detail, result.retryable = protocolErr.Status, err.Error(), protocolErr.Retryable
 		result.retryAfter = protocolErr.RetryAfter
+	} else if tokenErr := new(chatgptplan.TokenError); errors.As(err, &tokenErr) {
+		result.status, result.detail, result.retryable = tokenErr.Status, err.Error(), tokenErr.Retryable
 	} else if errors.Is(err, errCodexSignIn) {
 		result.status, result.detail, result.retryable = http.StatusUnauthorized, err.Error(), true
 	}

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"localrouter/internal/catalogstartup"
 	"localrouter/internal/history"
 )
 
@@ -426,6 +427,9 @@ func codexLoginUI(t *testing.T) (*uiServer, http.Handler) {
 	t.Cleanup(func() { codexLoginAddr = old })
 	var h http.Handler
 	u, h = codexUI(t)
+	deps := catalogstartup.Dependencies{}
+	deps.SetCodexTestTransport(usageTransport(func(*http.Request) (*http.Response, error) { return usageResponse(200, `{"models":[]}`), nil }))
+	u.catalog = &deps
 	u.cs.provPath = filepath.Join(t.TempDir(), "providers.json")
 	return u, h
 }
