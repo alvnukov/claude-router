@@ -70,7 +70,7 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 	defer server.Close()
 	root := canonicalFixtureRoot(t)
 	t.Setenv("ROUTER_CATALOG_SYNTHETIC_MANIFEST", writeSyntheticManifest(t, root,
-		server.URL+"/overview", server.URL+"/models?client_version=0.156.0", []string{server.URL}))
+		server.URL+"/overview", server.URL+"/models?client_version=0.159.2", []string{server.URL}))
 	deps, err := ForProcess("https://platform.claude.com/docs/en/models/overview", "https://chatgpt.com/backend-api/codex")
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 		resp.Body.Close()
 		t.Fatal("synthetic Codex credential refresh reached an external issuer")
 	}
-	if deps.OfficialURL() != server.URL+"/overview" || deps.CodexModelsURL() != "https://chatgpt.com/backend-api/codex/models?client_version=0.156.0" {
+	if deps.OfficialURL() != server.URL+"/overview" || deps.CodexModelsURL() != "https://chatgpt.com/backend-api/codex/models?client_version=0.159.2" {
 		t.Fatal("official fixture or pinned Codex target not installed")
 	}
 	if err := deps.ValidateProvider("local", "openai", server.URL+"/v1"); err != nil {
@@ -134,12 +134,12 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 	if rejected.calls != 0 {
 		t.Fatal("test transport bypassed the synthetic catalog guard")
 	}
-	for _, want := range []string{"/overview", "/v1/models", "/models?client_version=0.156.0"} {
+	for _, want := range []string{"/overview", "/v1/models", "/models?client_version=0.159.2"} {
 		if got := <-requests; got != want {
 			t.Fatalf("request = %q, want %q", got, want)
 		}
 	}
-	for _, target := range []string{"https://example.com/models", "http://127.0.0.2:19876/models", server.URL + "/unexpected", server.URL + "/private/models", server.URL + "/models?client_version=0.156.0", deps.CodexModelsURL(), "https://chatgpt.com/backend-api/codex/usage"} {
+	for _, target := range []string{"https://example.com/models", "http://127.0.0.2:19876/models", server.URL + "/unexpected", server.URL + "/private/models", server.URL + "/models?client_version=0.159.2", deps.CodexModelsURL(), "https://chatgpt.com/backend-api/codex/usage"} {
 		resp, err := client.Get(target)
 		if resp != nil {
 			resp.Body.Close()
@@ -158,17 +158,17 @@ func TestSyntheticCatalogFetchesApprovedEndpointsOnly(t *testing.T) {
 func TestSyntheticRejectsUnsafeManifestBeforeClientExists(t *testing.T) {
 	root := canonicalFixtureRoot(t)
 	base := "http://127.0.0.1:18881"
-	valid := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.156.0", []string{base})
+	valid := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.159.2", []string{base})
 	badCases := []struct {
 		name, content string
 	}{
-		{"external official", fmt.Sprintf(`{"fixture_root":%q,"official_url":"https://example.com/overview","codex_models_url":%q,"provider_origins":[%q]}`, root, base+"/models?client_version=0.156.0", base)},
+		{"external official", fmt.Sprintf(`{"fixture_root":%q,"official_url":"https://example.com/overview","codex_models_url":%q,"provider_origins":[%q]}`, root, base+"/models?client_version=0.159.2", base)},
 		{"external codex", fmt.Sprintf(`{"fixture_root":%q,"official_url":%q,"codex_models_url":"https://chatgpt.com/backend-api/codex/models","provider_origins":[%q]}`, root, base+"/overview", base)},
-		{"dns host", fmt.Sprintf(`{"fixture_root":%q,"official_url":"http://localhost:18881/overview","codex_models_url":%q,"provider_origins":[%q]}`, root, base+"/models?client_version=0.156.0", base)},
+		{"dns host", fmt.Sprintf(`{"fixture_root":%q,"official_url":"http://localhost:18881/overview","codex_models_url":%q,"provider_origins":[%q]}`, root, base+"/models?client_version=0.159.2", base)},
 		{"external provider", fmt.Sprintf(`{"fixture_root":%q,"official_url":%q,"codex_models_url":%q,"provider_origins":["https://example.com"]}`, root, base+"/overview", base+"/models")},
-		{"userinfo", fmt.Sprintf(`{"fixture_root":%q,"official_url":"http://user@127.0.0.1:18881/overview","codex_models_url":%q,"provider_origins":[%q]}`, root, base+"/models?client_version=0.156.0", base)},
-		{"unknown field", fmt.Sprintf(`{"fixture_root":%q,"official_url":%q,"codex_models_url":%q,"provider_origins":[%q],"other":"no"}`, root, base+"/overview", base+"/models?client_version=0.156.0", base)},
-		{"wrong root", fmt.Sprintf(`{"fixture_root":%q,"official_url":%q,"codex_models_url":%q,"provider_origins":[%q]}`, t.TempDir(), base+"/overview", base+"/models?client_version=0.156.0", base)},
+		{"userinfo", fmt.Sprintf(`{"fixture_root":%q,"official_url":"http://user@127.0.0.1:18881/overview","codex_models_url":%q,"provider_origins":[%q]}`, root, base+"/models?client_version=0.159.2", base)},
+		{"unknown field", fmt.Sprintf(`{"fixture_root":%q,"official_url":%q,"codex_models_url":%q,"provider_origins":[%q],"other":"no"}`, root, base+"/overview", base+"/models?client_version=0.159.2", base)},
+		{"wrong root", fmt.Sprintf(`{"fixture_root":%q,"official_url":%q,"codex_models_url":%q,"provider_origins":[%q]}`, t.TempDir(), base+"/overview", base+"/models?client_version=0.159.2", base)},
 		{"oversize", strings.Repeat(" ", 65537)},
 	}
 	for _, tc := range badCases {
@@ -200,7 +200,7 @@ func TestSyntheticRejectsUnsafeManifestBeforeClientExists(t *testing.T) {
 			t.Fatal(err)
 		}
 		root := filepath.Join(alias, "child")
-		path := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.156.0", []string{base})
+		path := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.159.2", []string{base})
 		t.Setenv("ROUTER_CATALOG_SYNTHETIC_MANIFEST", path)
 		if deps, err := ForProcess("prod", "prod"); err == nil {
 			deps.Close()
@@ -209,7 +209,7 @@ func TestSyntheticRejectsUnsafeManifestBeforeClientExists(t *testing.T) {
 	})
 	t.Run("manifest via alias parent", func(t *testing.T) {
 		root := canonicalFixtureRoot(t)
-		path := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.156.0", []string{base})
+		path := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.159.2", []string{base})
 		alias := filepath.Join(canonicalFixtureRoot(t), "alias")
 		if err := os.Symlink(root, alias); err != nil {
 			t.Fatal(err)
@@ -235,7 +235,7 @@ func TestSyntheticRejectsUnsafeManifestBeforeClientExists(t *testing.T) {
 func TestSyntheticRejectsNonFixtureCodexCredentials(t *testing.T) {
 	root := canonicalFixtureRoot(t)
 	base := "http://127.0.0.1:18881"
-	manifest := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.156.0", []string{base})
+	manifest := writeSyntheticManifest(t, root, base+"/overview", base+"/models?client_version=0.159.2", []string{base})
 	t.Setenv("ROUTER_CATALOG_SYNTHETIC_MANIFEST", manifest)
 	authPath := os.Getenv("ROUTER_CODEX_AUTH_FILE")
 	original, err := os.ReadFile(authPath)
@@ -292,7 +292,7 @@ func TestSyntheticRejectsNonApprovedProviderAndRedirect(t *testing.T) {
 	defer server.Close()
 	root := canonicalFixtureRoot(t)
 	t.Setenv("ROUTER_CATALOG_SYNTHETIC_MANIFEST", writeSyntheticManifest(t, root,
-		server.URL+"/overview", server.URL+"/models?client_version=0.156.0", []string{server.URL}))
+		server.URL+"/overview", server.URL+"/models?client_version=0.159.2", []string{server.URL}))
 	deps, err := ForProcess("prod", "prod")
 	if err != nil {
 		t.Fatal(err)
@@ -318,7 +318,7 @@ func TestSyntheticCatalogRequestRespectsCancel(t *testing.T) {
 	defer server.Close()
 	root := canonicalFixtureRoot(t)
 	t.Setenv("ROUTER_CATALOG_SYNTHETIC_MANIFEST", writeSyntheticManifest(t, root,
-		server.URL+"/overview", server.URL+"/models?client_version=0.156.0", []string{server.URL}))
+		server.URL+"/overview", server.URL+"/models?client_version=0.159.2", []string{server.URL}))
 	deps, err := ForProcess("prod", "prod")
 	if err != nil {
 		t.Fatal(err)

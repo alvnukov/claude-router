@@ -153,7 +153,7 @@ func (s *testStand) expectedCatalogProbes(t *testing.T) []startupProbe {
 	for _, provider := range s.plannedProviders {
 		switch {
 		case provider.Name == "codex" && provider.Type == "codex" && provider.BaseURL == "https://chatgpt.com/backend-api/codex":
-			want = append(want, startupProbe{Target: "codex", Method: http.MethodGet, URI: "/models?client_version=0.156.0"})
+			want = append(want, startupProbe{Target: "codex", Method: http.MethodGet, URI: "/models?client_version=0.159.2"})
 		case provider.Name == "fixture-a" && provider.Type == "" && provider.BaseURL == s.a.server.URL+"/v1":
 			want = append(want, startupProbe{Target: "fixture-a", Method: http.MethodGet, URI: "/v1/models"})
 		case provider.Name == "fixture-b" && provider.Type == "" && provider.BaseURL == s.b.server.URL+"/v1":
@@ -246,7 +246,7 @@ func writeCatalogFixture(t *testing.T, root, official, codex string, origins []s
 		t.Fatal(err)
 	}
 	codeURL, err := url.Parse(codex)
-	if err != nil || codeURL.Path != "/models" || codeURL.RawQuery != "client_version=0.156.0" {
+	if err != nil || codeURL.Path != "/models" || codeURL.RawQuery != "client_version=0.159.2" {
 		t.Fatal("synthetic Codex models URL is not canonical")
 	}
 	if err := validateLoopback(codeURL.Scheme + "://" + codeURL.Host); err != nil {

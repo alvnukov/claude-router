@@ -14,7 +14,7 @@ func TestRegressionStartupProbeOracleRejectsMissingAndUnlistedRequests(t *testin
 	want := []startupProbe{
 		{Target: "official", Method: "GET", URI: "/overview"},
 		{Target: "fixture-a", Method: "GET", URI: "/v1/models"},
-		{Target: "codex", Method: "GET", URI: "/models?client_version=0.156.0"},
+		{Target: "codex", Method: "GET", URI: "/models?client_version=0.159.2"},
 	}
 	journal := new(startupJournal)
 	for _, probe := range want {
@@ -140,7 +140,7 @@ func TestRegressionSyntheticCodexRejectsExternalAccounts(t *testing.T) {
 func TestRegressionSyntheticCatalogFixtureHasPrivateDirectChildAuth(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "catalog-fixture")
 	fixture := writeCatalogFixture(t, root, "http://127.0.0.1:19001/overview",
-		"http://127.0.0.1:19002/models?client_version=0.156.0",
+		"http://127.0.0.1:19002/models?client_version=0.159.2",
 		[]string{"http://127.0.0.1:19003"})
 	if filepath.Dir(fixture.manifest) != fixture.root || filepath.Dir(fixture.auth) != fixture.root {
 		t.Fatal("catalog manifest or auth escaped fixture root")
@@ -162,7 +162,7 @@ func TestRegressionSyntheticCatalogFixtureHasPrivateDirectChildAuth(t *testing.T
 		t.Fatal(err)
 	}
 	if manifest.FixtureRoot != fixture.root || manifest.OfficialURL != "http://127.0.0.1:19001/overview" ||
-		manifest.CodexModelsURL != "http://127.0.0.1:19002/models?client_version=0.156.0" ||
+		manifest.CodexModelsURL != "http://127.0.0.1:19002/models?client_version=0.159.2" ||
 		!reflect.DeepEqual(manifest.ProviderOrigins, []string{"http://127.0.0.1:19003"}) {
 		t.Fatal("synthetic catalog manifest differs from fixed fixture endpoints")
 	}

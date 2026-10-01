@@ -27,7 +27,7 @@ import (
 
 const syntheticManifestEnv = "ROUTER_CATALOG_SYNTHETIC_MANIFEST"
 const maxManifestBytes = 64 << 10
-const pinnedCodexModelsURL = "https://chatgpt.com/backend-api/codex/models?client_version=0.156.0"
+const pinnedCodexModelsURL = "https://chatgpt.com/backend-api/codex/models?" + CodexModelsQuery
 
 type syntheticManifest struct {
 	FixtureRoot     string   `json:"fixture_root"`
@@ -60,8 +60,8 @@ func ForProcess(_, _ string) (Dependencies, error) {
 		return Dependencies{}, fmt.Errorf("synthetic official URL: %w", err)
 	}
 	codex, err := loopbackURL(manifest.CodexModelsURL)
-	if err != nil || !strings.HasSuffix(codex.Path, "/models") || codex.RawQuery != "client_version=0.156.0" {
-		return Dependencies{}, errors.New("synthetic Codex URL must end in /models?client_version=0.156.0 on numeric loopback")
+	if err != nil || !strings.HasSuffix(codex.Path, "/models") || codex.RawQuery != CodexModelsQuery {
+		return Dependencies{}, fmt.Errorf("synthetic Codex URL must end in /models?%s on numeric loopback", CodexModelsQuery)
 	}
 	codexToken, err := syntheticCodexToken(manifest.FixtureRoot)
 	if err != nil {

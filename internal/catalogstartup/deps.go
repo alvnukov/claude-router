@@ -15,6 +15,8 @@ type Dependencies struct {
 	codexTestTransport http.RoundTripper
 }
 
+const CodexModelsQuery = "client_version=0.159.2"
+
 func Production(officialURL, codexBaseURL string) Dependencies {
 	transport, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
@@ -22,7 +24,7 @@ func Production(officialURL, codexBaseURL string) Dependencies {
 	}
 	return Dependencies{
 		officialURL: officialURL,
-		codexURL:    codexBaseURL + "/models?client_version=0.156.0",
+		codexURL:    codexBaseURL + "/models?" + CodexModelsQuery,
 		transport:   transport.Clone(),
 	}
 }

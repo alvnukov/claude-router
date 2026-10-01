@@ -35,7 +35,7 @@ func TestProductionClientUsesSuppliedEndpointAndTimeout(t *testing.T) {
 	if err != nil || string(body) != "claude-opus-5-5" {
 		t.Fatalf("catalog fetch = %q, %v", body, err)
 	}
-	if deps.CodexModelsURL() != "https://chatgpt.com/backend-api/codex/models?client_version=0.156.0" {
+	if deps.CodexModelsURL() != "https://chatgpt.com/backend-api/codex/models?client_version=0.159.2" {
 		t.Fatal("Codex endpoint changed")
 	}
 }

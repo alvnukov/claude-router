@@ -463,7 +463,7 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 	order := new(attemptLog)
 	probes := new(startupJournal)
 	official := newCatalogStub(t, "official", "/overview", "text/html", `<button>claude-opus-5-5</button>`, probes)
-	codex := newCatalogStub(t, "codex", "/models?client_version=0.156.0", "application/json",
+	codex := newCatalogStub(t, "codex", "/models?client_version=0.159.2", "application/json",
 		`{"models":[{"slug":"gpt-6-sol","visibility":"list","supported_reasoning_levels":[{"effort":"high"}]}]}`, probes)
 	a.name, a.order, a.probes = "fixture-a", order, probes
 	b.name, b.order, b.probes = "fixture-b", order, probes
@@ -521,7 +521,7 @@ func startRouter(t *testing.T, fixture testFixture) *testStand {
 		origins = append(origins, u.Scheme+"://"+u.Host)
 	}
 	catalog := writeCatalogFixture(t, filepath.Join(home, "catalog-fixture"),
-		official.URL+"/overview", codex.URL+"/models?client_version=0.156.0", origins)
+		official.URL+"/overview", codex.URL+"/models?client_version=0.159.2", origins)
 	if !safeCatalogStartup(catalog) {
 		t.Fatal("blocked: synthetic catalog manifest/auth fixture is not private and canonical")
 	}

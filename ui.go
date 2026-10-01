@@ -1451,7 +1451,7 @@ func (u *uiServer) probeProvider(p provider, force bool, contexts ...context.Con
 	if u.catalog != nil {
 		deps = *u.catalog
 	}
-	body, msg := deps.FetchModels(ctx, conf.CodexBaseURL+"/models?client_version=0.156.0", catalogstartup.ProbeInput{
+	body, msg := deps.FetchModels(ctx, conf.CodexBaseURL+"/models?"+catalogstartup.CodexModelsQuery, catalogstartup.ProbeInput{
 		Name: p.Name, Kind: p.Type, BaseURL: p.BaseURL, AuthID: p.AuthID, APIKey: p.APIKey,
 	}, func(ctx context.Context, req *http.Request) error {
 		store, err := codexStoreFor(p)

@@ -104,7 +104,7 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		}
 		manifest, err := json.Marshal(map[string]any{
 			"fixture_root": root, "official_url": fixture.URL + "/overview",
-			"codex_models_url": fixture.URL + "/models?client_version=0.156.0",
+			"codex_models_url": fixture.URL + "/models?client_version=0.159.2",
 			"provider_origins": []string{fixture.URL},
 		})
 		if err != nil {
@@ -174,10 +174,10 @@ func TestCatalogRefreshMergesConcurrentEditsAndKeepsLastGood(t *testing.T) {
 		if err := u.refreshModels(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"/overview", "/v1/models", "/models?client_version=0.156.0"} {
+		for _, want := range []string{"/overview", "/v1/models", "/models?client_version=0.159.2"} {
 			select {
 			case got := <-requests:
-				if got != want && !(want == "/models?client_version=0.156.0" && got == "/backend-api/codex"+want) {
+				if got != want && !(want == "/models?client_version=0.159.2" && got == "/backend-api/codex"+want) {
 					t.Errorf("catalog probe = %q, want %q or pinned equivalent", got, want)
 				}
 			case <-time.After(time.Second):
